@@ -6,6 +6,7 @@
 //! of otherSide / otherSideScored.
 
 use super::{key_id, GroundingIndex};
+use crate::adapters::config_key::CONFIG_KEY;
 use crate::adapters::http_route::{is_bare_wildcard_route, route_match_specificity, route_segs};
 use crate::types::Access;
 use seam_fs::is_test_file;
@@ -20,17 +21,43 @@ const GENERIC_ROUTE_FANOUT_CAP: usize = 1;
 pub struct Scored {
     pub access: Access,
     pub spec: i64,
+    /// What THIS access does — true = it produces the key, false = it consumes it. Read off the side the access
+    /// was actually found on, NOT inferred as the complement of the anchor's role.
+    ///
+    /// The inference was the norm everywhere and it was silently wrong the moment a SYMMETRIC kind existed: a
+    /// config key read by four stacks rendered its counterparts as `[method, writes NOTIFY_WEBHOOK_URL]` —
+    /// telling a reader that the Java worker SETS the variable, when it only reads it. That is a claim an agent
+    /// would act on. For every asymmetric kind this field equals the old assumption, so nothing else moves.
+    pub produces: bool,
 }
 
 /// The SCORED counterpart lookup. Port of `otherSideScored`.
 pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produces: bool) -> Vec<Scored> {
-    let side = |sides: &crate::types::KeySides| -> Vec<Access> {
-        (if produces { &sides.consumers } else { &sides.producers }).iter().filter(|a| !is_test_file(&a.file)).cloned().collect()
+    // A CONFIG KEY IS SYMMETRIC, and it is the only kind here that is. A table couples a WRITER to a READER and
+    // a route couples a CALLER to a HANDLER, so returning the complement is exactly right for both. But two
+    // stacks READING the same environment variable are coupled to each other with nobody writing it at all —
+    // `api/notify.ts` and `backend/NotifyWorker.java` are both consumers — so a strict complement lookup returns
+    // an empty set for the very case the kind exists to catch. Unioning both sides admits reader ⇄ reader while
+    // still pairing a definition (`process.env.X = …`, a producer) with its readers. The anchor's own file is
+    // dropped downstream by `collect_complement_files`, so a lone accessor is not made its own counterpart.
+    // Each returned access is tagged with the side it came FROM: producers are `true`, consumers `false`.
+    let side = |sides: &crate::types::KeySides| -> Vec<(Access, bool)> {
+        let both = kind == CONFIG_KEY;
+        let primary: Vec<(Access, bool)> =
+            if produces { sides.consumers.iter().map(|a| (a.clone(), false)).collect() } else { sides.producers.iter().map(|a| (a.clone(), true)).collect() };
+        let secondary: Vec<(Access, bool)> = if !both {
+            Vec::new()
+        } else if produces {
+            sides.producers.iter().map(|a| (a.clone(), true)).collect()
+        } else {
+            sides.consumers.iter().map(|a| (a.clone(), false)).collect()
+        };
+        primary.into_iter().chain(secondary).filter(|(a, _)| !is_test_file(&a.file)).collect()
     };
     // exact match is maximally specific: score it by the key's OWN literal-segment count.
     let exact_spec = if kind == HTTP_ROUTE { route_segs(value).iter().filter(|s| **s != "*").count() as i64 } else { 0 };
     let mut out: Vec<Scored> = match index.get(&key_id(kind, value)) {
-        Some(sides) => side(sides).into_iter().map(|access| Scored { access, spec: exact_spec }).collect(),
+        Some(sides) => side(sides).into_iter().map(|(access, produces)| Scored { access, spec: exact_spec, produces }).collect(),
         None => Vec::new(),
     };
     if kind != HTTP_ROUTE {
@@ -42,7 +69,7 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
     }
     let prefix = "http-route ";
     // Score every fuzzy route match by shared literal segments.
-    let mut scored: Vec<(i64, Vec<Access>)> = Vec::new();
+    let mut scored: Vec<(i64, Vec<(Access, bool)>)> = Vec::new();
     for (k, v) in index.iter() {
         if !k.starts_with(prefix) {
             continue;
@@ -59,7 +86,7 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
     let has_specific = scored.iter().any(|(spec, _)| *spec >= 2);
     for (spec, accesses) in &scored {
         if *spec >= 2 {
-            out.extend(accesses.iter().cloned().map(|access| Scored { access, spec: *spec }));
+            out.extend(accesses.iter().cloned().map(|(access, produces)| Scored { access, spec: *spec, produces }));
         }
     }
     if !has_specific {
@@ -68,7 +95,7 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
         let generics: Vec<Scored> = scored
             .iter()
             .filter(|(spec, _)| *spec < 2)
-            .flat_map(|(spec, accesses)| accesses.iter().cloned().map(move |access| Scored { access, spec: *spec }))
+            .flat_map(|(spec, accesses)| accesses.iter().cloned().map(move |(access, produces)| Scored { access, spec: *spec, produces }))
             .collect();
         let files: HashSet<&String> = generics.iter().map(|g| &g.access.file).collect();
         if files.len() <= GENERIC_ROUTE_FANOUT_CAP {

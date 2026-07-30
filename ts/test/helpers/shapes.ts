@@ -9,7 +9,7 @@
 import { loadAddon } from "../../src/codebase/rust_core.js";
 import {
   rustImpactToModel, rustContractToModel, rustReachToModel,
-  rustCompareToModel, rustNeighborhoodToModel, rustRefactorToModel,
+  rustCompareToModel, rustNeighborhoodToModel, rustRefactorToModel, rustCouplingToModel,
 } from "../../src/cli/queries.js";
 
 const core = (): any => loadAddon();
@@ -17,6 +17,10 @@ const core = (): any => loadAddon();
 export async function projectImpact(repo: string, file: string, symbol: string, opts: any = {}): Promise<any> {
   return rustImpactToModel(core().projectImpact(repo, file, symbol, opts.depth ?? null, opts.maxExpansions ?? null,
     opts.couplingOverlay ?? null, opts.llm ?? null, opts.model ?? null, opts.claudeBin ?? null));
+}
+
+export async function projectCoupling(repo: string, anchorFile: string, symbol?: string): Promise<any> {
+  return { shape: "coupling", ...rustCouplingToModel(core().projectCoupling(repo, anchorFile, symbol ?? undefined)) };
 }
 
 export async function projectContract(repo: string, moduleFile: string, _opts: any = {}): Promise<any> {

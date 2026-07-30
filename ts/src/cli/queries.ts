@@ -95,7 +95,7 @@ const rustWritersToModel = (r: any): any => ({
   filterColumns: Object.fromEntries((r.filterColumns ?? []).map((row: string[]) => [row[0], row.slice(1)])),
   ...nz(r),
 });
-const rustCouplingToModel = (r: any): any => ({
+export const rustCouplingToModel = (r: any): any => ({
   shape: "coupling", anchor: anchorOf(r), keys: r.keys, total: r.total, ...nz(r),
 });
 

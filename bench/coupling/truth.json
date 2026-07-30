@@ -1,57 +1,79 @@
 {
-  "_comment": "WRITTEN BEFORE THE TOOL WAS RUN ON THIS FIXTURE. Every `expect` below is derived from reading the source, not from output. If a row later needs changing, append a dated note saying why — never edit one to match a result.",
+  "_comment": "WRITTEN BEFORE THE TOOL WAS RUN ON THIS FIXTURE. Every `expect` below is derived from reading the source, not from output. If a row later needs changing, append a dated note saying why \u2014 never edit one to match a result.",
   "_measures": "CAPABILITY and PRECISION, not a rate. n=4 positives cannot estimate real-world recall; what it can establish is whether each documented cross-stack mechanism resolves at all, and whether the three name-matching traps are avoided. Real-world recall needs hand-verified pairs in a real repo, which this does not substitute for.",
-
   "positives": [
     {
       "id": "db-table-ts-write-java-read",
       "anchor": "api/workOrders.ts#createWorkOrder",
       "key": "work_orders",
-      "expectOtherSide": ["backend/WorkOrderSync.java"],
-      "why": "createWorkOrder INSERTs into work_orders; WorkOrderSync.sync SELECTs from it. No import, no call edge, different languages — the table is the only link. A scheduler invokes the Java side, so it has zero in-repo callers and looks isolated to a call graph."
+      "expectOtherSide": [
+        "backend/WorkOrderSync.java"
+      ],
+      "why": "createWorkOrder INSERTs into work_orders; WorkOrderSync.sync SELECTs from it. No import, no call edge, different languages \u2014 the table is the only link. A scheduler invokes the Java side, so it has zero in-repo callers and looks isolated to a call graph."
     },
     {
       "id": "db-table-java-write-ruby-read",
       "anchor": "backend/InvoicePoster.java#InvoicePoster",
       "key": "invoices",
-      "expectOtherSide": ["reporting/invoices.rb"],
-      "why": "InvoicePoster INSERTs invoices; InvoiceReport reads Invoice via ActiveRecord. Neither language can see the other, and the ORM never spells the table name in SQL — it is inferred from the model name."
+      "expectOtherSide": [
+        "reporting/invoices.rb"
+      ],
+      "why": "InvoicePoster INSERTs invoices; InvoiceReport reads Invoice via ActiveRecord. Neither language can see the other, and the ORM never spells the table name in SQL \u2014 it is inferred from the model name."
     },
     {
       "id": "http-route-tsx-to-java",
       "anchor": "frontend/TechnicianPanel.tsx#TechnicianPanel",
       "key": "/api/technicians",
-      "expectOtherSide": ["backend/TechnicianController.java"],
+      "expectOtherSide": [
+        "backend/TechnicianController.java"
+      ],
       "why": "The panel does $http.get(\"/api/technicians\"); the controller serves @GetMapping(\"/api/technicians\"). The shared route literal is the entire boundary."
     },
     {
       "id": "shared-config-key",
       "anchor": "api/notify.ts#notifyUrl",
       "key": "NOTIFY_WEBHOOK_URL",
-      "expectOtherSide": ["backend/NotifyWorker.java"],
-      "why": "Both sides read the same environment variable. Redefining what the value means on one side silently changes the other's behaviour, and no static edge of any kind connects them.",
-      "knownGap": "2026-07-30: there is NO config-key adapter. The coupling layer's adapters are db-table, http-route, data-file, egress, binding and member-access — a shared environment variable is not a key it can form, so this resolves nothing. Found by this benchmark on its FIRST run, which is what it is for. Left as a failing-but-declared row rather than deleted: a gap removed from the fixture is a gap nobody measures."
+      "expectOtherSide": [
+        "backend/NotifyWorker.java",
+        "reporting/notify.rb",
+        "worker/dispatch.py"
+      ],
+      "why": "Four languages read the same environment variable and NOTHING links them -- no import, no call, no table, no route. Redefine what the value means on one side and the other three silently change behaviour. Deliberately four accessor IDIOMS as well as four languages (process.env.X dotted, System.getenv(\"X\"), ENV[\"X\"], os.environ.get(\"X\")), because an adapter is only as multi-language as the idioms it was tested on.",
+      "addedNote": "2026-07-30: was a declared GAP -- there was no config-key adapter at all, which this benchmark found on its first run. Adapter added; the row now expects three counterparts across three other languages rather than one."
     }
   ],
-
   "decoys": [
     {
       "id": "same-column-different-table",
       "anchor": "api/workOrders.ts#closeWorkOrder",
-      "mustNotContain": ["reporting/technicians.rb"],
+      "mustNotContain": [
+        "reporting/technicians.rb"
+      ],
       "why": "closeWorkOrder writes work_orders.status; TechnicianReport reads technicians.status. Identical COLUMN name, unrelated tables. This is the trap a column-grained matcher falls into, and it is why the shape's documented grain is the TABLE."
     },
     {
       "id": "table-name-in-prose-only",
       "anchor": "api/workOrders.ts#createWorkOrder",
-      "mustNotContain": ["frontend/Help.tsx"],
+      "mustNotContain": [
+        "frontend/Help.tsx"
+      ],
       "why": "Help.tsx mentions work_orders twice in user-facing text and touches no database. `rg work_orders` matches it. A resolved access must not."
     },
     {
       "id": "same-file-write-and-read",
       "anchor": "api/audit.ts#writeAudit",
-      "mustNotContain": ["api/audit.ts"],
+      "mustNotContain": [
+        "api/audit.ts"
+      ],
       "why": "audit_log is written and read inside one file, so there is no other side. Reporting the file against itself would be a false discovery dressed as a cross-stack finding."
+    },
+    {
+      "id": "config-key-read-in-one-place",
+      "anchor": "api/solo.ts#solo",
+      "mustNotContain": [
+        "api/solo.ts"
+      ],
+      "why": "SOLO_ONLY_FLAG is read here and nowhere else. A config key is the one SYMMETRIC kind -- other_side unions producers and consumers so that reader-to-reader pairs resolve -- so this is the case where that union could make a file its own counterpart. It must report nothing."
     }
   ]
 }

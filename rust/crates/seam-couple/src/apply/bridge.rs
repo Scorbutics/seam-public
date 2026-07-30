@@ -307,12 +307,17 @@ pub fn anchor_counterparts(repo: &str, file: &str, symbol: Option<&str>) -> Vec<
     let mut out: Vec<AnchorCounterpart> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (kind, value, reads, writes) in &own {
-        // the anchor READS a key → its counterparts are the WRITERS (produces:false ⇒ producers), and vice versa
-        for (role, produces) in [("writes", false), ("reads", true)] {
-            if (role == "writes" && !reads) || (role == "reads" && !writes) {
+        // The anchor READS a key → the index side to consult is the PRODUCERS, and vice versa. But the
+        // counterpart's ROLE is read off the access itself (`Scored.produces`), not inferred from which pass we
+        // are in — identical for every asymmetric kind, and the difference between truth and a false claim for a
+        // symmetric one. See the note in `ground::other_side`.
+        for (pass, produces) in [("p", false), ("c", true)] {
+            if (pass == "p" && !reads) || (pass == "c" && !writes) {
                 continue;
             }
-            for acc in crate::ground::other_side(&idx.floor_base, kind, value, produces) {
+            for s in crate::ground::other_side_scored(&idx.floor_base, kind, value, produces) {
+                let acc = &s.access;
+                let role = if s.produces { "writes" } else { "reads" };
                 if normpath(&acc.file) == anchor_norm {
                     continue;
                 }

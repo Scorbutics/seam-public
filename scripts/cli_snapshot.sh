@@ -104,6 +104,13 @@ run q_contract_recv     --repo test/fixtures/crossstack-repo --scan --query cont
 # (`export { x } from`), RENAMING (`export { a as b } from`, where the call sites spell `b`), and STAR
 # (`export * from`, which names nothing at all and so was structurally invisible). See its README.
 run q_contract_barrel  --repo test/fixtures/barrel-repo --scan --query contract --anchor-file src/decl.ts --data-coupling floor
+# CONFIG-KEY COUPLING, across four languages. Added for the same reason as the barrel cases: this gate showed
+# ZERO diffs when the config-key adapter was introduced, because no fixture here contains a shared environment
+# variable. `bench/coupling/repo` is referenced rather than copied so the gate and the coupling benchmark cannot
+# drift -- it is the only tree in the repo with a TS/Java/Ruby/Python key, and it also carries the SYMMETRIC-kind
+# case (reader<->reader, where `other_side` unions both sides instead of returning the complement).
+run q_coupling_config  --repo ../bench/coupling/repo --scan --query coupling \
+                       --anchor-file api/notify.ts --symbol notifyUrl --data-coupling floor
 run q_consumers_barrel --repo test/fixtures/barrel-repo --scan --query consumers \
                        --anchor-file src/decl.ts --symbol mapTasks --data-coupling floor
 run q_depth2    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 2 --data-coupling floor

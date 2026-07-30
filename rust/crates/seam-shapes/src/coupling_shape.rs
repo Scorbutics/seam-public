@@ -9,7 +9,7 @@
 //! answer reads as a boundary rather than a list.
 
 use seam_couple::apply::columns::{access_columns, symbol_span};
-use seam_couple::{floor_base_index, other_side, scan_file_keys, MaskCtx};
+use seam_couple::{floor_base_index, other_side_scored, scan_file_keys, MaskCtx};
 use seam_lang::Ctx;
 use std::collections::{HashMap, HashSet};
 
@@ -85,15 +85,23 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
     for (kind, value, reads, writes) in &own {
         let mut sides: Vec<CouplingSide> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        // the anchor READS this key → its counterparts are the WRITERS (produces:false ⇒ producers); vice versa.
-        for (role, produces) in [("writes", false), ("reads", true)] {
-            if (role == "writes" && !reads) || (role == "reads" && !writes) {
+        // The anchor READS this key → the index side to consult is the PRODUCERS (and vice versa).
+        //
+        // THE COUNTERPART'S ROLE IS READ OFF THE ACCESS, NOT INFERRED. It used to be taken from which pass we
+        // were in, which is the same thing for every asymmetric kind and silently false for a symmetric one: a
+        // config key read by four stacks rendered each counterpart as `[method, writes NOTIFY_WEBHOOK_URL]`,
+        // i.e. told the reader that the Java worker SETS the variable when it only reads it. `Scored.produces`
+        // carries what the site actually does.
+        for (pass, produces) in [("p", false), ("c", true)] {
+            if (pass == "p" && !reads) || (pass == "c" && !writes) {
                 continue;
             }
-            for acc in other_side(&idx.floor_base, kind, value, produces) {
+            for s in other_side_scored(&idx.floor_base, kind, value, produces) {
+                let acc = &s.access;
                 if acc.file == anchor_file {
                     continue;
                 }
+                let role = if s.produces { "writes" } else { "reads" };
                 let (unit_symbol, unit_kind, _, _) = seam_couple::apply::complement_unit::complement_unit(repo, &acc.file, acc.line);
                 if !seen.insert(format!("{}#{}#{}", acc.file, unit_symbol, role)) {
                     continue;

@@ -233,7 +233,17 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
   }
   out.push("## How to use",
     "Each block is ONE shared key and the sites on the other side of it. `←` writes the key the anchor reads",
-    "(a change there changes what the anchor sees); `→` reads what the anchor writes (a change here ripples there).",
+    "(a change there changes what the anchor sees); `→` reads what the anchor writes (a change here ripples there).");
+  // CONFIG KEYS ARE SYMMETRIC and the sentence above does not describe them. Every other kind has a direction —
+  // a table couples a writer to a reader, a route a caller to a handler — so "the other side" means the opposite
+  // role. A shared environment variable couples READER to READER: nobody writes it, both sides merely have to
+  // agree what it means. Emitting the directional prose unqualified told a reader that the anchor WRITES a
+  // variable it only reads, which is exactly the kind of confident-and-wrong sentence this shape exists to avoid.
+  if (keys.some((k: any) => k.kind === "config-key")) out.push(
+    "CONFIG KEYS ARE SYMMETRIC: for those, `→ reads` means the counterpart reads the SAME setting the anchor",
+    "reads — neither side writes it. They are coupled because they must agree on what the value means, so",
+    "redefining it breaks both. A `←` on a config key is a real assignment (`process.env.X = …`).");
+  out.push(
     "NO import or call edge links these to the anchor — they meet only through the key, so a call-graph, grep, and",
     "semantic search all miss them. Grain is the key (a table, not a column), and provenance is RESOLVED_PARTIAL:",
     "the access is grounded, but confirm the specific field/branch matters to your change.");

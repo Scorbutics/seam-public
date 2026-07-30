@@ -10,6 +10,7 @@ use crate::types::{CouplingAdapter, KeyHit};
 
 mod active_record;
 mod annotation_route;
+pub mod config_key;
 mod db_table;
 pub mod endpoint_map;
 mod file_channel;
@@ -33,14 +34,17 @@ static ANNOTATION_ROUTE: annotation_route::AnnotationRoute = annotation_route::A
 static FILE_CHANNEL: file_channel::FileChannel = file_channel::FileChannel;
 static VUE_INJECT: vue_inject::VueInject = vue_inject::VueInject;
 static MEMBER_ACCESS: member_access::MemberAccess = member_access::MemberAccess;
+static CONFIG_KEY: config_key::ConfigKey = config_key::ConfigKey;
 
 /// Every registered framework adapter, in the TS `ADAPTERS` order (so `scan_file_keys` is byte-identical).
+/// CONFIG_KEY is APPENDED rather than inserted: it has no TS counterpart (it was added after the TS floor was
+/// deleted), and putting it last keeps every pre-existing key's discovery order unchanged.
 /// Framework-specific code lives ONLY in these modules. SUPABASE is registry slot 0: it grounds query-builder
 /// `.from(t).verb` table access via the language provider's `table_access`, which no language implements (the
 /// TS hook is unimplemented everywhere) — so it emits nothing on every repo, byte-identical, but it is
 /// registered FIRST to match the TS order and appear in the adapter catalogue.
 static ADAPTERS: &[&dyn CouplingAdapter] =
-    &[&SUPABASE, &RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_ROUTE, &HTTP_EGRESS, &ENDPOINT_MAP, &ANNOTATION_ROUTE, &FILE_CHANNEL, &VUE_INJECT, &MEMBER_ACCESS];
+    &[&SUPABASE, &RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_ROUTE, &HTTP_EGRESS, &ENDPOINT_MAP, &ANNOTATION_ROUTE, &FILE_CHANNEL, &VUE_INJECT, &MEMBER_ACCESS, &CONFIG_KEY];
 
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.
