@@ -25,7 +25,12 @@ const REGISTERED: string[] = (() => {
   // the `=` of that arrow is not the assignment.
   const block = /const QUERY_HANDLERS[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src);
   if (!block) throw new Error("could not find QUERY_HANDLERS in decompose.ts — this test's premise is gone");
-  const names = [...block[1].matchAll(/(?:^|[\s,{])([a-zA-Z_][\w]*)\s*:/g)].map((m) => m[1]);
+  // COMMENT LINES ARE NOT ENTRIES. The map is heavily commented, and prose contains `word:` all the time — the
+  // sentence "An ALIAS and not a rename: ..." made this parser report a shape called `rename` and fail the guard
+  // against a registry that was perfectly fine. Dropping `//` lines is safe here: this is TS source, and no
+  // string literal in the map begins a line with `//`.
+  const body = block[1].split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const names = [...body.matchAll(/(?:^|[\s,{])([a-zA-Z_][\w]*)\s*:/g)].map((m) => m[1]);
   if (!names.length) throw new Error("parsed QUERY_HANDLERS but found no shapes — the parse is wrong");
   return names;
 })();

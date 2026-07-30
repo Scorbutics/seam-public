@@ -61,6 +61,13 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
 const QUERY_HANDLERS: Record<string, (a: Args) => Promise<number>> = {
   consumers: runConsumerSet, dependencies: runDependencySet, writers: runWritersSet, coupling: runCouplingSet, impact: runImpact, refactor: runRefactorFacts,
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
+  // `brief` IS `refactor`, under the name that says what it does. The bundle answers "tell me everything
+  // structural about this symbol" — direct consumers, transitive impact, dependencies, boundary — in ONE call,
+  // and "refactor facts" hid that behind a use case. Measured in bench/grep-vs-seam: every Seam arm ran
+  // consumers + contract + impact as separate calls and never reached this one, which already did most of it.
+  // An ALIAS and not a rename: `--query refactor` is in the skill, the gate and any existing caller's muscle
+  // memory, and breaking it to improve a name would be a bad trade.
+  brief: runRefactorFacts,
 };
 
 // AUTO-ROUTE (#3, blast-radius routing) — an `--auto --intent` grow assumes the intent is a FLOW question. But

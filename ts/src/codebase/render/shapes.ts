@@ -273,9 +273,14 @@ export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
   out.push(`# Refactor facts for ${sym} (${model.anchor?.file ?? "?"})`,
     [`impact: ${im.total ?? 0} across ${im.fileCount ?? 0} file(s)${im.gaps?.length ? `, ${im.gaps.length} gap(s)` : ""}`,
      `dependencies: ${(dep.members ?? []).length}`,
-     `contract: ${(ct.provides ?? []).length} provided, ${(ct.unusedExports ?? []).length} unused`].join(" | "),
+     `contract: ${(ct.provides ?? []).length} provided, ${(ct.unusedExports ?? []).length} unused`,
+     ...(model.consumers ? [`direct consumers: ${(model.consumers.members ?? []).length}`] : [])].join(" | "),
     "", "These are the FACTS to plan a change to " + sym + " — the change PLAN over them is yours to make.", "");
-  out.push("─".repeat(4) + " IMPACT (what breaks if you change it) " + "─".repeat(4), renderImpact(im, sr), "");
+  // CONSUMERS first, because "who calls this" is the question a reader actually opens with, and because IMPACT
+  // answers a different one (the transitive radius). Printing the radius before the direct callers invited the
+  // reader to mistake one for the other.
+  if (model.consumers) out.push("─".repeat(4) + " CONSUMERS (who calls it, directly) " + "─".repeat(4), renderConsumerSet(model.consumers, sr), "");
+  out.push("─".repeat(4) + " IMPACT (what breaks if you change it — TRANSITIVE, not the direct callers above) " + "─".repeat(4), renderImpact(im, sr), "");
   out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep, sr), "");
   out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct));
   return out.join("\n");

@@ -366,7 +366,17 @@ export async function runRefactorFacts(a: Args): Promise<number> {
   let rf: any;
   try { rf = rustRefactorToModel(rustA6.gatherRefactorFacts(a.repo, a.anchorFile!, a.symbol!)); }
   catch (e) { err(`refactor facts failed: ${(e as Error).message}`); }
-  const model: any = { mode: "codebase", ...rf };
+  // DIRECT CONSUMERS, composed in on top of the core bundle. `impact` is the TRANSITIVE blast radius, which is a
+  // different question from "who calls this" — and the second one is the first thing anyone asks. Measured in
+  // bench/grep-vs-seam: every Seam arm ran `consumers` and `impact` and `contract` as SEPARATE calls, so this
+  // bundle was one call short of answering the whole structural question in one shot.
+  //
+  // Composed HERE rather than in `gatherRefactorFacts` deliberately: the core already exposes
+  // `projectConsumerSet`, and widening a Rust DTO to re-expose it would duplicate the shape for no new fact.
+  let consumers: any = null;
+  try { consumers = rustSetToModel(rustA6.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false, false)); }
+  catch { consumers = null; }   // a bundle missing one section is still worth printing; say nothing rather than die
+  const model: any = { mode: "codebase", ...rf, consumers };
 
   if (a.format === "llm-context") process.stdout.write(renderRefactorFacts(model, await snippetReaderOf(a)) + "\n");
   else

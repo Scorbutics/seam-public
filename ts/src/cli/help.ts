@@ -27,7 +27,8 @@ const QUERY_HELP: Record<string, { answers: string; needs: string }> = {
   reaches: { answers: "can A reach B? — a verdict plus the witness path", needs: "--center <file>#<symbol> --to-symbol <t> [--to-file <f>]" },
   writers: { answers: "who WRITES the state this symbol reads (reverse data coupling)", needs: "--center <file>#<symbol>" },
   coupling: { answers: "the shared keys (db tables / routes / events) this symbol touches", needs: "--center <file>#<symbol>" },
-  refactor: { answers: "the facts bundle for a refactor — impact + dependencies + contract together", needs: "--center <file>#<symbol>" },
+  brief: { answers: "EVERYTHING structural about one symbol in ONE call — direct consumers + transitive impact\n                       + dependencies + boundary contract. Start here; reach for a single shape to go deeper", needs: "--center <file>#<symbol>" },
+  refactor: { answers: "the same bundle as `brief` (kept for compatibility)", needs: "--center <file>#<symbol>" },
   compare: { answers: "how two symbols differ structurally", needs: "--center <f>#<s> --to-file <f2> --to-symbol <s2>" },
 };
 
@@ -56,6 +57,7 @@ USAGE
 
 WHEN TO REACH FOR WHICH
   A single fact, one symbol, a string literal        -> use grep. Seam is overkill and slower.
+  Anything structural about ONE symbol                -> --query brief. One call, four answers. START HERE.
   "who calls X", "what breaks if I change X"         -> a SHAPE (--query, list below). Deterministic, no LLM.
   "how does X work / flow end to end"               -> a GROW (--auto --intent), which follows the path.
   "what does this module expose and how is it used" -> --query contract.
