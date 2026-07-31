@@ -73,7 +73,23 @@ There are two product modes, sharing the same host-served-LLM mechanics:
   turn thinking off. Use this skill's subagent-serving only when there is **no** binary (the usual
   in-Claude-Code case). Rule of thumb: dedicated cheap passes (engine `claude -p`) > Opus subagents.
 
-Use a scratch dir for intermediates: `OUT=$(mktemp -d)`.
+Use a scratch dir for intermediates: `OUT=$(mktemp -d)`. **This applies to the DIFF/bridge workflows below
+(§A–§B), where one shell invocation does the whole job. It does NOT apply to codebase QUERIES (§C–§D).**
+
+> ### Do NOT redirect a codebase query to a file. Read it from stdout.
+>
+> Every `--query`/grow answer is TOKEN-BUDGETED and self-contained: `--format agent` defaults to ~4000 tokens
+> (~16KB) and `--token-budget N` shrinks it. It is sized to be read in one go — you do not need to spool it,
+> page it, `head`/`tail` it, or `wc -l` it first.
+>
+> **And `$OUT` will not survive.** Each Bash call is a FRESH SHELL, so `OUT=$(mktemp -d)` set in one call is
+> EMPTY in the next — `> "$OUT/out.txt"` then writes to `/out.txt` and is denied. Measured 2026-07-31
+> (bench/grep-vs-seam, clean-r1/r2/r3): **4, 4 and 5 of each run's 7-9 Seam calls were this** — redirect,
+> fail, retry, `wc -l`, then finally run it plainly. Roughly half of every run's Seam budget, spent on
+> plumbing this line taught.
+>
+> If the answer really is too large for your context, shrink it AT THE SOURCE — `--token-budget 1500`,
+> `--skeleton`, or a narrower `--center` — rather than writing it to disk and paging it back.
 
 ## Addressing a node — `--center` (the ONE flag, all codebase modes)
 
