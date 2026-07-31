@@ -764,3 +764,79 @@ unusable anyway. That was the case here, and only a citation count on the real a
 **The next lever is ranking/scoping, not reach.** Getting a 2,948-file consumer set down to something an agent
 reads without a `tail` is a different problem from the one written down here, and it is where the remaining
 RECALL bin actually lives.
+
+## Why the agent keeps opening the file: NO SHAPE SHOWS THE ANCHOR'S OWN ACCESS SITE (2026-07-31)
+
+The standing question through this whole session — *the Seam output is solid, so why does the agent need more?*
+— has a concrete answer on the cal-booking-flow case, and it is not distrust and not ranking.
+
+The task asks where `createBooking` writes to the database. Across a whole run, Seam's 41,606 characters of
+output contained **0 lines mentioning `prisma.`** and **0 `.create(` calls**. `createBooking.ts` appeared
+exactly twice, as bare addresses:
+
+    - _createBooking (…/createBooking.ts:108)  [function, call]   {RESOLVED_FULL}
+    - createBooking  (…/createBooking.ts:76)   [function, import] {RESOLVED_FULL}
+
+`--query coupling --center createBooking.ts` was the obvious candidate to fix that by routing. It returns 4
+shared keys, 241 counterpart sites, 383 lines, and it does carry prisma snippets. But:
+
+    grep -c "createBooking.ts" /tmp/coup.txt   →   0
+
+**The anchor does not appear in its own coupling output.** All 241 citations are counterparts — other files
+touching the same tables. And note what the section heading says:
+
+    ## db-table "booking"  — anchor writes
+
+Seam **derived** that the anchor writes the booking table. It prints the direction and withholds the location.
+The write is right there in the source at `createBooking.ts:187`:
+
+    const booking = await tx.booking.create(createBookingObj);
+
+So the answer to "where does this hit the DB" is 383 lines about 241 other places, and not the one line asked
+about. Consumers/grow give addresses without behaviour; coupling gives the behaviour of *everything except* the
+anchor. The agent opened `createBooking.ts` because no shape would show it that line.
+
+**This also kills the routing fix before it was built.** The planned change — send "where does X touch the
+database" to `--query coupling` — would have produced exactly the same agent behaviour: run coupling, read
+"anchor writes booking", open the file anyway. It would have measured flat and the flat result would have been
+blamed on the agent. That is the fourth time this session a capability looked like the lever and a pre-build
+check said otherwise (`data_coupling` hardcoded false; `--format agent` snippets pipeline-only; the DI index).
+The check is cheap and it has never once been wasted.
+
+### SHIPPED — `own_sites`, the near side of every key
+
+`CouplingKey` now carries `own_sites`: the anchor's own access lines for that key, given the same treatment the
+far side already got (enclosing unit, 1-based line, db-table columns, snippet). The scan already produced these
+hits and folded them into two role booleans; the fix keeps them. Rendered as `●`, above the counterparts,
+because they are what the heading is asserting.
+
+On the case that found it, the check that returned 0 now returns 6, and line 187 is one of them:
+
+    ● saveBooking (…/createBooking.ts:187)  [function, writes booking]  — THE ANCHOR'S OWN ACCESS
+          187>     const booking = await tx.booking.create(createBookingObj);
+
+The transaction-alias worry was unfounded and is pinned anyway: `member_access.rs` is receiver-agnostic by
+construction (`<recv>.<entity>.<verb>`, discriminated on the VERB vocabulary), so `tx.` was never at risk — but
+the fixture uses `tx.bookings.create(...)` and the test asserts the source text at the cited line, so a future
+renderer that starts matching a client receiver literally fails here.
+
+Regression: `ts/test/codebase/coupling_own_sites.test.ts` (7 cases) on `ts/test/fixtures/own-access-repo`.
+Falsified two ways rather than one, since there are two ways to be wrong: emptying `own_sites` fails 5 of 7,
+and dropping the 0-based→1-based conversion fails 4 of 7. **The first falsification run had three survivors,
+not two** — "the enclosing unit is resolved" was a bare `for…of` over `ownSites` and passed on an empty array.
+That is the null-answer trap again, this time in a test I wrote *while* citing the rule against it; it is now
+length-guarded. Tenth instance in this project.
+
+Snapshot gate: four cases drift (`q_coupling`, `q_coupling_config`, `q_refactor`, `w_coupling`), all purely
+additive plus the reworded legend. `brief`/`refactor` share `renderCoupling`, so the fold inherits it for free.
+
+**Not claimed:** that this lowers tool calls. Runs 2 and 4 both predicted richer output would, and both were
+refuted; the standing finding is that it does not. What is claimed is narrower and was measured: the anchor's
+own write line was underivable from any shape, and now it is the first thing the shape prints.
+
+### The measurement this does NOT justify
+
+No claim here that fixing it lowers tool calls. Runs 2 and 4 both predicted richer output would cut calls and
+both were wrong; the standing finding is that **richer output does not buy fewer calls**. What is defensible is
+narrower: the anchor's own write line is currently underivable from any Seam shape, and the agent is not being
+stubborn when it goes and gets it. Whether closing that changes the count is a measurement, not a prediction.

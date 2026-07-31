@@ -2449,6 +2449,8 @@ pub struct CouplingKeyDto {
     pub kind: String,
     pub value: String,
     pub anchor_role: String,
+    /// The anchor's OWN access sites for this key — the near side. See `seam_shapes::CouplingKey::own_sites`.
+    pub own_sites: Vec<CouplingSideDto>,
     pub sides: Vec<CouplingSideDto>,
 }
 
@@ -2481,9 +2483,15 @@ fn coupling_dto(c: seam_shapes::CouplingSet) -> CouplingSetDto {
         keys: c
             .keys
             .into_iter()
-            .map(|k| CouplingKeyDto {
-                kind: k.kind, value: k.value, anchor_role: k.anchor_role,
-                sides: k.sides.into_iter().map(|s| CouplingSideDto { symbol: s.symbol, file: s.file, line: s.line as u32, kind: s.kind, role: s.role, columns: s.columns }).collect(),
+            .map(|k| {
+                let side = |s: seam_shapes::CouplingSide| CouplingSideDto {
+                    symbol: s.symbol, file: s.file, line: s.line as u32, kind: s.kind, role: s.role, columns: s.columns,
+                };
+                CouplingKeyDto {
+                    kind: k.kind, value: k.value, anchor_role: k.anchor_role,
+                    own_sites: k.own_sites.into_iter().map(side).collect(),
+                    sides: k.sides.into_iter().map(side).collect(),
+                }
             })
             .collect(),
         total: c.total as u32,

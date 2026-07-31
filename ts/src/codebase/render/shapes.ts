@@ -224,6 +224,18 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
   }
   for (const k of keys) {
     out.push(`## ${k.kind} "${k.value}"  — anchor ${k.anchorRole}`);
+    // THE ANCHOR'S OWN SITES FIRST, because they are what the heading above is asserting.
+    //
+    // This block did not exist until 2026-07-31, and its absence is the best-measured content gap in the
+    // benchmark. `--query coupling` on cal.com's `createBooking` printed `— anchor writes` over 241 counterpart
+    // citations and never once cited `createBooking.ts` itself; the write it was describing sits at line 187.
+    // Asked "where does this touch the database", the shape answered with 241 other places. The agent opened the
+    // file every run, and it was right to.
+    for (const s of k.ownSites ?? []) {
+      const cols = s.columns?.length ? `.{${s.columns.join(",")}}` : "";
+      out.push(`  ● ${s.symbol} (${at(s.file, s.line)})  [${s.kind}, ${s.role} ${k.value}${cols}]  — THE ANCHOR'S OWN ACCESS`
+        + snip(sr, s.file, s.line, "        "));
+    }
     if (!k.sides.length) out.push(`  (no counterpart — the anchor is the only side of this key in the repo)`);
     for (const s of k.sides) {
       const cols = s.columns?.length ? `.{${s.columns.join(",")}}` : "";   // column grain (subsumes the writers shape)
@@ -233,8 +245,10 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
     out.push("");
   }
   out.push("## How to use",
-    "Each block is ONE shared key and the sites on the other side of it. `←` writes the key the anchor reads",
-    "(a change there changes what the anchor sees); `→` reads what the anchor writes (a change here ripples there).");
+    "Each block is ONE shared key. `●` is the ANCHOR'S OWN access to it — the line inside the anchor that does",
+    "the reading or writing the heading names, so \"where does this touch the DB\" is answered by the `●` lines",
+    "alone. The rest are the sites on the OTHER side: `←` writes the key the anchor reads (a change there",
+    "changes what the anchor sees); `→` reads what the anchor writes (a change here ripples there).");
   // CONFIG KEYS ARE SYMMETRIC and the sentence above does not describe them. Every other kind has a direction —
   // a table couples a writer to a reader, a route a caller to a handler — so "the other side" means the opposite
   // role. A shared environment variable couples READER to READER: nobody writes it, both sides merely have to

@@ -30,6 +30,15 @@ pub struct CouplingKey {
     pub kind: String,
     pub value: String,
     pub anchor_role: String, // "reads" | "writes" | "reads+writes"
+    /// THE ANCHOR'S OWN ACCESS SITES for this key — the lines *inside* the anchor that read or write it.
+    ///
+    /// Measured absence (bench/grep-vs-seam, cal-booking-flow, 2026-07-31): asked "where does `createBooking`
+    /// write to the database", this shape returned 4 keys, 241 counterpart sites and 383 lines, and the anchor's
+    /// own file appeared ZERO times in it — while the heading said `db-table "booking" — anchor writes`. The
+    /// role is DERIVED FROM these hits, so the engine held `createBooking.ts:187` and printed only the verb.
+    /// The agent then opened the file, every run. `sides` is deliberately the OTHER side (see the `acc.file ==
+    /// anchor_file` skip below); without this field nothing carries the near side at all.
+    pub own_sites: Vec<CouplingSide>,
     pub sides: Vec<CouplingSide>,
 }
 
@@ -63,14 +72,18 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
     let span = symbol.and_then(|s| symbol_span(repo, anchor_file, s));
     let in_span = |line: usize| span.is_none_or(|(lo, hi)| line >= lo && line <= hi);
     let mask = MaskCtx::new(&text);
-    // (kind, value) → (reads, writes), in first-seen order (the TS Map's insertion order).
-    let mut own: Vec<(String, String, bool, bool)> = Vec::new();
+    // (kind, value) → (reads, writes, own hit lines), in first-seen order (the TS Map's insertion order).
+    // THE HIT LINES ARE KEPT, not just folded into the two role booleans. Collapsing them was the whole defect:
+    // the roles below are computed FROM these lines, so discarding them left the shape asserting a verb whose
+    // location it had just had in hand.
+    let mut own: Vec<(String, String, bool, bool, Vec<(usize, bool)>)> = Vec::new();
     for h in scan_file_keys(anchor_file, &text, &mask).into_iter().filter(|h| in_span(h.line)) {
-        match own.iter_mut().find(|(k, v, _, _)| *k == h.kind && *v == h.value) {
+        match own.iter_mut().find(|(k, v, ..)| *k == h.kind && *v == h.value) {
             Some(e) => {
                 if h.produces { e.3 = true } else { e.2 = true }
+                e.4.push((h.line, h.produces));
             }
-            None => own.push((h.kind.clone(), h.value.clone(), !h.produces, h.produces)),
+            None => own.push((h.kind.clone(), h.value.clone(), !h.produces, h.produces, vec![(h.line, h.produces)])),
         }
     }
     if own.is_empty() {
@@ -87,10 +100,37 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
     // ground/other_side.rs for the measurement that motivated it.
     let anchor_routes: Vec<String> = own
         .iter()
-        .filter(|(kind, _, _, _)| kind == "http-route")
-        .map(|(_, value, _, _)| value.clone())
+        .filter(|(kind, ..)| kind == "http-route")
+        .map(|(_, value, ..)| value.clone())
         .collect();
-    for (kind, value, reads, writes) in &own {
+    for (kind, value, reads, writes, hits) in &own {
+        // THE NEAR SIDE, given the same treatment as the far side: enclosing unit, 1-based line, and — for a
+        // db-table — the columns this access touches. Same helpers, so the two sides cannot drift apart in what
+        // they claim; the ONE asymmetry is `role`, which for the anchor is what the hit itself does rather than
+        // the complement of it.
+        let mut own_sites: Vec<CouplingSide> = Vec::new();
+        let mut own_seen: HashSet<(usize, bool)> = HashSet::new();
+        for (line, produces) in hits {
+            if !own_seen.insert((*line, *produces)) {
+                continue;
+            }
+            let (unit_symbol, unit_kind, _, _) = seam_couple::apply::complement_unit::complement_unit(repo, anchor_file, *line);
+            let columns = if kind == "db-table" {
+                let c = access_columns(repo, anchor_file, *line, &mut parse_cache);
+                if *produces { c.writes } else { c.reads }
+            } else {
+                Vec::new()
+            };
+            own_sites.push(CouplingSide {
+                symbol: unit_symbol,
+                file: anchor_file.to_string(),
+                line: line + 1, // internal rows are 0-based; every rendered citation is 1-based
+                kind: unit_kind,
+                role: if *produces { "writes" } else { "reads" }.into(),
+                columns,
+            });
+        }
+        own_sites.sort_by(|a, b| a.line.cmp(&b.line));
         let mut sides: Vec<CouplingSide> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         // The anchor READS this key → the index side to consult is the PRODUCERS (and vice versa).
@@ -131,7 +171,7 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
                 .then_with(|| a.line.cmp(&b.line))
         });
         let anchor_role = if *reads && *writes { "reads+writes" } else if *reads { "reads" } else { "writes" };
-        keys.push(CouplingKey { kind: kind.clone(), value: value.clone(), anchor_role: anchor_role.into(), sides });
+        keys.push(CouplingKey { kind: kind.clone(), value: value.clone(), anchor_role: anchor_role.into(), own_sites, sides });
     }
     let total: usize = keys.iter().map(|k| k.sides.len()).sum();
     base(keys, total, if total == 0 { Some("opaque") } else { None })
