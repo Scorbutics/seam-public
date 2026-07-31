@@ -44,3 +44,40 @@ area was worked on last. Small samples are the binding constraint here — 12 ca
 
 An empty shape arm ABORTS rather than scoring 0: a broken arm that reads as a measurement is the recurring
 failure in this repo, and it has already produced a false "RECALL 100%" once (`verification-tax.ts`).
+
+## Which cap is cutting the wrong candidates (2026-07-31)
+
+Decomposed on private-app, 40 cases, floor vs shape on identical anchors:
+
+    hits the floor found that the SHAPE KEPT :  8
+    hits the floor found that the SHAPE LOST :  9
+    non-hits the shape ADDED over the floor  : 46
+    lost hits by key kind: db-table 5, http-route 4
+
+So it is not one adapter, and the shape is not simply a stricter floor: it drops half the true positives AND
+introduces 46 files the floor never proposed.
+
+**READER_CAP is NOT the cause — and the reason corrects a stated assumption.** Raising `reader_cap()` from 6 to
+100 changed the numbers by nothing, because `projectCoupling` DOES NOT USE THE BRIDGE. The shape is a projection
+over the floor index via `other_side`; the bridge (`apply/bridge.rs`, with its reader cap, scan budget and grep
+candidate selection) serves the GROW path. Any explanation of shape recall that appeals to bridge caps is about
+the wrong code — including the one previously written in this file.
+
+**Test-file exclusion is real but minor:** 2 of the 9 lost hits are test files (`is_test_file` in `side()`
+removes them). Commits genuinely do touch tests, so this costs recall — but it explains 2, not 9. And 0 of the
+46 added non-hits are test files, so it explains none of the precision loss.
+
+**The remaining 7 losses are ordinary source files** that share an exact key with the anchor — the floor pairs
+them, the shape does not. Examples: `lib/services/directory-onboarding.ts`,
+`app/dashboard/directory/[memberId]/page.tsx`, `app/auth/callback/route.ts`. Remaining suspects, in the order
+worth testing:
+
+1. `is_bare_wildcard_route` — `other_side` returns EMPTY for any all-wildcard key (`/*`, `/*/*`). The floor arm
+   keeps those pairings. `app/auth/callback/route.ts` is a route file, so this is the first thing to check.
+2. `GENERIC_ROUTE_FANOUT_CAP` + its two keepers (filename, corroboration) — a 1-literal match with neither
+   keeper is dropped, and the floor has no equivalent rule.
+
+**The 46 added non-hits are the other half** and are not yet explained. They come from fuzzy route matching,
+which the floor arm cannot do at all, so they are new candidates rather than survivors of a filter. Whether they
+are wrong or merely not-co-changed is exactly the question `bench/coupling`'s decoys answer for a hand-built
+fixture and nothing answers for a real repo.
