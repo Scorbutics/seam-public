@@ -93,3 +93,54 @@ states the symmetry rather than leaving the directional prose to mislead.
 - `truth.json` was written from reading the source, before the tool was run on the fixture.
 - Never edit a row to match a result. Append a new one with a dated note saying why.
 - If a mechanism is added to the engine, add its positive here first and watch it fail.
+
+## The route work, and how the diagnosis changed under it (2026-07-31)
+
+Two cases were added BEFORE any fix, per the rule at the top of this file. The positive passed immediately and
+the decoy failed — and both outcomes contradicted the hypothesis they were written to test.
+
+### What was predicted
+
+Run 4's recall bins pointed at the TS↔Java REST hop, and `--query coupling` on keycloak's admin client showed
+**19 of 25 route keys with no counterpart**, including `partial-export`, which provably exists on both sides
+(`realms.ts:88` and `RealmAdminResource.java:1363`). The stated cause: JAX-RS splits a route across a
+class-level `@Path` and a method-level `@Path`, so neither half matches the client's composed path. The plan
+was to compose the Java route from its enclosing class.
+
+### What the fixture actually showed
+
+`http-route-jaxrs-split-path` **passed on the first run**, with no fix at all. It resolves because
+`shares_literal_segment` links any two routes sharing one literal segment — here, `partial-export`. So the
+positive was never evidence that split paths are handled; it is the same looseness that makes the new decoy
+`route-shares-one-segment-only` **FAIL**, linking `/{realm}/client-registration-policy/providers` to
+`/admin/policies/providers/{id}` because both contain `providers`. One mechanism, both results.
+
+A passing case you cannot explain is not a passing case. Checking why is what found the real defect.
+
+### The real defect: coupling is ASYMMETRIC
+
+The same pair, queried from the two ends, gives two different answers on real keycloak:
+
+    --query coupling --anchor-file .../RealmAdminResource.java   ->  /partial-export  ->  realms.ts:88   ✓
+    --query coupling --anchor-file .../realms.ts                 ->  /*/partial-export -> no counterpart  ✗
+
+Replicated on `partialImport`, `logout-all` and `client-session-stats`. The keys differ by normalisation —
+Java yields `/partial-export`, the client yields `/*/partial-export` from its `"/{realm}/partial-export"`
+url-template — and the targeted bridge searches candidate files for the key as spelled by the anchor. From
+Java, `partial-export` is a substring of the client's path and is found. From the client, `/*/partial-export`
+appears nowhere in the Java source and is not.
+
+**The broken direction is the one that matters most**: front-end → back-end is how an agent actually asks the
+question, and it is the direction the README leads with.
+
+### A third bug, visible in the fixture output
+
+Where the pair DOES link, the Java method is rendered `[method, writes /*/partial-export]`. That route is the
+CLIENT's. The method serves `/admin/realms/{realm}/partial-export`. Seam attributes one side's spelling of a
+key to the other side, so even a correct pairing states the route wrongly.
+
+### Status
+
+`route-shares-one-segment-only` is committed FAILING, as a documented open defect. Fixing the asymmetry by
+loosening the match further would make that decoy worse, which is precisely why it was written first: recall
+here must not be bought with invented edges.

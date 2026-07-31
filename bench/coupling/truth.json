@@ -40,6 +40,15 @@
       ],
       "why": "Four languages read the same environment variable and NOTHING links them -- no import, no call, no table, no route. Redefine what the value means on one side and the other three silently change behaviour. Deliberately four accessor IDIOMS as well as four languages (process.env.X dotted, System.getenv(\"X\"), ENV[\"X\"], os.environ.get(\"X\")), because an adapter is only as multi-language as the idioms it was tested on.",
       "addedNote": "2026-07-30: was a declared GAP -- there was no config-key adapter at all, which this benchmark found on its first run. Adapter added; the row now expects three counterparts across three other languages rather than one."
+    },
+    {
+      "id": "http-route-jaxrs-split-path",
+      "anchor": "api/realmsClient.ts#realmsClient",
+      "key": "/admin/realms/{realm}/partial-export",
+      "expectOtherSide": [
+        "backend/RealmAdminResource.java"
+      ],
+      "why": "JAX-RS declares this route in TWO annotations: @Path on the class and @Path on the method. Neither half matches the client's composed `/{realm}/partial-export`, so a scanner that reads only the method annotation finds nothing \u2014 and one that reads only literals never sees `partial-export` at all, because it is a single segment with no slash. Verified on the real keycloak repo: 19 of 25 route keys on the admin client had NO counterpart, including partial-export, which exists on both sides (RealmAdminResource.java:1363)."
     }
   ],
   "decoys": [
@@ -74,6 +83,14 @@
         "api/solo.ts"
       ],
       "why": "SOLO_ONLY_FLAG is read here and nowhere else. A config key is the one SYMMETRIC kind -- other_side unions producers and consumers so that reader-to-reader pairs resolve -- so this is the case where that union could make a file its own counterpart. It must report nothing."
+    },
+    {
+      "id": "route-shares-one-segment-only",
+      "anchor": "api/realmsClient.ts#policyClient",
+      "why": "Composed paths /{realm}/client-registration-policy/providers and /admin/policies/providers/{id} share the literal segment `providers` and nothing else. Seam linked EXACTLY this pair on real keycloak. This decoy exists so that widening route matching to fix the split-path miss cannot be paid for with invented edges \u2014 the failure mode a looser matcher produces.",
+      "mustNotContain": [
+        "backend/PolicyProvidersResource.java"
+      ]
     }
   ]
 }
