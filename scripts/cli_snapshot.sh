@@ -54,6 +54,15 @@ run grow        --repo "$R" --scan --auto --intent "how is a payment persisted" 
 run concern     --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --concern --data-coupling floor --format concern
 run growfrom    --repo "$R" --scan --auto --intent "how is a payment persisted" --grow-from "$A#$S" --data-coupling floor
 run diff        --repo "$R" --file ../sample.patch
+# `--format agent` — THE FORMAT THIS GATE DID NOT COVER AT ALL. Its own header calls it "the region to read
+# instead of a grep loop", the README calls it the primary agent surface, and there was not one case for it: a
+# change that added source snippets to every region/entry/sink line came back byte-identical here, because the
+# gate never rendered it. A green diff on an unexercised surface is not a guarantee, it is the absence of one —
+# the same shape as the contract cases that all answered `provides: 0`, and the writers case that pinned an
+# empty set. TWO anchors on purpose: one WITH a mechanism (the pipeline section, which was the only place
+# snippets used to appear) and one with region/entry sections only (where there were none).
+run agent       --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --data-coupling floor --format agent
+run agent_noflow --repo test/fixtures/crossstack-repo --scan --auto --intent "who reads the orders table" --anchor-file lib/db.ts --symbol supabase --data-coupling floor --format agent
 # CENTER-FIRST concern (no --center): the ONE path that runs the intent-weighted center pick, and therefore
 # the only one that exercises embedScoreDefs. Every other case pins the anchor, which skips it entirely.
 run centerfirst --repo "$R" --scan --auto --concern --intent "how is a payment persisted" --data-coupling floor --format concern

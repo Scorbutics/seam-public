@@ -478,7 +478,23 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const q = c && c !== l ? `${c}.${l}` : l;
     return `${q} (${at(f, startOfId.get(a))})`;
   })();
-  const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${(s.id === _anchorSeamId && _anchorWhere) ? _anchorWhere : where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
+  let _snipOn = false;   // set per crop rung by `assemble`; see the note on seamLine below
+  // SNIPPETS ON EVERY SEAM LINE, not only inside the mechanism. This header calls itself "the region to read
+  // INSTEAD OF a grep loop", and it was shipping 249 citations with ZERO source text on a real anchor: the
+  // reader was plumbed in (decompose.ts passes it) but only `pipelineSection` ever consulted it, and an anchor
+  // with no pipeline — In / Region / hubs / blindspots — got nothing at all. That is the CONTENT gap
+  // `bench/grep-vs-seam/verification-tax.ts` measures, in the format most explicitly sold as a grep replacement.
+  //
+  // `seamLine` is the ONE entry renderer for Region, In, sinks, producers, consumers and cross-stack, so hooking
+  // it here covers all six with a single rule rather than six drifting ones. `s.primary` carries the same
+  // (file, line) `where()` already prints, so the code shown can never disagree with the citation above it.
+  //
+  // GATED ON THE LADDER'S SNIPPET RUNG (`_snipOn`, set by `assemble`), not on `opts.snippet` directly — the
+  // budget already decided that source text yields before a mechanism step does, and bypassing that would let
+  // the region's snippets crowd out the flow the whole render is built around. Re-assembling at another rung is
+  // free: the reader memoises by (file, line), so a citation costs budget once however often it is rendered.
+  const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${(s.id === _anchorSeamId && _anchorWhere) ? _anchorWhere : where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`
+    + ((_snipOn && s.primary ? (opts.snippet?.(s.primary.file, s.primary.line, "      ") ?? []) : []).map((l) => `\n${l}`).join(""));
   // THE CALL SITE between two consecutive spine seams — the resolved edge connecting them, rendered from its OWN
   // caller/callee (edge.from is always the caller, edge.line the call-site line in the caller's file — see
   // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
@@ -871,7 +887,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // It also keeps the hub-crossing fold HONEST at the whole-render level: folding a hundred `user`/`team`
   // co-accesses must give the budget back to the flow, not simply let the region tail expand to refill it.
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, snippets: boolean, mechCap: number, overBudget = false): string[] =>
-    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    // `_snipOn` carries the ladder's snippet decision to `seamLine`, which every region/entry/sink line goes
+    // through. Set here rather than threaded through nine section closures: the flag is a property of the RUNG
+    // being assembled, and each rung reassembles the whole render from scratch.
+    ((_snipOn = snippets && !!opts.snippet), [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()]);
   // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
   // intent-relevance ranking above decides WHICH steps survive.
   const MECH_FULL = pipeline.length;

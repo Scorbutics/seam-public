@@ -426,3 +426,27 @@ one impacted symbol per file, under which "one snippet per file" and "every snip
 passed on the throttling variant it existed to reject. Two symbols per file, and it fails 2 of 4. **A fixture
 that cannot distinguish the fix from the bug is the null-answer trap in a different hat** — the eighth instance
 in this project, and the second in this session.
+
+### The third CONTENT gap: `--format agent` shipped 249 citations and no code
+
+The format whose own header reads *"the region to read **instead of a grep loop**"* — and which the README
+calls the primary agent surface — rendered 249 citations with **zero** source text on a real anchor. The reader
+was plumbed in correctly; only `pipelineSection` ever consulted it, so an anchor with no mechanism (In / Region /
+hubs / blindspots) got nothing at all. This is what the keycloak arm hit: 84 locations cited, 2 shown.
+
+`seamLine` is the single entry renderer for Region, In, sinks, producers, consumers and cross-stack, so the
+snippet hooks there — one rule for six sections — gated on the budget ladder's existing snippet rung rather than
+bypassing it. private-app anchor: **0 → 125** snippet lines.
+
+**And the gate that passed this change was blind to it.** `scripts/cli_snapshot.sh` had NOT ONE `--format agent`
+case. The change came back byte-identical because the gate never rendered the format. A green diff on an
+unexercised surface is not a guarantee, it is the absence of one — the same shape as the contract cases that all
+answered `provides: 0` and the writers case that pinned an empty set. Two cases added (one anchor with a
+mechanism, one without, since the mechanism was the only place snippets used to appear), and both were then
+VERIFIED to fail when the fix is reverted. The first attempt at the second case errored out and wrote a
+zero-byte file, which the gate would have happily pinned as a baseline — caught only by checking the output was
+non-empty before trusting it.
+
+That is the **ninth** null-answer in this project and the third this session. The pattern is stable enough to
+state as a rule: *after adding a case, revert the fix and confirm the case fails.* A case that has never failed
+has never been shown to test anything.
