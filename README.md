@@ -186,6 +186,7 @@ quietly omitting it.
 | `--query brief` | the one-call structural bundle |
 | `--query writers` | who writes the state this reads |
 | `--locate <name>` | where does this name live? Prints **all** definitions — it resolves an address, it does not pick your center |
+| `--locate-intent "…" [--scope <dir>]` | you have a task, not a name: ranked candidate anchors for a phrase. Deterministic and offline (lexical overlap, then fan-in) — it ranks addresses, it does not pick your center |
 | `--query ask --ask "…"` | natural-language routing to the shapes above (needs a `claude` CLI) |
 
 Render views apply to any of them: `--format llm-context`, `--format waves`, `--format scenarios` (Mermaid).

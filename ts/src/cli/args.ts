@@ -14,6 +14,10 @@ export interface Args {
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number; centers?: number;
   emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
+  // `--locate-intent "<phrase>" [--scope <dir>[,<dir>…]]` — the intent half of anchoring. `--locate <name>`
+  // answers "where does this NAME live"; an agent starting from a prose task has no name yet, which is the
+  // gap that pushed it into the center-first LLM judges. Same contract as --locate: candidates out, no pick.
+  locateIntent?: string; scope?: string;
   growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
   concern?: boolean;   // --concern: CENTER-anchor a plural "how is X managed?" question — detect the shared mechanism + re-grow from it
   center?: string;     // --center <file>[#<symbol>][,<file>[#<symbol>]…]: the universal node address (supersedes --anchor-file/--symbol). file-only = module anchor; comma-separated = multi-center concern star
@@ -131,6 +135,8 @@ export function parseArgs(argv: string[]): Args {
       case "--ask": a.ask = next(); break;
       // --locate <name>: where does a name I ALREADY chose live? Address lookup, not center selection.
       case "--locate": a.locate = next(); break;   // natural-language question → LLM routes to the right shape
+      case "--locate-intent": a.locateIntent = next(); break;   // intent phrase → RANKED CANDIDATE DEFS, deterministic, no pick (see locate.ts)
+      case "--scope": a.scope = next(); break;   // --locate-intent: restrict to these directories (comma-separated). The agent supplies the domain scope; the engine does not guess it.
       case "--review-impact": a.reviewImpact = true; break;   // diff: annotate seams with codebase impact + cross-stack coupling
       case "--triage": a.triage = true; break;   // review-impact: LLM triage of the `unknown` relevance residual
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint

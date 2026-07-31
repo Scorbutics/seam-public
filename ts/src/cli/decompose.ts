@@ -964,6 +964,7 @@ async function main(argv: string[]): Promise<number> {
   // --locate is answered BEFORE mode dispatch: it is an address lookup, needs no anchor, and its whole point is
   // to be the cheap FIRST call that produces the `--center` for the second one.
   if (a.locate) { const { runLocate } = await import("./locate.js"); return runLocate(a); }
+  if (a.locateIntent) { const { runLocateIntent } = await import("./locate.js"); return runLocateIntent(a); }
   if (a.scan || a.graph || a.expandGraph || a.growFrom || a.query || a.ask) return runCodebase(a);
   reset_usage();
   let hunks: Hunk[];
