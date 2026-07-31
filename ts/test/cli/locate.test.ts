@@ -14,7 +14,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { loadAddon } from "../../src/codebase/rust_core.js";
-import { rankByIntent } from "../../src/cli/locate.js";
 
 let REPO: string;
 const w = (rel: string, t: string) => { mkdirSync(join(REPO, dirname(rel)), { recursive: true }); writeFileSync(join(REPO, rel), t); };
@@ -65,54 +64,5 @@ describe("--locate resolves addresses without forming an opinion", () => {
 
   test("an unknown name returns nothing rather than a nearest guess", () => {
     expect(locate("definitelyNotHere")).toEqual([]);
-  });
-});
-
-// `--locate-intent` — the INTENT half. The line THIS block defends: the 25-row cap must never fall before the
-// phrase has had its say.
-//
-// THE DEFECT IT WAS WRITTEN AGAINST (measured on keycloak, 2026-07-31). The core ranks SCOPED candidates
-// "type-first then fan-in" with no intent scoring, which across a directory of same-shaped classes degenerates to
-// ALPHABETICAL. `--locate-intent "admin UI reads and updates a realm" --scope .../resources/admin` returned
-// Admin*/Attack*/Authentication*/Client*/Component* — 25 rows, ZERO containing "Realm", with
-// `RealmAdminResource` (the class the phrase names, and the anchor the benchmark agent actually used) cut off
-// below the fold. An answer list that excludes the answer is the null-answer trap wearing a new coat: it looks
-// like a working command and is worse than no command.
-//
-// The fixture is built so the UNRANKED order is the WRONG order — the on-intent class sorts LAST alphabetically
-// and has the LOWEST fan-in, so it can only reach the top if the phrase is what lifted it.
-describe("--locate-intent ranks by the phrase before it truncates", () => {
-  const rows = () => [
-    { file: "src/admin/AdminAuth.java", symbol: "AdminAuth", kind: "class", fanIn: 9 },
-    { file: "src/admin/ClientsResource.java", symbol: "ClientsResource", kind: "class", fanIn: 7 },
-    { file: "src/admin/ComponentResource.java", symbol: "ComponentResource", kind: "class", fanIn: 5 },
-    { file: "src/admin/RealmAdminResource.java", symbol: "RealmAdminResource", kind: "class", fanIn: 0 },
-  ];
-
-  test("the on-intent candidate outranks alphabetically-earlier, higher-fan-in ones", () => {
-    const r = rankByIntent(rows(), "admin UI reads and updates a realm");
-    // matches BOTH "admin" and "realm"; every other row matches at most "admin"
-    expect(r[0].symbol).toBe("RealmAdminResource");
-  });
-
-  test("fan-in breaks ties only AFTER overlap, never before", () => {
-    const r = rankByIntent(rows(), "admin").map((x) => x.symbol);
-    // Overlap is scored on the SYMBOL + FILE BASENAME, not the directory path — so a phrase of just "admin"
-    // matches AdminAuth and RealmAdminResource (1 each) and NOT Clients/Component (0), even though all four
-    // live under `src/admin/`. Among the two that tie, fan-in decides: 9 beats 0. The zero-overlap pair then
-    // follows in fan-in order. This pins BOTH halves of the comparator, so reordering them fails here.
-    expect(r).toEqual(["AdminAuth", "RealmAdminResource", "ClientsResource", "ComponentResource"]);
-  });
-
-  test("the order is deterministic — the same phrase yields the same list", () => {
-    const a = rankByIntent(rows(), "realm admin").map((x) => x.symbol);
-    const b = rankByIntent(rows(), "realm admin").map((x) => x.symbol);
-    expect(a).toEqual(b);
-  });
-
-  test("a phrase naming nothing leaves a stable, non-empty list rather than dropping rows", () => {
-    const r = rankByIntent(rows(), "quantum tunnelling");
-    expect(r.length).toBe(4);            // ranking NEVER filters — that is the caller's job
-    expect(r[0].symbol).toBe("AdminAuth");   // degrades to fan-in order, deterministically
   });
 });

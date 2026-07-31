@@ -1,0 +1,53 @@
+{
+  "trials": 1,
+  "rows": [
+    {
+      "case": "private-app-cn-consumers",
+      "arm": "locate",
+      "rank": 0,
+      "n": 23,
+      "secs": 0.166,
+      "picked": "components/social-media-selector.tsx"
+    },
+    {
+      "case": "private-app-cn-consumers",
+      "arm": "grep",
+      "rank": 81,
+      "n": 193,
+      "secs": 0.119,
+      "picked": "app/dashboard/actions/_components/MissionDecisionControl.tsx"
+    },
+    {
+      "case": "private-app-cn-consumers",
+      "arm": "judges",
+      "rank": 8,
+      "n": 129,
+      "secs": 36.024,
+      "picked": "BadgeProps, ButtonProps, DatePickerProps, ErrorStateProps"
+    },
+    {
+      "case": "grep-favourable-unique-symbol",
+      "arm": "locate",
+      "rank": 2,
+      "n": 2,
+      "secs": 0.161,
+      "picked": "lib/repositories/reports.ts"
+    },
+    {
+      "case": "grep-favourable-unique-symbol",
+      "arm": "grep",
+      "rank": 3,
+      "n": 3,
+      "secs": 0.026,
+      "picked": "lib/repositories/reports.ts"
+    },
+    {
+      "case": "grep-favourable-unique-symbol",
+      "arm": "judges",
+      "rank": 0,
+      "n": 114,
+      "secs": 63.518,
+      "picked": "ReportCollector, ReportGenerator"
+    }
+  ]
+}

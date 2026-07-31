@@ -54,12 +54,11 @@ run grow        --repo "$R" --scan --auto --intent "how is a payment persisted" 
 run concern     --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --concern --data-coupling floor --format concern
 run growfrom    --repo "$R" --scan --auto --intent "how is a payment persisted" --grow-from "$A#$S" --data-coupling floor
 run diff        --repo "$R" --file ../sample.patch
-# ANCHORING — both halves, neither of which this gate covered. `--locate <name>` (address for a known name) and
-# `--locate-intent "<phrase>"` (ranked candidates when you have a task and no name) are the two commands an agent
-# reaches for BEFORE any shape, so a silent regression in either poisons every query downstream. The intent case
-# is pinned WITHOUT --scope on purpose: unscoped is where the lexical ranking is weakest and most likely to drift.
+# `--locate <name>` — the address lookup an agent runs BEFORE any shape, and which this gate did not cover at
+# all. A silent regression here poisons every query downstream, because the caller anchors on what it returns.
+# (Its intent-phrase sibling was tried and DELETED — see bench/anchor-select/README.md: lexical matching cannot
+# be the basis of a structural command.)
 run locate      --repo "$R" --locate persistPayment
-run locateintent --repo "$R" --locate-intent "how is a payment persisted"
 # `--format agent` — THE FORMAT THIS GATE DID NOT COVER AT ALL. Its own header calls it "the region to read
 # instead of a grep loop", the README calls it the primary agent surface, and there was not one case for it: a
 # change that added source snippets to every region/entry/sink line came back byte-identical here, because the
