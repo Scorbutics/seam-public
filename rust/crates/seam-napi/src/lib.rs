@@ -893,6 +893,9 @@ pub fn exported_members(path: String, text: String, lang: String) -> Vec<UnitDto
 pub struct ContractConsumerDto {
     pub file: String,
     pub symbol: String,
+    /// The usage site, so the render can cite `file:line` and attach a snippet. `None` only where no location
+    /// was grounded — the render then falls back to the bare path rather than inventing a line.
+    pub line: Option<u32>,
 }
 
 /// Wire form of a `seam_shapes::Observed` — the call-site half of a symbol's contract. `arity` is a flat
@@ -954,7 +957,7 @@ impl From<seam_shapes::ModuleContract> for ModuleContractDto {
                 .map(|p| ProvidedSymbolDto {
                     symbol: p.symbol,
                     kind: p.kind,
-                    consumers: p.consumers.into_iter().map(|x| ContractConsumerDto { file: x.file, symbol: x.symbol }).collect(),
+                    consumers: p.consumers.into_iter().map(|x| ContractConsumerDto { file: x.file, symbol: x.symbol, line: x.line.map(|l| l as u32) }).collect(),
                     consumer_count: p.consumer_count as u32,
                     signature: p.signature,
                     observed: ObservedDto {

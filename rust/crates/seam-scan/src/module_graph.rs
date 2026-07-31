@@ -12,7 +12,7 @@ use seam_fs::stem;
 use seam_lang::ast::{self};
 use seam_lang::{provider_for, Ctx};
 use seam_resolve::Workspace;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph> {
     build_module_graph_opts(repo, anchor_file, false)
@@ -51,9 +51,21 @@ pub fn build_module_graph_opts(repo: &str, anchor_file: &str, data_coupling: boo
     for (cfile, used) in ws.scan_module_consumers(anchor_file, &member_names) {
         counter += 1;
         let (mut sym, mut kind, mut rng) = (stem(&cfile), "module".to_string(), (0usize, 0usize));
+        // PER-MEMBER USE SITE (0-based), so each edge can cite WHERE the member is used rather than only which
+        // file uses it. This was computed and thrown away: the first usage line placed the consumer NODE and
+        // then every edge was built with `line: None`. Downstream that made `--query contract` print 78
+        // consumers as bare paths, and a citation with no line cannot carry a snippet — so the shape that
+        // answers "how is this actually called" handed an agent pointers it had to dereference by opening the
+        // files. See bench/grep-vs-seam/verification-tax.ts.
+        let mut use_line: HashMap<String, usize> = HashMap::new();
         if let Some((ctext, clang)) = read(repo, &cfile) {
             if let Some(cctx) = Ctx::parse(&ctext, &clang) {
                 let units = ast::named_units(&cctx);
+                for (member, local) in used.iter() {
+                    if let Some(&ln) = ast::usage_lines(&cctx, &units, local).first() {
+                        use_line.insert(member.clone(), ln);
+                    }
+                }
                 // the first used local that has a usage line places the consumer node
                 let line = used.iter().find_map(|(_, local)| ast::usage_lines(&cctx, &units, local).first().copied());
                 if let Some(u) = line.and_then(|ln| ast::enclosing(&units, ln)) {
@@ -69,7 +81,7 @@ pub fn build_module_graph_opts(repo: &str, anchor_file: &str, data_coupling: boo
         let mut member_used: Vec<&String> = used.iter().map(|(m, _)| m).collect();
         member_used.sort();
         for mname in member_used {
-            edges.push(GraphEdge { from: cid.clone(), to: mname.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None, ..Default::default() });
+            edges.push(GraphEdge { from: cid.clone(), to: mname.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: use_line.get(mname).copied(), ..Default::default() });
         }
     }
 

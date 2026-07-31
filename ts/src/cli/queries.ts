@@ -497,7 +497,7 @@ export async function runContract(a: Args): Promise<number> {
   catch (e) { err(`contract mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
-  if (a.format === "llm-context") process.stdout.write(renderContract(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderContract(model, await snippetReaderOf(a)) + "\n");
   else if (c.noStructure)
     process.stdout.write(`${basename(c.module)}: no exported members — no contract to describe.\n`);
   else

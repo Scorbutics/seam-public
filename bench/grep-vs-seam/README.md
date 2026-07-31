@@ -339,3 +339,66 @@ which is precisely why the engine surfaces those as SUGGESTED blindspots. Measur
 a hand-built fixture with known cross-stack pairs and a deliberately floor-blind carrier — not a real repo,
 because on a real repo we cannot enumerate the truth. Until that exists, no claim about the learned layer's
 accuracy is backed by evidence.
+
+## The verification tax, measured (2026-07-31)
+
+Every run above ends the same way: Seam answers, the agent uses the answer, and then the agent checks the code
+anyway. Run 2's arm said so in its own words — the call-site histogram was "reproduced exactly by an independent
+string-aware scan". That was read as grep-trained distrust, and the conclusion drawn from it was that richer
+output cannot help. **That conclusion was wrong**, and `verification-tax.ts` is what showed it.
+
+`bun bench/grep-vs-seam/verification-tax.ts <case-id>` replays the stored trace's seam invocations (the engine is
+offline and deterministic, so what the agent SAW is recoverable), then bins every later shell command:
+
+| bin | meaning | cure |
+|---|---|---|
+| **CONTENT** | Seam cited the file, shipped no code for it | the renderer |
+| **RECALL** | Seam never cited the file | the engine |
+| **TRUST** | Seam cited it AND showed it, agent looked anyway | neither |
+
+| case | CONTENT | RECALL | TRUST | tax / post-answer commands |
+|---|---|---|---|---|
+| private-app, single-hop | 2 (14%) | 2 (14%) | **10 (71%)** | 14 / 49 |
+| cal.com, multi-hop | **20 (71%)** | 7 (25%) | 1 (4%) | 28 / 43 |
+| keycloak, cross-language | 7 (23%) | **21 (70%)** | 2 (7%) | 30 / 41 |
+
+**TRUST dominates only the easy case.** Aggregated it is 13 of 72 taxed commands (18%). On the two hard cases the
+cost is CONTENT and RECALL — things a tool can fix. The single-hop case is where the answer is a flat set the
+agent can cheaply re-derive with `rg`, so of course it re-derives it; that is the case least worth optimising.
+
+### What the CONTENT bin actually was
+
+Not a snippet-window problem. `--query contract` cited its consumers as bare paths — `← postHandler (…/_post.ts)`
+— and `render/snippets.ts` yields nothing for a citation with no line. Upstream, `build_module_graph` COMPUTED
+each use site and then built every edge with `line: None`. So the shape that answers "how is this actually
+called" handed over 78 pointers with nothing to dereference. cal.com: **416 locations cited, source text shown
+for 4.**
+
+Fixed: the edge carries its per-member use line, the contract cites `file:line`, and the snippet rides the same
+citation. On the private-app anchor the contract shape went from 0 citations carrying code to 25 of 78 (the budget cap,
+which the render now declares — and declares as LIST ORDER, not a relevance ranking, because it is not one).
+
+### The bug the fix shipped with, caught before it landed
+
+The first cut emitted a line for every consumer and the render grew snippets — and they pointed at the WRONG
+CODE. Internal lines are 0-based (`to1`, project_set.rs); the value was passed through raw, so a real `cn(…)`
+call site rendered `*/`, the comment terminator one line above the consuming function. **A snippet pointing at
+the wrong code is worse than no snippet**, because a bare path at least tells the reader to go look.
+
+A test asserting `line > 0` passes on that. `ts/test/codebase/contract_consumer_line.test.ts` asserts the TEXT at
+the cited line instead, and was falsified by reintroducing the off-by-one: 3 of its 4 cases fail. That is the
+seventh time in this project a check would have passed without the thing it checks being true.
+
+### What is NOT fixed, named rather than quietly dropped
+
+- **RECALL was 70% of the keycloak tax** and nothing here addresses it. `bench/recall/` is the harness that
+  measures it; this fix does not move that number and should not be quoted as if it did.
+- **Snippet budget is not ranked.** 25 of 78 get code, chosen alphabetically. Ranking needs a relevance signal
+  that does not currently exist, and inventing one would be a plausible fix of the kind this project has already
+  shipped three of.
+- **The tax has not been re-measured end to end.** These bins come from the STORED run 1-3 traces. Whether the
+  fix reduces a live agent's post-answer commands requires a run 4, and predicting it here would be the same
+  mistake run 2 made when it predicted the contract enrichment would cut grep fallback (it did not).
+
+`snippet-coverage.ts` reports, per shape, how many cited locations carry code — the number a renderer change has
+to move, and a gate against a shape quietly going back to bare pointers.

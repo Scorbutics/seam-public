@@ -62,8 +62,9 @@ function crossStackTruncationLines(truncs: any[] | undefined): string[] {
 /// inconsistency into a documented budget the reader can override.
 function snippetCapLines(sr?: SnippetReader): string[] {
   return sr && snippetsTruncated(sr)
-    ? ["", `(source text shown for the first ${MAX_SNIPPET_CITATIONS} citations only — the budget cap.`
-      + ` Re-run with \`--snippets\` on a narrower anchor, or \`--no-snippets\` to drop it entirely.)`]
+    ? ["", `(source text shown for the first ${MAX_SNIPPET_CITATIONS} citations only — the budget cap, applied in`
+      + ` LIST ORDER, which is not a relevance ranking. The remaining entries are resolved just as firmly; they`
+      + ` simply carry no code. Re-run with \`--snippets\` on a narrower anchor, or \`--no-snippets\` to drop it entirely.)`]
     : [];
 }
 
@@ -292,7 +293,7 @@ export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
   if (model.consumers) out.push("─".repeat(4) + " CONSUMERS (who calls it, directly) " + "─".repeat(4), renderConsumerSet(model.consumers, sr), "");
   out.push("─".repeat(4) + " IMPACT (what breaks if you change it — TRANSITIVE, not the direct callers above) " + "─".repeat(4), renderImpact(im, sr), "");
   out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep, sr), "");
-  out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct));
+  out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct, sr));
   return out.join("\n");
 }
 
@@ -432,7 +433,7 @@ export function renderNeighborhood(model: any): string {
 // CONTRACT projection — a module's boundary: the INBOUND cut (used exports + who consumes them), dead
 // public API (unused exports), and the OUTBOUND cut (resolved external imports), with fan-in/out. See
 // grow/contract.ts.
-export function renderContract(model: any): string {
+export function renderContract(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "contract") return "(not a contract model)";
   const out: string[] = [];
   // UNIT-NAMED counts — the module graph materialises ONE consumer node per consuming FILE, so every count in
@@ -486,8 +487,22 @@ export function renderContract(model: any): string {
         // worth saying, because "8 consumers" otherwise reads as "8 callers".
         out.push("    observed: no call site — imported but never invoked (a type-only import, or re-exported)");
       }
-      for (const c of p.consumers) out.push(`    ← ${c.symbol} (${c.file})`);
+      // CITE THE LINE, AND SHOW IT. `← postHandler (…/_post.ts)` is a pointer with nothing to dereference: the
+      // snippet reader yields nothing without a line, so the shape that answers "how is this actually called"
+      // used to hand over 78 bare paths and let the agent open all 78 files. Measured, not assumed —
+      // `bench/grep-vs-seam/verification-tax.ts` bins the post-answer commands of every stored benchmark run,
+      // and re-reading files Seam had ALREADY cited was the largest bin on two of the three cases (cal.com:
+      // 416 locations cited, source text shown for 4). `c.line` is absent only where nothing was grounded, and
+      // then the bare path is still printed rather than a fabricated `:0`.
+      for (const c of p.consumers) out.push(`    ← ${c.symbol} (${c.file}${c.line ? `:${c.line}` : ""})` + snip(sr, c.file, c.line, "        "));
     }
+    // DECLARE THE CAP, and declare the ORDER it applied in. On a real anchor this shape cites 78 consumers and
+    // the snippet budget covers 25 of them, so 53 entries carry no source text — and with nothing saying why,
+    // that reads as "Seam could not resolve those" rather than "Seam chose not to print them". The order is
+    // stated too, because it is NOT a relevance ranking: consumers are sorted by path, so the 25 that get code
+    // are the alphabetically-first, not the most important. Saying so is the difference between a budget the
+    // reader can work around and an inconsistency it has to investigate.
+    out.push(...snippetCapLines(sr));
     out.push("");
   }
   if ((model.unusedExports ?? []).length) {

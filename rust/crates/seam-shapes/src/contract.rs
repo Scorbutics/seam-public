@@ -15,6 +15,17 @@ use std::collections::{HashMap, HashSet};
 pub struct Consumer {
     pub file: String,
     pub symbol: String,
+    /// The USAGE SITE line, so the render can cite `file:line` and carry the source text with it.
+    ///
+    /// Without this the contract shape emitted 78 consumers as bare paths — `← postHandler (…/_post.ts)` — and
+    /// a citation with no line CANNOT carry a snippet (render/snippets.ts returns [] for a falsy line). So the
+    /// shape that answers "who consumes this and how is it called" handed an agent 78 pointers and zero
+    /// dereferences, and it went and opened the files. `bench/grep-vs-seam/verification-tax.ts` binned that as
+    /// the dominant cost on two of three benchmark cases: cal.com cited 416 locations and showed code for 4.
+    ///
+    /// Prefer the EDGE's line (where the use actually is) over the consuming symbol's declaration line — a
+    /// 400-line handler's first line says nothing about how it calls this export.
+    pub line: Option<usize>,
 }
 
 /// What the call sites of one export actually look like — the OBSERVED half of its contract.
@@ -94,7 +105,16 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
             if normpath(&from.file) == mod_norm {
                 continue;
             }
-            consumers_of.entry(e.to.clone()).or_default().push(Consumer { file: from.file.clone(), symbol: from.symbol.clone() });
+            // 0-BASED IN, 1-BASED OUT — `to1` (project_set.rs) is the convention every citation in this engine
+            // obeys, and skipping it is not a cosmetic slip: the first cut of this passed the raw value through
+            // and the snippet for `PartnerInlineProgress.tsx` rendered `*/`, the comment terminator one line
+            // above the declaration. A snippet pointing at the wrong code is worse than no snippet, because a
+            // bare path at least tells the reader to go look.
+            //
+            // The EDGE carries the use site; `from.range.0` is only where the consuming symbol is DECLARED, so
+            // it is a fallback for the rare unparsed consumer, never the preference.
+            let line = e.line.or(Some(from.range.0)).map(|l| l + 1);
+            consumers_of.entry(e.to.clone()).or_default().push(Consumer { file: from.file.clone(), symbol: from.symbol.clone(), line });
         }
         for m in &members {
             match consumers_of.remove(&m.id) {
@@ -174,18 +194,21 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
         // order-free: JS iterates the Set in insertion order, but every consumer list is SORTED below
         let importers: Vec<String> = by_target.remove(&mod_norm).map(|s| s.into_iter().collect()).unwrap_or_default();
         // importer file → the names it imports FROM this module (only refs that RESOLVE back here)
-        let mut imports_from_module: HashMap<&str, HashSet<String>> = HashMap::new();
+        // name → the IMPORT LINE that binds it. A type export has no call site, so the import statement is the
+        // only real location there is — and it is still a location, which is what lets the render cite
+        // `file:line` and carry the source text instead of emitting a bare path nobody can dereference.
+        let mut imports_from_module: HashMap<&str, HashMap<String, usize>> = HashMap::new();
         for imp in &importers {
             let Some(provider) = provider_for(imp) else { continue };
             let Ok(itext) = std::fs::read(format!("{repo}/{imp}")).map(|b| String::from_utf8_lossy(&b).into_owned()) else { continue };
-            let mut names: HashSet<String> = HashSet::new();
+            let mut names: HashMap<String, usize> = HashMap::new();
             for r in provider.imports(&itext) {
                 if !type_names.contains(r.name.as_str()) {
                     continue; // only resolve refs that could be one of our type exports
                 }
                 let Some(source) = &r.source else { continue };
                 if ws.resolve(imp, source).is_some_and(|t| normpath(&t) == mod_norm) {
-                    names.insert(r.name.clone());
+                    names.insert(r.name.clone(), r.line as usize + 1); // ImportRef.line is 0-BASED; citations are 1-based
                 }
             }
             if !names.is_empty() {
@@ -195,8 +218,12 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
         for (kind, name) in &type_exports {
             let mut cons: Vec<Consumer> = importers
                 .iter()
-                .filter(|imp| imports_from_module.get(imp.as_str()).is_some_and(|n| n.contains(name)))
-                .map(|imp| Consumer { file: imp.clone(), symbol: name.clone() })
+                .filter(|imp| imports_from_module.get(imp.as_str()).is_some_and(|n| n.contains_key(name)))
+                .map(|imp| Consumer {
+                    file: imp.clone(),
+                    symbol: name.clone(),
+                    line: imports_from_module.get(imp.as_str()).and_then(|n| n.get(name)).copied(),
+                })
                 .collect();
             if cons.is_empty() {
                 unused_exports.push(name.clone());
