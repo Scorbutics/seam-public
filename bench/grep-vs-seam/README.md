@@ -486,3 +486,34 @@ It reports THREE outcomes, not two, and the distinction is load-bearing: "errore
 and "cited without showing". An ad-hoc version of this sweep passed a module anchor to a symbol shape, the CLI
 aborted correctly, the harness read the empty output as zero citations, and a healthy shape looked like a defect.
 Only the third state is the bug.
+
+## Run 4 (2026-07-31) — PREDICTION, recorded before the arms were launched
+
+Run 2 predicted the contract enrichment would cut grep fallback. It did not, and that failure was worth more
+than a confirmation would have been — so the prediction goes in FIRST, in falsifiable form, before any result.
+
+What changed since run 3: three CONTENT-gap fixes (contract consumers cite `file:line` and carry snippets;
+impact's `## Surface` gets a reserved snippet budget; `--format agent` snippets every region/entry/sink line),
+plus the coverage gate. Nothing touched RECALL, nothing made the engine faster.
+
+`verification-tax.ts` says the tax splits differently per case, so the prediction is DIRECTIONAL and per-case:
+
+- **cal.com (CONTENT was 71% of its tax)** — post-answer file reads of already-cited files should FALL. This is
+  the case the fixes were built for. If it does not move here, the CONTENT theory is wrong.
+- **private-app (TRUST was 71%, CONTENT 14%)** — should NOT improve materially. There is almost no content gap to
+  close, and run 2 showed the agent re-derives a flat set even when handed it. **Predicting no improvement is
+  the point**: a fix that "improves" everything equally is measuring run-to-run noise, not a mechanism.
+
+Wall clock and token cost are NOT predicted to improve. Nothing here made the engine faster, and run 3 showed
+tool-call count is not the axis this kind of change moves.
+
+### A bias control that was broken AGAIN, found while preparing this run
+
+`seam --help` on the installed shim failed with `unknown flag ignored: --help` / `No diff source given` — run
+1's exact failure, in the SHIPPED tool this time. `~/.seam` sat at commit `a5084fa`, predating `--help`, **with
+no native core at all**, so every codebase query would have died on a missing `seam_core.node`. The check the
+"Bias controls" section demands before every run is the only reason this was caught.
+
+Re-running `install.sh` was NOT the fix here: it installs from `main`, and the four commits under test are
+unpushed, so run 4 would have measured the old engine while appearing to test the new one. The shim was pointed
+at the working checkout for the duration of the run instead, and restored afterwards.
