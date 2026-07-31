@@ -81,3 +81,39 @@ worth testing:
 which the floor arm cannot do at all, so they are new candidates rather than survivors of a filter. Whether they
 are wrong or merely not-co-changed is exactly the question `bench/coupling`'s decoys answer for a hand-built
 fixture and nothing answers for a real repo.
+
+### FOUND: it is not a cap, it is the ROLE FILTER (2026-07-31)
+
+Three hypotheses were tested and eliminated before the real one:
+
+| hypothesis | verdict |
+|---|---|
+| `READER_CAP` truncating counterparts | **out** — raising 6 → 100 changed nothing; `projectCoupling` never uses the bridge |
+| `is_bare_wildcard_route` dropping all-wildcard keys | **out** — 0 of the 9 lost hits involve a bare-wildcard key |
+| test-file exclusion | **minor** — explains 2 of 9, and 0 of the 46 additions |
+
+**The answer: `other_side` pairs only OPPOSITE roles. All 9 of 9 lost hits share every key at the SAME role.**
+
+`side()` returns producers when the anchor consumes, and consumers when it produces — a reader↔writer model.
+`CONFIG_KEY` is the sole exception (`let both = kind == CONFIG_KEY`), unioning both sides so reader⇄reader
+resolves. For `db-table` and `http-route` it does not, so **two files that both READ `db-table auth`, or both
+call `/dashboard/directory`, are never counterparts** — while the floor arm pairs them, because it only asks
+whether they share a key.
+
+That also explains why the losses split evenly across db-table (5) and http-route (4) and why no route-specific
+theory fit: the rule is kind-independent.
+
+**Whether this is a defect is a genuine design question, not an oversight.** The reader⇄writer model is what
+makes a coupling *directional* and is what `←`/`→` in the render mean; two readers of a table are coupled to the
+same state but neither changes what the other sees. The counter-argument is the measurement: engineers DO change
+them together, which is the entire premise of judging coupling by co-change, and the `CONFIG_KEY` exception
+already concedes the point for one kind.
+
+**The experiment worth running before changing anything:** union both sides for `db-table` as
+`CONFIG_KEY` already does, then re-run this harness AND `bench/coupling`'s decoys. `same-file-write-and-read`
+and `config-key-read-in-one-place` exist precisely because unioning sides is how a file becomes its own
+counterpart. Recall here should rise toward the floor; if the decoys break, the directional model is load-bearing
+and the shape is right to be narrower than the floor.
+
+The 46 additions remain separately unexplained — they are new candidates from fuzzy matching, not survivors of
+any filter above.
