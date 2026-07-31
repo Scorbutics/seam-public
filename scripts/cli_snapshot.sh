@@ -59,6 +59,12 @@ run diff        --repo "$R" --file ../sample.patch
 # (Its intent-phrase sibling was tried and DELETED — see bench/anchor-select/README.md: lexical matching cannot
 # be the basis of a structural command.)
 run locate      --repo "$R" --locate persistPayment
+# `--format json` — THE MACHINE-READABLE SURFACE, which was accepted and silently ignored by all 11 query
+# shapes until 2026-07-31 (consumers returned the 32-byte human summary). Found by watching a benchmark agent
+# burn 10 of its 16 tool calls re-piping our human render, not by reading code. Gated on booking-app because
+# route-repo's anchor has zero consumers, so a case there would pin an EMPTY json object and look covered.
+run json_consumers --repo test/fixtures/booking-app --scan --query consumers \
+  --anchor-file ejb/BookingsBean.java --symbol BookingsBean --data-coupling floor --format json
 # `--format agent` — THE FORMAT THIS GATE DID NOT COVER AT ALL. Its own header calls it "the region to read
 # instead of a grep loop", the README calls it the primary agent surface, and there was not one case for it: a
 # change that added source snippets to every region/entry/sink line came back byte-identical here, because the

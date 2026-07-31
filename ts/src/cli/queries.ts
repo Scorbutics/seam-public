@@ -113,6 +113,26 @@ export const rustSetToModel = (r: any): any => ({
 // Ask query — a natural-language question routed (by the LLM) to the right shape, then run. The honest
 // front-end: it answers structural questions and routes lexical/semantic ones to grep/RAG. Emits whatever
 // model the chosen shape produces (with the routing decision attached).
+
+// `--format json` — THE MACHINE-READABLE ANSWER, honoured by every query shape.
+//
+// It was accepted and silently ignored: `--query consumers … --format json` printed the one-line human summary
+// ("Consumers of 'cn': 248 resolved", 32 bytes) because only `llm-context` rendered the model and every other
+// format fell through to the summary. All ELEVEN query shapes had it.
+//
+// MEASURED COST (bench/grep-vs-seam, private-app-ab, 2026-07-31). The Seam-only agent used 16 tool calls against the
+// grep agent's 4. Ten of those sixteen re-ran the IDENTICAL query and re-piped it through a different
+// grep/sed/awk, trying to reshape our human render into a list — because it had asked for JSON first, got 32
+// bytes of prose, and correctly concluded the flag was useless. The 4x tool-call gap was almost entirely this.
+//
+// An agent is the primary caller of this tool. Handing it a format flag that lies is worse than not offering
+// one: it spends the budget discovering the lie, and then hand-parses a layout we are free to change.
+export function emitJson(a: Args, model: unknown): boolean {
+  if (a.format !== "json") return false;
+  process.stdout.write(JSON.stringify(stamp(model as any)) + "\n");
+  return true;
+}
+
 export async function runAsk(a: Args): Promise<number> {
   const { ask } = await import("./route.js");
   emit(`Routing: "${a.ask}"…`);
@@ -123,7 +143,8 @@ export async function runAsk(a: Args): Promise<number> {
   if (res.routedAway || !res.result) { process.stdout.write((res.guidance ?? "") + "\n"); return 0; }
 
   const model: any = res.result.mode ? res.result : { mode: "codebase", ...res.result };
-  if (a.format === "llm-context") {
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") {
     const lc = await import("../codebase/llm_context.js");
     const r = res.result.shape === "set" ? lc.renderConsumerSet
       : res.result.shape === "deps" ? lc.renderDependencySet
@@ -211,7 +232,8 @@ export async function runConsumerSet(a: Args): Promise<number> {
   const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
-  if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model, await snippetReaderOf(a)) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model, await snippetReaderOf(a)) + "\n");
   else {
     const resolved = set.members.filter((m: any) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
@@ -280,7 +302,8 @@ export async function runDependencySet(a: Args): Promise<number> {
   const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
-  if (a.format === "llm-context") process.stdout.write(renderDependencySet(model, await snippetReaderOf(a)) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderDependencySet(model, await snippetReaderOf(a)) + "\n");
   else {
     const resolved = set.members.filter((m: any) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
@@ -320,7 +343,8 @@ export async function runWritersSet(a: Args): Promise<number> {
   // so an addon failure is the answer rather than a slower second opinion computed a different way.
   try {
     const model: any = { mode: "codebase", ...rustWritersToModel(rustA7.projectWriters(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
-    if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
+    if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
     else if (model.noStructure && model.reason === "none")
       process.stdout.write(`Writers of what '${model.anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
     else process.stdout.write(`Writers of ${model.tables.map((t: string) => `"${t}"`).join(", ")} (read by ${model.anchor.symbol}): ${model.members.length} write site(s).\n`);
@@ -351,7 +375,8 @@ export async function runCouplingSet(a: Args): Promise<number> {
   // floor counterparts — live in the core, so there is no second implementation to fall through to.
   try {
     const model: any = { mode: "codebase", ...rustCouplingToModel(rustA8.projectCoupling(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
-    if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
+    if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
     else if (model.noStructure && model.reason === "none")
       process.stdout.write(`Coupling of '${model.anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
     else process.stdout.write(`Coupling of '${model.anchor.symbol}': ${model.keys.length} shared key(s), ${model.total} counterpart site(s).\n`);
@@ -387,7 +412,8 @@ export async function runRefactorFacts(a: Args): Promise<number> {
   catch { consumers = null; }   // a bundle missing one section is still worth printing; say nothing rather than die
   const model: any = { mode: "codebase", ...rf, consumers };
 
-  if (a.format === "llm-context") process.stdout.write(renderRefactorFacts(model, await snippetReaderOf(a)) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderRefactorFacts(model, await snippetReaderOf(a)) + "\n");
   else
     process.stdout.write(`Refactor facts for '${rf.anchor.symbol}': impact ${rf.impact.total} across ${rf.impact.fileCount} file(s)`
       + `${rf.impact.gaps.length ? ` (${rf.impact.gaps.length} opaque gap(s))` : ""}, ${rf.dependencies.members.length} dependency(ies), `
@@ -419,7 +445,8 @@ export async function runImpact(a: Args): Promise<number> {
   catch (e) { err(`impact analysis failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...im };
 
-  if (a.format === "llm-context") process.stdout.write(renderImpact(model, await snippetReaderOf(a)) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderImpact(model, await snippetReaderOf(a)) + "\n");
   else if (im.noStructure)
     process.stdout.write(`Impact of '${im.anchor.symbol}': isolated — no resolved consumers (${im.reason})${im.gaps.length ? `, ${im.gaps.length} opaque caller(s) to grep` : ""}.\n`);
   else
@@ -447,7 +474,8 @@ export async function runCompare(a: Args): Promise<number> {
   catch (e) { err(`comparison failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
-  if (a.format === "llm-context") process.stdout.write(renderComparison(model) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderComparison(model) + "\n");
   else if (c.noStructure)
     process.stdout.write(`${c.a.symbol} vs ${c.b.symbol}: neither has resolved dependencies — nothing to compare.\n`);
   else
@@ -479,7 +507,8 @@ export async function runNeighborhood(a: Args): Promise<number> {
   catch (e) { err(`neighborhood mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...n };
 
-  if (a.format === "llm-context") process.stdout.write(renderNeighborhood(model) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderNeighborhood(model) + "\n");
   else if (n.noStructure)
     process.stdout.write(`${n.anchor.symbol}: isolated — no cohesive subsystem (no cross-file edges).\n`);
   else
@@ -506,7 +535,8 @@ export async function runContract(a: Args): Promise<number> {
   catch (e) { err(`contract mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
-  if (a.format === "llm-context") process.stdout.write(renderContract(model, await snippetReaderOf(a)) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderContract(model, await snippetReaderOf(a)) + "\n");
   else if (c.noStructure)
     process.stdout.write(`${basename(c.module)}: no exported members — no contract to describe.\n`);
   else
@@ -537,7 +567,8 @@ export async function runReaches(a: Args): Promise<number> {
   catch (e) { err(`reachability search failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...res };
 
-  if (a.format === "llm-context") process.stdout.write(renderReach(model) + "\n");
+  if (emitJson(a, model)) { /* machine-readable, handled */ }
+  else if (a.format === "llm-context") process.stdout.write(renderReach(model) + "\n");
   else if (res.reachable)
     process.stdout.write(`${res.from.symbol} → ${res.to.symbol}: REACHABLE in ${res.path.length - 1} hop(s) [${res.hops} explored]\n  `
       + res.path.map((s: any) => s.symbol).join(" → ") + "\n");
