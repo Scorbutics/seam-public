@@ -449,30 +449,30 @@ async function runCodebase(a: Args): Promise<number> {
         centerPicked = true;
         process.stderr.write(`[center-first] pinned ${cs.length} center(s): ${cs.map((c) => c.symbol ?? c.file).join(", ")}\n`);
       } else {
-        a.concern = true;
-        // Picking the mechanism from an intent PHRASE is a SEMANTIC mapping → ask the LLM over a lexical recall
-        // net (offline → the deterministic lexical floor). The picked mechanism(s) ARE the anchors; the loop
-        // below grows from them (coupling ON).
-        // Reached only when no --center was pinned, so an intent MUST be here — the branch above requires
-        // one of the two. Narrowed explicitly rather than asserted, so a moved invariant is a message, not
-        // a crash.
-        if (!a.intent) err("--intent is what finds the mechanism. Either give one, or pin it: --center <file>[#symbol]");
-        const intent = a.intent as string;
-        const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
-        const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
-        emit(`Picking the concern's mechanism for "${intent}"…`);
-        const kC = a.centers ?? 4;
-        const _tDet = Date.now();
-        const picked = await detectCentersRepoWide(a.repo, intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
-        addStage("detection", Date.now() - _tDet);
-        if (!picked.length) err(`center-first: no mechanism found for "${intent}" — pass --center <file>#<symbol> (one or a comma-separated list)`);
-        a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
-        anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
-        centerPicked = true;
-        process.stderr.write(`[center-first] ${picked.length} mechanism(s): ${picked.map((c) => c.symbol).join(", ")}\n`);
+        // `--intent` WITHOUT `--center` IS NO LONGER A QUERY. It used to run center-first detection: two LLM
+        // judge passes that chose the anchor for you. That is gone, and the reason is measurement, not taste.
+        //
+        // Measured 2026-07-31 on keycloak, same phrase, same tree, cache cleared each run: the judges took
+        // 18s–97s and returned a DIFFERENT mechanism cluster on roughly 1 run in 3. `centers-v1` cached the
+        // result per (epoch, intent) purely so grows stayed reproducible — i.e. the cache existed to HIDE the
+        // variance by freezing whichever sample landed first, and a stale entry in it made an earlier
+        // measurement in this repo report a historical anchor as if it were current behaviour.
+        //
+        // A 3-sample consensus panel was then built and measured against a 1-sample judge: 2 distinct outcomes
+        // in 3 runs, BOTH arms. Aggregation did not fix it, because the problem is not sampling noise — it is
+        // that a semantic choice was being made INSIDE a tool whose whole claim is a deterministic fact set.
+        //
+        // So the choice goes back to the caller, who is better placed to make it: an agent has the user's real
+        // task, the conversation, and its own prior findings, where this judge saw an intent phrase and a
+        // bounded candidate list. `--intent` still RANKS a grow once you have pinned where to start.
+        err(`--intent needs a --center: it shapes the answer, it does not choose where to look.\n`
+          + `  seam --repo <r> --scan --center <file>[#symbol] --intent ${JSON.stringify(a.intent ?? "…")}\n`
+          + `Don't know the symbol? \`--locate <name>\` prints every definition of a name (it forms no opinion).\n`
+          + `Seam is deterministic on purpose: choosing WHICH symbol answers a prose question is a semantic\n`
+          + `judgement, and it belongs to you, not to a hidden LLM pass inside a structural query.`);
       }
     }
-    if (!a.anchorFile) err("--scan requires --center <file>[#symbol] (or --intent for center-first detection)");
+    if (!a.anchorFile) err("--scan requires --center <file>[#symbol]");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
     // them, then re-invokes with --attribution).
     if (a.emitCandidates) {

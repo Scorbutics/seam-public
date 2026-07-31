@@ -68,9 +68,12 @@ run locate      --repo "$R" --locate persistPayment
 # snippets used to appear) and one with region/entry sections only (where there were none).
 run agent       --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --data-coupling floor --format agent
 run agent_noflow --repo test/fixtures/crossstack-repo --scan --auto --intent "who reads the orders table" --anchor-file lib/db.ts --symbol supabase --data-coupling floor --format agent
-# CENTER-FIRST concern (no --center): the ONE path that runs the intent-weighted center pick, and therefore
-# the only one that exercises embedScoreDefs. Every other case pins the anchor, which skips it entirely.
-run centerfirst --repo "$R" --scan --auto --concern --intent "how is a payment persisted" --data-coupling floor --format concern
+# `--intent` WITHOUT `--center` IS NOW AN ERROR, and this case pins that. It used to run center-first detection
+# (two LLM judge passes that chose the anchor for you); that was measured on keycloak at 18s-97s with a different
+# answer roughly 1 run in 3, and a 3-sample consensus panel did not improve it. Choosing which symbol answers a
+# prose question is semantic and belongs to the caller. Pinned as a case rather than deleted, because the VALUE
+# of the removal is the error message: it has to keep telling the caller what to pass instead.
+run intent_needs_center --repo "$R" --scan --auto --concern --intent "how is a payment persisted" --data-coupling floor --format concern
 # `set` and `reach` ARE NOT SHAPES. The registered handlers are `consumers` and `reaches` (decompose.ts
 # QUERY_HANDLERS), so `--query set` / `--query reach` matched nothing, fell through to a GROW, and these two
 # cases pinned a grow's output under a shape's name -- byte-identical to each other and to `q_depth1`. The

@@ -72,7 +72,8 @@ KEY FLAGS
                           the symbol I picked live" in ONE call, so you can pass --center instead of hunting for
                           it. It does NOT choose for you: several definitions come back as several rows.
   --center <file>[#<sym>] THE ANCHOR. Pass it — do not make the engine guess. Several: comma-separated.
-  --intent "<question>"   what you are looking for; ranks and tiers the result
+  --intent "<question>"   what you are looking for; ranks and tiers the result. REQUIRES --center: it shapes
+                          the answer, it does not choose where to look (use --locate if you need the address)
   --scan                  codebase mode (implied by --query / --ask)
   --auto                  grow the footprint along the flow to its culmination
   --concern               center-first map for a "how is X handled across the app" question

@@ -59,15 +59,42 @@ are about to rebuild a lexical anchor picker, this paragraph is for you.
 **`--locate <name>` is unaffected** and remains the right primitive: exact-name address resolution is structural,
 it forms no opinion, and it prints every definition rather than picking one.
 
-## What is actually broken, and what to measure next
+## …and then the judges were removed too (same day)
 
-The LLM judge is the right primitive for intent→code. Its defect is **reproducibility, not semantics**: same repo,
-same phrase, a different answer 1 run in 4, and a cache that hides this by freezing whichever sample landed first.
-An engine that answers the same question two ways is not a fact source.
+The conclusion above — "the LLM judge is the right primitive, its defect is reproducibility" — was half right and
+the half that was wrong mattered more.
 
-So the open work is making the judge reproducible — consensus over k samples, a recorded and inspectable
-decision, or an override — measured with this harness, which is arm-agnostic and will score a fixed judge exactly
-as it scored the deleted one.
+A 3-sample consensus panel was built to fix the reproducibility: k independent judge calls in parallel, majority
+kept, the vote reported so a split panel says so. It was then A/B'd against the single-sample judge on keycloak,
+cache cleared every run:
+
+    k=1:  {Realms, AdminRoot}   {Realms, refresh}   {Realms, AdminRoot}
+    k=3:  {Realms, refresh}     {Realms, AdminRoot} {Realms, AdminRoot}
+
+**Two distinct outcomes in three runs, in both arms.** Aggregation moved nothing measurable, and it was reverted
+rather than shipped on the strength of a plausible mechanism.
+
+The reason it could not work: the defect was never sampling noise. It was a **semantic choice made inside a tool
+whose whole claim is a deterministic fact set**. Voting three times is still an LLM picking the center; it just
+costs 3× the tokens to be non-reproducible more expensively.
+
+So `--intent` now REQUIRES `--center`, and the two judge passes, the `centers-v1` cache, `center_judge.ts`,
+`center_repo.ts` and its parity harness are gone. The caller picks the anchor — and the caller is an agent with
+the user's real task, the conversation and its own prior findings, where the judge had an intent phrase and a
+bounded candidate list. `--intent` still ranks and tiers a grow; it no longer chooses where to look.
+
+Still orphaned by that removal, verified as having zero TypeScript callers but NOT yet deleted (a rebuild plus a
+wider gate than this change needed): `seam_grow::center_repo` in Rust, and its two napi entries
+`grow_source_dirs` / `grow_center_candidates`.
+
+## What to measure next
+
+This harness outlives both deletions. It is arm-agnostic: point it at whatever picks anchors next — an agent
+given `--locate` output, a different retrieval, a human — and it scores that the same way it scored these.
+
+The open question it was built for is still open: **does an agent anchor better with Seam's help than without
+it?** Both Seam-side arms are now gone, so today the honest answer is that the agent is on its own, and nobody
+has measured whether that is worse.
 
 ## Guards
 
