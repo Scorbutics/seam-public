@@ -133,6 +133,25 @@ export function emitJson(a: Args, model: unknown): boolean {
   return true;
 }
 
+
+// A FILE ANCHOR ON A SYMBOL-SCOPED SHAPE — say what the file HAS, do not just refuse.
+//
+// Measured 2026-07-31 (bench/grep-vs-seam, cal-ab3): an agent ran `--query dependencies --center <file>` and got
+// "requires a SYMBOL: --center <file>#<symbol>". True, and useless — it does not know the symbols, which is why
+// it passed the file. That cost a full round trip, and the agent then fell back to awk. An error that can
+// enumerate the answer space should enumerate it.
+async function symbolHint(repo: string, file?: string): Promise<string> {
+  if (!file) return "";
+  try {
+    const addon: any = (await import("../codebase/rust_core.js")).loadAddon();
+    const defs: any[] = addon.enumerateDefs(repo, 200, [file], false) ?? [];
+    const names = [...new Set(defs.filter((d) => d.enclosing === "").map((d) => d.name))].filter(Boolean);
+    if (!names.length) return "";
+    return `\n  symbols in ${file}: ${names.slice(0, 12).join(", ")}${names.length > 12 ? `, … (+${names.length - 12})` : ""}`
+      + `\n  (or \`--locate <name>\` to find one across the repo — it prints every definition and picks none)`;
+  } catch { return ""; }
+}
+
 export async function runAsk(a: Args): Promise<number> {
   const { ask } = await import("./route.js");
   emit(`Routing: "${a.ask}"…`);
@@ -206,7 +225,8 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossSt
 export async function runConsumerSet(a: Args): Promise<number> {
   // Name the CURRENT address spelling (`--center <file>#<symbol>`), not the superseded --symbol: a bare
   // `--center <file>` lands here, and pointing at a flag the docs call obsolete leaves the caller stuck.
-  if (!a.symbol) err("--query consumers requires a SYMBOL: --center <file>#<symbol> (the callee whose callers you want)");
+  if (!a.symbol) err("--query consumers requires a SYMBOL: --center <file>#<symbol> (the callee whose callers you want)"
+    + await symbolHint(a.repo, a.anchorFile));
   if (!a.anchorFile) err("--query consumers requires --center <file>#<symbol>");
   const { renderConsumerSet } = await import("../codebase/llm_context.js");
   emit(`Resolving consumers of ${a.symbol}…`);
@@ -259,7 +279,8 @@ export async function runConsumerSet(a: Args): Promise<number> {
 // uses), from a DOWN footprint, rendered as a `shape: "deps"` SET. Same honest `noStructure` (reason
 // `none` = a leaf with no deps). No name-recall — dependencies are the anchor's own resolved out-edges.
 export async function runDependencySet(a: Args): Promise<number> {
-  if (!a.symbol) err("--query dependencies requires a SYMBOL: --center <file>#<symbol> (whose dependencies you want)");
+  if (!a.symbol) err("--query dependencies requires a SYMBOL: --center <file>#<symbol> (whose dependencies you want)"
+    + await symbolHint(a.repo, a.anchorFile));
   if (!a.anchorFile) err("--query dependencies requires --center <file>#<symbol>");
   const { renderDependencySet } = await import("../codebase/llm_context.js");
   emit(`Resolving dependencies of ${a.symbol}…`);

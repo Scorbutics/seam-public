@@ -171,14 +171,28 @@ async function checkAnchorAddressing(a: Args): Promise<void> {
     const flag = ad.flag === "--center" ? `--center "${addr}"` : `${ad.flag} (${addr})`;
     // The DEFAULT-export hint first: it is the single most likely cause, and it names the symbol the caller
     // actually wants. Then the addressable surface, so any other mis-spelling is one read away from fixed.
-    const hint = r.defaultExportLocal === null ? ""
+    // DOTTED `Class.method` FIRST — measured 2026-07-31 (bench/grep-vs-seam, cal-ab3): an agent addressed
+    // `#RegularBookingService.createBooking`, got this error, and spent a round trip recovering. The candidate
+    // list below already CONTAINED `createBooking`; it just never connected the two. `Class.method` is how most
+    // languages and most humans name a method, so it is a predictable miss, and an error that can name the fix
+    // should name it rather than leave the reader to diff two lists.
+    const dotted = ad.symbol.includes(".") ? ad.symbol.split(".").pop()! : "";
+    const dotHint = dotted && r.candidates.includes(dotted)
+      ? `       DID YOU MEAN: --center "${ad.file}#${dotted}"\n`
+        + `       (a method is addressed by its OWN name — '${ad.symbol}' reads as one symbol literally called that)\n`
+      : "";
+    // GUARD THE STRING "undefined", not just null. On a Java fixture this branch printed "that file's DEFAULT
+    // export is the local symbol 'undefined'" and advised `--center "Foo.java#undefined"` — advice that is
+    // wrong twice over (Java has no default exports, and no file declares a symbol called `undefined`).
+    // Following it costs the caller another round trip, which is the exact cost this error is meant to save.
+    const hint = (r.defaultExportLocal === null || !r.defaultExportLocal || r.defaultExportLocal === "undefined") ? ""
       : `       that file's DEFAULT export is the local symbol '${r.defaultExportLocal}' — importers bind a default export under\n`
         + `       a name of their own choosing, so '${ad.symbol}' is THEIR local alias, not a symbol of this file.\n`
         + `       Address it as: --center "${ad.file}#${r.defaultExportLocal}"\n`;
     const cands = r.candidates.length
       ? `       addressable symbols here: ${r.candidates.slice(0, 12).join(", ")}${r.candidates.length > 12 ? `, … (+${r.candidates.length - 12})` : ""}\n`
       : `       that file declares no addressable symbol — anchor the FILE itself (--center "${ad.file}", no #symbol)\n`;
-    err(`${flag}: '${ad.symbol}' is not declared in ${ad.file}\n` + hint + cands
+    err(`${flag}: '${ad.symbol}' is not declared in ${ad.file}\n` + dotHint + hint + cands
       + `       (refusing to answer: an undeclared anchor has no consumers/dependencies BY CONSTRUCTION, which would\n`
       + `        render as a confident "nothing calls this" — a false negative, not a fact about your code)`);
   }
