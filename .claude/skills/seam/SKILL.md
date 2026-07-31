@@ -20,11 +20,13 @@ description: >-
   discriminator: use Seam when the answer's correctness needs RESOLVED EDGES. For a quick one-fact
   lookup grep is still instant (Seam to MAP/VERIFY, grep to DRILL); for "what code is ABOUT X"
   (meaning, not edges) use embeddings/RAG — Seam routes those away honestly rather than faking them.
-  DEFAULT to passing the center you already have: if you've located a candidate symbol (you usually
-  have), give it as `--center file#symbol` (or several, comma-separated, for a multi-mechanism concern) —
+  FIRST CALL on an unfamiliar codebase is `--locate <name>` (symbol, file OR directory name -> every
+  definition, one call, no opinion) — NOT find/ls/grep, which measurably burns 10+ calls hunting. Then
+  give the pick as `--center file#symbol` (or several, comma-separated, for a multi-mechanism concern) —
   Seam skips center detection and traces+decomposes from it (~11s). `--center` is MANDATORY with `--intent`:
   the intent SHAPES the answer, it does not choose where to look. Don't know the symbol? `--locate <name>`
-  prints every definition of a name and picks none. grep to ORIENT, Seam to TRACE.
+  prints every definition of a name and picks none. `--locate` to ORIENT, Seam to TRACE — grep only when
+  `--locate` comes back empty.
   ALSO for INTERNAL PLANNING before implementing: if a change touches a LOGIC/DATA flow (a spine) you
   haven't mapped and understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST
   (orient grep → named-center grow) to plan against a verified spine, not a guess — not just for "how
@@ -90,8 +92,9 @@ It supersedes the old `--anchor-file`/`--symbol` pair — use `--center` everywh
   Choosing which symbol answers a prose question is semantic and belongs to YOU, not to a hidden pass inside
   a deterministic query.
 
-So: grep to ORIENT (find a candidate symbol) → pass it as `--center file#symbol`. Give SEVERAL when the
-question spans a few mechanisms; give NONE when you only have a question, not a symbol.
+So: `--locate` to ORIENT (one call — symbol, file or directory name → every definition) → pass your pick as
+`--center file#symbol`. Give SEVERAL when the question spans a few mechanisms. `--center` is REQUIRED; there is
+no "give none" path — see §C. Reach for grep only after `--locate` comes back empty.
 
 ---
 
@@ -227,14 +230,28 @@ residual pass exists: `center-pick` (no `--center`), `seam-intent` (no `--skelet
 `--auto` **requires `--intent`**. Seed it by naming the CENTER(S) yourself — this is the mandatory first
 step, not an option:
 
-- **You name the center(s) (ALWAYS DO THIS)** — orient FIRST (a quick grep/read for the mechanism symbol
-  behind the intent: the `*Service`/`*Handler`/`*Manager`/class named after the domain noun), then pass
-  `--center file#symbol` (or **several** comma-separated when the concern spans a few mechanisms). Seam grows
-  straight from them: **~11s**, zero center-selection LLM, and you avoid it guessing a ubiquitous/sibling
-  node. You almost always CAN find a candidate in one or two greps — so do that rather than reaching for the
-  fallback below.
-- **There is no fallback, by design.** If you cannot name a candidate, use `--locate <name>` (every definition
-  of a name, no opinion formed) or grep to orient — then pass `--center`. Seam will NOT guess an anchor for you.
+- **STEP 1 — `--locate <name>`. ONE CALL. Do this before anything else.**
+
+      seam --repo <repo> --locate handleNewBooking     # or BookingRepository, or any name in the question
+
+  It takes a SYMBOL name, a FILE name, or a DIRECTORY/module name, searches the whole repo, and prints every
+  definition with its kind and signature — forming no opinion about which you want. That output IS your
+  `--center`. **Do NOT use `find`, `ls` or `grep` to hunt for the anchor.** Measured 2026-07-31
+  (bench/grep-vs-seam, cal-ab3/ab4): an agent following the old wording spent **10 of its 19-32 tool calls**
+  on `find`/`ls` orientation — the single largest block in its budget, and more than twice what the actual
+  analysis cost. `--locate` answers the same question in one call and ~0.8s on a 10k-file monorepo.
+
+- **STEP 2 — pass what you picked as `--center file#symbol`** (or **several** comma-separated when the concern
+  spans a few mechanisms). Seam grows straight from them: **~11s**, and you avoid it guessing a
+  ubiquitous/sibling node.
+
+- **If `--locate` returns nothing, believe it** — it searched every def in the repo, so the name is external,
+  dynamic, or spelled differently. THEN grep, and only then. (It used to lie here: a 4000-def cap made it
+  report "not found" for symbols that existed on any large repo. Fixed 2026-07-31; if you see a false
+  negative, that is a bug worth reporting, not a reason to go back to grep-first.)
+
+- **There is no anchor-guessing fallback, by design.** Seam will NOT pick a center for you — that choice is
+  semantic and it is yours.
 
 ### C1 — Run it
 

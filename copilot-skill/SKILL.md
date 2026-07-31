@@ -58,8 +58,11 @@ model, not for reading in-CLI.)
 For a footprint or a grow, **you choose the mechanism, then Seam traces from it.** This is a mandatory
 first step — never run the grow with only `--intent` and let the engine guess:
 
-1. **Find the mechanism symbol(s)** for the intent — one quick search. Look for the class/service/handler
-   named after the domain noun in the question. E.g. for *"how are bookings managed"*:
+1. **Find the mechanism symbol(s)** with `seam --repo <repo> --locate <name>` — ONE call. It takes a symbol,
+   file or directory name, searches the whole repo, and prints every definition without picking one. Do NOT
+   hunt with `find`/`ls`/`grep`: measured 2026-07-31, that cost an agent 10 of its 19 tool calls, more than
+   twice what the analysis itself cost. Look for the class/service/handler named after the domain noun in the
+   question. E.g. for *"how are bookings managed"*:
    ```bash
    rg -il 'booking' --type java        # → BookingService.java, BookingsController.java, …
    ```
