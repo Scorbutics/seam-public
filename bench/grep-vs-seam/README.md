@@ -687,3 +687,31 @@ Option 2 is the honest next step, and it makes the prediction sharp: if coupling
 `consumers`/`agent` and RECALL *still* does not move, then the files that agent hunted were never reachable by
 coupling at all, and the RECALL bin is a recall problem in the ENGINE rather than a routing problem. That is a
 result either way, which is more than can be said for guessing.
+
+### Extending the fold to `consumers` — the prediction fires, and REFUTES the routing theory
+
+`--query consumers` had data coupling built in and switched OFF (the `false` argument was `data_coupling`).
+Turning it on works: on a private-app route handler the shape now reports `cross-stack: 5`, including `handleReset`,
+the front-end component that fetches that very route — a caller no language server can produce.
+
+**And the keycloak replay does not move: RECALL 21, 78 files cited, both identical to before.**
+
+The prediction written down before this change was: *if counterparts appear in the shapes agents DO call and
+RECALL still does not move, the files that agent hunted were never reachable by coupling at all, and the bin is
+an ENGINE recall problem rather than a routing one.* That condition is now met. The routing theory — built up
+over several rounds and the motivation for both folds — **is wrong for this case.**
+
+What the RECALL bin actually contains, re-read with that in mind: `agent.ts` (a url-template builder),
+`RealmCacheSession.java` (a cache decorator), `ModelToRepresentation.java` (DTO mapping), `AdminRoot.java`
+(JAX-RS bootstrap), `fetchWithError.ts` (an HTTP wrapper). **None of these share a table, route or config key
+with the anchor.** They are reached by ordinary structure — interface→impl, decorator→delegate, framework
+registration — which is the import/call graph's job, not coupling's. No amount of coupling work reaches them,
+and the two folds could not have.
+
+**So the honest ranking of what is left changes.** Coupling is not the lever for this case; the transitive
+structural graph is — specifically interface→implementation and framework-registration edges, which is where
+`bench/recall`'s `imports` arm already beats the coupling arm 2-3x on both corpora. That was visible in the
+recall table the whole time and read past.
+
+The folds stay: they are correct, they surface real cross-stack callers, and `--query consumers` reporting a
+route's front-end caller is a genuine capability gain. They are simply not what moves this benchmark.

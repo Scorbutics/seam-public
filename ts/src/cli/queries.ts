@@ -197,7 +197,15 @@ export async function runConsumerSet(a: Args): Promise<number> {
   // Opt-in name-grounded recall (--recall name) — UNVERIFIED leads folded in as the separate `recalled` list.
   // The import floor is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers
   // still use the exact symbol name; the core recovers them deterministically in the same pass.
-  try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false, a.recall === "name")); }
+  // DATA COUPLING ON for the consumers shape. The capability was already here and switched off — the `false`
+  // was `data_coupling` — so a cross-stack caller (a front-end reaching this handler over HTTP, another service
+  // reading the table it writes) was absent from the one query agents reach for most.
+  //
+  // Measured reason: replaying the keycloak benchmark trace showed four rounds of coupling improvements, and
+  // then the brief fold, moving the agent's RECALL cost by ZERO commands — because the agent ran `consumers`
+  // and `--format agent`, never `--query coupling` or `brief`. Putting the counterparts where it already looks
+  // is the only version of this that can reach it.
+  try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, true, a.recall === "name")); }
   catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
   // CROSS-STACK MOAT — attach the anchor's shared-key readers/writers (the non-textual coupling), on by default.
   const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
