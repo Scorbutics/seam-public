@@ -209,11 +209,17 @@ Three benchmarks, in [`bench/`](bench/). They exist to find where the tool loses
   same-named column on a different table; a table name in prose), because a fixture written by the tool's own
   author proves nothing without them. It found a missing config-key adapter on its first run.
 - **[`cochange/`](bench/cochange/)** — the co-change numbers above, judged by git history.
+- **[`recall/`](bench/recall/)** — what it MISSES, judged by real commits. It shipped with a broken baseline arm
+  that scored 0.0% because it threw and was caught; a dead baseline manufactures a win, so it now warns loudly.
 
 ### Known limits
 
-- **Recall is unmeasured.** Everything above is precision-in-practice. A coupling nobody has ever edited is
-  invisible to the co-change judge.
+- **Recall is now measured, and it is additive rather than dominant.** [`bench/recall`](bench/recall/) replays real
+  multi-file commits: show one changed file, ask what else must change, score against the commit. Coupling ALONE
+  recalls less than the import graph (8.2% vs 20.0% on one repo; 2.3% vs 7.7% on another) — most files that change
+  together are linked by an ordinary import. Its value is the files imports cannot reach: adding it lifts recall
+  **20.0% → 26.6%** and **7.7% → 9.8%**, replicated on two corpora. Absolute recall is low because a commit bundles
+  unrelated work, which depresses every arm equally — read the arms against each other, never the raw percentage.
 - **Cross-language co-change rests on 42 pairs** in one repo — directionally supported, thinly sampled.
 - **The oracle is TypeScript-only** (its judge is `tsc`) and covers `export function`, not arrow exports.
   Correctness on the Java/Ruby/Python sides is not measured by it.

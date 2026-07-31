@@ -78,9 +78,25 @@ pub fn mask_comments(text: &str) -> String {
 /// Keep ONLY string-literal content, blank code AND comments (offset/line-preserving). The "key lives in a
 /// string literal" scan (raw SQL). Port of `stringLiteralsOnly`.
 pub fn string_literals_only(text: &str) -> String {
+    string_literals_only_spans(text).0
+}
+
+/// The same mask, plus the BYTE RANGE of every literal's content inside the produced string.
+///
+/// WHY THE SPANS EXIST. The mask blanks non-string source to spaces, so in the output two unrelated literals are
+/// separated by ordinary whitespace and nothing tells a regex where one ends. `raw_sql`'s
+/// `SELECT …{0,2000}? FROM <tok>` therefore matched a `SELECT` in one literal against a `FROM` in a DIFFERENT
+/// literal up to 2000 characters away — on keycloak that produced `db-table "String"` shared by 124 files, from a
+/// `SELECT` somewhere and the prose "…encodings from string" in an unrelated comment-like literal later. A key
+/// touched by 124 files is not a coupling, it is a broken parse coupling everything to everything.
+///
+/// Ranges are into the OUTPUT string, which preserves newlines, so `line_of(masked, span.0 + local)` still gives
+/// the right line.
+pub fn string_literals_only_spans(text: &str) -> (String, Vec<(usize, usize)>) {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     let mut out = String::with_capacity(text.len());
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     let (mut i, mut blank_start) = (0usize, 0usize);
     macro_rules! flush_blank {
         ($end:expr) => {
@@ -108,7 +124,9 @@ pub fn string_literals_only(text: &str) -> String {
                 }
                 i += 1;
             }
+            let span_start = out.len();
             out.push_str(&slice(&chars, content_start, i.min(n)));
+            spans.push((span_start, out.len()));
             if i < n {
                 out.push(' ');
                 i += 1;
@@ -135,7 +153,7 @@ pub fn string_literals_only(text: &str) -> String {
         i += 1;
     }
     flush_blank!(n);
-    out
+    (out, spans)
 }
 
 /// A file's mask context — each variant computed at most once. Port of `MaskCtx` + `makeMaskCtx`.
@@ -143,11 +161,12 @@ pub struct MaskCtx {
     text: String,
     comments: OnceCell<String>,
     strings: OnceCell<String>,
+    spans: OnceCell<Vec<(usize, usize)>>,
 }
 
 impl MaskCtx {
     pub fn new(text: &str) -> Self {
-        Self { text: text.to_string(), comments: OnceCell::new(), strings: OnceCell::new() }
+        Self { text: text.to_string(), comments: OnceCell::new(), strings: OnceCell::new(), spans: OnceCell::new() }
     }
     /// Source with comment content blanked (string-aware).
     pub fn comments(&self) -> &str {
@@ -156,5 +175,10 @@ impl MaskCtx {
     /// Only string-literal content kept, everything else blanked.
     pub fn strings(&self) -> &str {
         self.strings.get_or_init(|| string_literals_only(&self.text))
+    }
+    /// Byte ranges of each string literal's content inside `strings()` — so a scan can refuse to cross from one
+    /// literal into the next. See `string_literals_only_spans`.
+    pub fn string_spans(&self) -> &[(usize, usize)] {
+        self.spans.get_or_init(|| string_literals_only_spans(&self.text).1)
     }
 }

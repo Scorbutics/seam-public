@@ -42,17 +42,65 @@ impl CouplingAdapter for RawSql {
             return Vec::new();
         }
         let mut out: Vec<KeyHit> = Vec::new();
-        // WRITES — distinctive keywords (UPDATE requires a following SET).
-        for re in [&*INSERT_RE, &*DELETE_RE, &*UPDATE_RE] {
-            for m in re.captures_iter(text) {
-                out.push(KeyHit { kind: "db-table".into(), value: clean_table(&m[1]), line: line_of(text, m.get(0).unwrap().start()), produces: true, ..Default::default() });
+        // PER LITERAL, and that is the whole point. The mask blanks non-string source to SPACES, so in its output
+        // two unrelated literals are separated by ordinary whitespace — and `SELECT …{0,2000}? FROM <tok>` then
+        // matched a SELECT in one literal against a FROM up to 2000 characters away in ANOTHER. On keycloak that
+        // manufactured `db-table "String"` shared by 124 files: a real `SELECT` somewhere, and the prose
+        // "…encodings from string" in an unrelated literal. A key touched by 124 files is not a coupling, it is a
+        // broken parse coupling everything to everything, and it was the largest false key in the whole floor.
+        //
+        // Offsets are absolute into the masked text (`lo + local`), which preserves newlines, so lines stay right.
+        for &(lo, hi) in mask.string_spans() {
+            let lit = &text[lo..hi];
+            // WRITES — distinctive keywords (UPDATE requires a following SET).
+            for re in [&*INSERT_RE, &*DELETE_RE, &*UPDATE_RE] {
+                for m in re.captures_iter(lit) {
+                    out.push(KeyHit { kind: "db-table".into(), value: clean_table(&m[1]), line: line_of(text, lo + m.get(0).unwrap().start()), produces: true, ..Default::default() });
+                }
+            }
+            // READS — require a preceding SELECT so a bare `from` can't match.
+            for m in SELECT_RE.captures_iter(lit) {
+                let table_start = lo + m.get(1).unwrap().start(); // anchor the line at the table, not at SELECT
+                out.push(KeyHit { kind: "db-table".into(), value: clean_table(&m[1]), line: line_of(text, table_start), produces: false, ..Default::default() });
             }
         }
-        // READS — require a preceding SELECT so a bare `from` can't match.
-        for m in SELECT_RE.captures_iter(text) {
-            let table_start = m.get(1).unwrap().start(); // anchor the line at the table, not at SELECT
-            out.push(KeyHit { kind: "db-table".into(), value: clean_table(&m[1]), line: line_of(text, table_start), produces: false, ..Default::default() });
-        }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CouplingAdapter;
+
+    fn tables(src: &str) -> Vec<String> {
+        let mask = MaskCtx::new(src);
+        let mut v: Vec<String> = RawSql.scan("A.java", src, &mask).into_iter().map(|h| h.value).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    #[test]
+    fn a_select_does_not_reach_into_another_literal_for_its_from() {
+        // THE 124-FILE BUG. The mask blanks non-string source to spaces, so these two literals sit a few
+        // characters apart in its output and `SELECT …{0,2000}? FROM <tok>` bridged them — inventing a table
+        // named `string` (on keycloak: `String`, shared by 124 files, the largest false key in the floor).
+        let src = "String a = \"SELECT id, name\";\nString b = \"Keep any valid encodings from string i.e. keep %2D\";\n";
+        let t = tables(src);
+        assert!(t.is_empty(), "a SELECT bridged into a neighbouring literal: {t:?}");
+    }
+
+    #[test]
+    fn a_select_and_from_inside_ONE_literal_still_resolves() {
+        // FALSIFICATION: per-literal scanning must not break real multi-line SQL, which is the common shape.
+        let src = "String q = \"SELECT id, status, technician_id\\n  FROM work_orders\\n  WHERE status = 'open'\";\n";
+        assert_eq!(tables(src), vec!["work_orders".to_string()]);
+    }
+
+    #[test]
+    fn writes_still_resolve_per_literal() {
+        let src = "jdbc.update(\"INSERT INTO invoices (a, b) VALUES (?, ?)\");\njdbc.update(\"UPDATE members SET x = 1\");\n";
+        assert_eq!(tables(src), vec!["invoices".to_string(), "members".to_string()]);
     }
 }

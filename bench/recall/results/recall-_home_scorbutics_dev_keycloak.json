@@ -1,0 +1,28 @@
+{
+  "repo": "/home/scorbutics/dev/keycloak",
+  "cases": 996,
+  "seam": {
+    "hit": 85,
+    "actual": 3663,
+    "predicted": 2494,
+    "cases": 996
+  },
+  "imports": {
+    "hit": 282,
+    "actual": 3663,
+    "predicted": 12865,
+    "cases": 996
+  },
+  "union": {
+    "hit": 360,
+    "actual": 3663,
+    "predicted": 15321,
+    "cases": 996
+  },
+  "random": {
+    "hit": 4,
+    "actual": 3663,
+    "predicted": 3187,
+    "cases": 996
+  }
+}
