@@ -517,3 +517,93 @@ no native core at all**, so every codebase query would have died on a missing `s
 Re-running `install.sh` was NOT the fix here: it installs from `main`, and the four commits under test are
 unpushed, so run 4 would have measured the old engine while appearing to test the new one. The shim was pointed
 at the working checkout for the duration of the run instead, and restored afterwards.
+
+## Run 4 results (2026-07-31) — private-app + cal.com
+
+### The comparable series (`score.ts`, re-derivable from `results/run4-*`)
+
+| case | arm | recall (lenient) | silent misses | proxy tokens | trace cmds |
+|---|---|---|---|---|---|
+| private-app | GREP | 81/81 (100%) | 0 | 5,547 | 25 |
+| private-app | SEAM | 81/81 (100%) | 0 | 7,027 | 25 |
+
+cal.com has no ground truth, so recall is NOT scored there — unchanged from runs 1-3.
+
+### Live-usage figures (NOT recomputable — labelled, as the run-1 lesson requires)
+
+| case | arm | tool uses | tokens | wall |
+|---|---|---|---|---|
+| private-app | GREP | 29 | 51,274 | 281s |
+| private-app | SEAM | 27 | 72,711 | 382s |
+| cal.com | GREP | 58 | 115,854 | 371s |
+| cal.com | SEAM | 54 | 140,378 | 449s |
+
+### The prediction: HALF RIGHT, and the half that failed is the important one
+
+**cal.com — CONTENT fell as predicted.** Tax bins, run 1 → run 4:
+
+| bin | run 1 | run 4 |
+|---|---|---|
+| CONTENT | 20 (71%) | **12 (38%)** |
+| RECALL | 7 (25%) | 3 (9%) |
+| TRUST | 1 (4%) | **17 (53%)** |
+| **total tax** | 28 of 43 | **32 of 41** |
+
+**private-app — no material improvement, as predicted.** Seam-arm tool uses 29 → 27, tokens up. TRUST stayed dominant
+(70%). A fix that had "improved" this case too would have been measuring noise.
+
+### THE CAVEAT THAT EATS MOST OF THE cal.com WIN
+
+CONTENT and TRUST are separated by *whether Seam printed a snippet*. So shipping snippets MECHANICALLY reclassifies
+a re-read from CONTENT to TRUST **without the agent changing its behaviour at all**. Part of that 20 → 12 is
+definitional, not behavioural, and the total tax proves it: **28 of 43 → 32 of 41. It did not fall.**
+
+The honest statement is that the fixes removed the agent's *reason* to re-read, not its *habit* of re-reading.
+That is run 2's finding again, on a different case and with a bigger fix behind it: **richer output does not buy
+fewer tool calls.** Three commits of content-gap work, and the post-answer command count is flat.
+
+What the work IS worth, stated without inflation: the evidence is now IN the answer, so a reader who trusts it
+can act without opening anything, and one who verifies confirms rather than reconstructs. That is a quality
+claim, not a cost claim, and the cost claim should stop being made.
+
+### Two defects this run found that the scoring would have hidden
+
+**1. `score.ts` falsely accused the engine (the FOURTH such).** It scored arm SEAM at 35% recall vs grep's 85% —
+which would have published as "Seam recall collapsed". Both arms named all 81 files; arm B wrote
+`PartnerProgressCard,` in prose and arm A wrote `components/ui/badge.tsx`, and the file test demanded the
+basename WITH extension. It measured prose style. Now reports STRICT and LENIENT; both arms are 100% lenient.
+
+**2. `verification-tax.ts` scored a broken replay as a finding.** First pass: `RECALL 100% of the tax` on
+cal.com. The replay strips the leading `cd <repo> &&`, and run 4's arm used `cd <repo> && seam …` with `--repo`
+defaulting to the cwd — so `--locate RegularBookingService` answered out of *this repo's own test fixtures*.
+1 file cited instead of 373; every uncited file bins as RECALL, so the harness manufactured a 100%. Runs 1-3
+passed `--repo` explicitly, which is why it only appeared now. The `cd` is preserved, and a plausibility floor
+now ABORTS when several invocations cite fewer than 10 files.
+
+### The bias control failed, and this time it corrupted an arm
+
+Subagents inherit this session's MCP servers, so **arm A (grep) had the Seam MCP tools and used them.** The private-app
+A/B comparison is therefore contaminated and must not be read as grep-vs-Seam; cal.com's arm A was clean
+(verified: zero seam/MCP references in its answer or trace). Future runs must strip the MCP surface from arm A,
+and the "no cross-contamination" bullet above is not satisfied by prompt wording alone.
+
+### And the most serious defect of the session, found only because of that contamination
+
+Arm A reported that `mcp__seam__find_consumers` returned "no caller in the repo" for `cn`. **Reproduced:**
+
+    {"noStructure":true,"reason":"none","resolutionQuality":"FULL","members":[]}
+    "No caller in the repo — an entry point, dead code, or dispatched-only."
+
+For the symbol the CLI resolves to **247 edges across 81 files**. `resolutionQuality: "FULL"` asserts a complete
+scan; `noStructure` asserts it found nothing. Together they are a confident, silent, wrong negative — and the
+tool description tells the agent *"that is Seam telling you this is a grep/RAG question, not a failure. Don't
+retry; grep."* An agent following the documentation drops the question.
+
+Cause: the MCP server runs `/home/scorbutics/.seam/mcp/src/server.ts` — the install pinned at `a5084fa`, months
+stale, **with no native core**. The same install whose `seam --help` reproduced run 1's failure. So the defect is
+in what is DEPLOYED, not in the code under test (the current CLI answers correctly) — which makes it worse, not
+better: every user who installed before the `install.sh` fix is running this today, and it fails by asserting
+emptiness rather than by erroring.
+
+**Two follow-ups, neither done here:** the MCP surface must never pair `FULL` with an empty set without saying
+which engine answered, and `install.sh` needs a staleness check on an existing `~/.seam`.

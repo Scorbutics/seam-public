@@ -53,8 +53,13 @@ for (const c of shown ? [] : seamCmds) {
   // to `> /tmp/seam_grow_handler.txt 2>/tmp/...err` and read it back later; replaying that verbatim sent the
   // output to a file and left `shown` almost empty — which would have scored as "Seam cited 124 files and
   // printed content for 4". A replay that loses the output is not a measurement of a thin output.
-  const cmd = c.replace(/^cd\s+\S+\s*&&\s*/, "")
-               .replace(/\s*\d?>>?\s*\S+/g, "")                                   // > file, 2> file, >> file
+  // KEEP THE `cd`. Stripping it silently re-anchored the replay onto the SEAM REPO ITSELF: run 4's arm used
+  // `cd <repo> && seam …` and let `--repo` default to the cwd, so with the `cd` removed `--locate
+  // RegularBookingService` answered out of `ts/test/codebase/dep_name_binding.test.ts`. The replay captured 1
+  // citation instead of hundreds, and since an uncited file bins as RECALL, the case scored "RECALL 100% of the
+  // tax" — a number produced entirely by the harness pointing at the wrong repository. Runs 1-3 passed `--repo`
+  // explicitly, which is why this only appeared now.
+  const cmd = c.replace(/\s*\d?>>?\s*\S+/g, "")                                   // > file, 2> file, >> file
                .replace(/\s*\|\s*(head|tail|wc|rg|grep|sed|cut|sort)\b.*$/, "");  // and the display pipes
   try { shown += execSync(cmd, { cwd: TS, encoding: "utf-8", maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], timeout: 900_000 }); }
   catch (e: any) { shown += e?.stdout ?? ""; }
@@ -86,6 +91,17 @@ for (const m of shown.matchAll(/([\w./@-]+\/[\w.@-]+\.\w{1,5})(?::(\d+))?/g)) ci
   }
 }
 if (!cited.size) { console.error("ABORT: parsed 0 citations out of a non-empty replay — the extractor is broken."); process.exit(3); }
+// AND A PLAUSIBILITY FLOOR, because "almost no citations" fails the same way as "no citations" but slips past a
+// zero-check. Every file the agent then touches is uncited, so 100% of the tax bins as RECALL — a headline
+// produced by a broken replay rather than by the engine missing anything. That is exactly what a stripped `cd`
+// did above. Several seam invocations that between them cite a handful of files is not a thin answer; it is a
+// replay pointed at the wrong repo, a stale anchor, or a CLI that errored.
+if (seamCmds.length >= 3 && cited.size < 10) {
+  console.error(`ABORT: ${seamCmds.length} seam invocation(s) replayed but only ${cited.size} file(s) cited.`);
+  console.error("Too few to bin against. This is a broken replay, NOT a finding that Seam cited nothing —");
+  console.error("check that each command still resolves its repo and anchor before trusting any bin count.");
+  process.exit(3);
+}
 
 // the anchor symbol: whatever the seam commands centred on
 const anchorSym = seamCmds.map((c) => c.match(/#(\w+)|--symbol\s+(\S+)/)).find(Boolean);
