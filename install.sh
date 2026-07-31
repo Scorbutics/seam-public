@@ -57,8 +57,19 @@ log "using bun: $BUN"
 # ── fetch / update the checkout ────────────────────────────────────────────--─
 if [ -d "$HOME_DIR/.git" ]; then
   log "updating Seam in $HOME_DIR (ref: $REF)"
+  # SAY WHICH VERSION WAS THERE AND WHICH IS THERE NOW. An install that silently stays put is indistinguishable
+  # from one that updated, and that is not hypothetical: this machine ran an install pinned MONTHS behind, with
+  # no native core, and nothing ever said so — it just answered questions wrongly. Benchmark run 4 caught it
+  # returning "no caller in the repo" for a symbol with 247 resolved consumer edges.
+  BEFORE="$(git -C "$HOME_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   git -C "$HOME_DIR" fetch --depth 1 origin "$REF"
   git -C "$HOME_DIR" checkout -q --detach FETCH_HEAD
+  AFTER="$(git -C "$HOME_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [ "$BEFORE" = "$AFTER" ]; then
+    log "already up to date at $AFTER"
+  else
+    log "updated $BEFORE -> $AFTER"
+  fi
 else
   log "cloning Seam into $HOME_DIR (ref: $REF)"
   git clone --depth 1 --branch "$REF" "$REPO" "$HOME_DIR"

@@ -139,6 +139,24 @@ fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> Consume
     } else {
         (false, None)
     };
+    // NEVER CLAIM `FULL` OVER AN EMPTY SET. `resolution_quality` was hardcoded to "FULL" on every path, so a
+    // shape that resolved NOTHING still rendered `resolution: FULL | resolved: 0 consumer edges` — a sentence
+    // that reads as "I scanned exhaustively and there is genuinely nothing". That is the most expensive thing
+    // this tool can say, because a reader acts on it by stopping.
+    //
+    // It was not hypothetical. Benchmark run 4 hit `{"noStructure":true,"resolutionQuality":"FULL","members":[]}`
+    // for `cn` — a symbol with 247 resolved consumer edges across 81 files — and the surface that produced it
+    // told the caller not to retry. The engine there was a stale build, but the LABEL is what turned a wrong
+    // answer into an authoritative one, and the label is generated right here.
+    //
+    // FULL is a claim about the RESOLUTION, so it is only honest when something resolved:
+    //   NONE  — in-edges exist but none resolve statically (opaque dispatch): grep is the right next tool.
+    //   EMPTY — nothing was found at all: possibly true, possibly a blind spot, and NOT a verified negative.
+    let resolution_quality = match (no_structure, reason.as_deref()) {
+        (false, _) => "FULL",
+        (true, Some("opaque")) => "NONE",
+        (true, _) => "EMPTY",
+    };
 
     ConsumerSet {
         shape: shape.to_string(),
@@ -149,7 +167,7 @@ fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> Consume
         recalled: Vec::new(),
         no_structure,
         reason,
-        resolution_quality: "FULL".to_string(),
+        resolution_quality: resolution_quality.to_string(),
     }
 }
 
