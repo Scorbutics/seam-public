@@ -117,3 +117,32 @@ and the shape is right to be narrower than the floor.
 
 The 46 additions remain separately unexplained — they are new candidates from fuzzy matching, not survivors of
 any filter above.
+
+### The union experiment (2026-07-31) — it wins on BOTH axes
+
+`SEAM_UNION_SIDES=1` makes `db-table` and `http-route` counterparts symmetric (reader⇄reader, writer⇄writer),
+as `config-key` already is. private-app, 40 cases, same anchors:
+
+| arm | recall | precision | predicted/case |
+|---|---|---|---|
+| shape, directional (default) | 4.1% (8/194) | 4.3% | 4.7 |
+| shape, **unioned** | **10.3%** (20/194) | **5.0%** | 9.9 |
+| floor (reference) | 8.8% (17/194) | 6.2% | 6.9 |
+
+**Precision goes UP, which is the result that settles it.** The prediction was a recall/precision trade; instead
+the directional filter was cutting true positives *without* buying precision. Unioned, the shape also overtakes
+the raw floor on recall (10.3% vs 8.8%) — the first time any measurement has shown the projection earning its
+keep against exact-key grouping.
+
+**`bench/coupling` is unaffected: 7/7 positives, 0/5 false discoveries, with and without the flag.** That
+includes `same-file-write-and-read` and `config-key-read-in-one-place`, the two decoys written to catch exactly
+what unioning could break — a file becoming its own counterpart. It does not happen, because the anchor's own
+file is dropped downstream by `collect_complement_files`.
+
+**Shipped OFF by default anyway.** The evidence supports flipping it, but it changes what a coupling MEANS:
+`←`/`→` are reader/writer direction, and two readers of one table are coupled to the same state without either
+changing what the other sees. That is a product decision about the semantics the render promises, not something
+a recall number should settle unilaterally. The flag makes it a one-line experiment for whoever decides.
+
+**Caveats on the number:** one corpus, 40 cases, and the floor still leads on precision (6.2% vs 5.0%). The 46
+unexplained additions from fuzzy matching are still unexplained and are part of that gap.

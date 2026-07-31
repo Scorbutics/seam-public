@@ -172,6 +172,16 @@ export const SEAM_FLAGS: readonly FlagDoc[] = [
   { name: "SEAM_WRITERS_COLUMNS", cls: "seam", dflt: "on — column grain",
     effect: "`=0` returns the writers shape at table grain instead of filtering to the reader's columns.",
     readAt: "rust/crates/seam-shapes/src/writers.rs" },
+  // EXPERIMENT, off by default. Measured on private-app (bench/recall-shape, 40 cases): the directional reader->writer
+  // model costs recall without buying precision — unioning takes the coupling shape from 4.1% recall / 4.3%
+  // precision to 10.3% / 5.0%, past the raw floor's 8.8% recall, with bench/coupling still 7/7 positives and
+  // 0/5 false discoveries. It is a flag rather than the default because it changes what a coupling MEANS: the
+  // `<-`/`->` arrows are reader/writer direction, and two readers of one table are coupled to the same state
+  // without either changing what the other sees. That is a product call, not a benchmark call.
+  { name: "SEAM_UNION_SIDES", cls: "seam", dflt: "off — reader/writer only",
+    effect: "`=1` makes db-table and http-route counterparts SYMMETRIC (reader<->reader, writer<->writer), as "
+      + "config-key already is. Raises coupling recall substantially; see bench/recall-shape.",
+    readAt: "rust/crates/seam-couple/src/ground/other_side.rs" },
 ] as const;
 
 /** Lookup by name — `undefined` means the flag is not documented, which the enforcing test treats as a bug. */

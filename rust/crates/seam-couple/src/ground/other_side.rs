@@ -92,7 +92,7 @@ pub fn other_side_scored_with_context(index: &GroundingIndex, kind: &str, value:
     // dropped downstream by `collect_complement_files`, so a lone accessor is not made its own counterpart.
     // Each returned access is tagged with the side it came FROM: producers are `true`, consumers `false`.
     let side = |sides: &crate::types::KeySides| -> Vec<(Access, bool)> {
-        let both = kind == CONFIG_KEY;
+        let both = kind == CONFIG_KEY || std::env::var("SEAM_UNION_SIDES").is_ok();
         let primary: Vec<(Access, bool)> =
             if produces { sides.consumers.iter().map(|a| (a.clone(), false)).collect() } else { sides.producers.iter().map(|a| (a.clone(), true)).collect() };
         let secondary: Vec<(Access, bool)> = if !both {
