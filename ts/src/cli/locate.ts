@@ -26,8 +26,27 @@ export async function runLocate(a: Args): Promise<number> {
   }
 
   const one = rows.length === 1;
+  // A MODULE MATCH IS NOT A SYMBOL MATCH, and printing it as one is a lie of omission.
+  //
+  // MEASURED (bench/grep-vs-seam, cal-booking-flow, 2026-08-01): `--locate handleNewBooking` printed
+  // "25 definition(s)" for a name that defines NOTHING — it is a directory of ~30 modules with no barrel and no
+  // symbol of that name. The agent read that as "one of these 25 is what I asked for", could not see which, and
+  // spent 7 of its 11 tool calls on ls/find looking for the entry point that does not exist. Three runs, same
+  // dead end each time. The engine knew it had fallen back to a path match and said nothing.
+  const viaModule = rows[0]?.viaModule === true;
+  const noEntry = rows[0]?.moduleNoEntry === true;
   process.stdout.write(`# Locate: ${name}\n`
-    + `${rows.length} definition(s)${one ? "" : " — YOU choose which one answers your question; this only resolves addresses"}\n\n`);
+    + (viaModule
+      ? `'${name}' is a MODULE (a directory or file), not a symbol — nothing declares that name.\n`
+        + `${rows.length} definition(s) INSIDE it${noEntry ? "" : ", entry point(s) first"}.\n`
+      : `${rows.length} definition(s)${one ? "" : " — YOU choose which one answers your question; this only resolves addresses"}\n`)
+    + (viaModule && noEntry
+      // The honest negative. An agent that knows there is no way in stops looking for one; that is the whole
+      // saving. Stating it costs one line and replaces a hunt.
+      ? `NO ENTRY POINT: it has no index.* barrel and no '${name}' symbol, so there is no single way in.\n`
+        + `Do NOT go looking for one — pick the member below that does the work, or anchor on a CALLER instead.\n`
+      : "")
+    + `\n`);
   for (const r of rows) {
     const sig = r.signature ? `${r.signature}` : "";
     const encl = r.enclosing ? `  in ${r.enclosing}` : "";

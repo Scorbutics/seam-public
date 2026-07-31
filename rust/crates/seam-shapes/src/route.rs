@@ -112,6 +112,13 @@ pub struct LocatedName {
     pub signature: String,
     pub enclosing: String,
     pub is_test: bool,
+    /// This row came from a MODULE match (the name is a directory or file), not from a symbol of that name.
+    /// The caller renders a different banner for it: a list of a directory's members is not an answer to
+    /// "where is X", and presenting it as one is what sent an agent hunting with `ls`/`find`.
+    pub via_module: bool,
+    /// A module match that has NO barrel and NO same-named symbol — i.e. there is genuinely no single way in.
+    /// Saying so is the answer; listing 30 members and letting the caller infer it is not.
+    pub module_no_entry: bool,
 }
 
 /// EVERY definition of `name`, ranked — the address lookup behind `--locate`.
@@ -145,22 +152,59 @@ pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
     // name: on cal.com `handleNewBooking` is a directory of ~30 files, and `--locate handleNewBooking` found
     // nothing and sent the caller to grep. Fall back to path matching so a module name resolves to the defs it
     // contains, ranked by the same non-test-first rule.
+    // MODULE MATCH — the name is a directory or a file, not a symbol. Flagged so the ranking below can put the
+    // module's ENTRY POINTS first; a symbol match has no such notion and keeps the plain order.
+    let mut module_base: Option<String> = None;
     if hits.is_empty() {
         let base = EXT_TAIL.replace(norm.split('/').next_back().unwrap_or(&norm), "").to_lowercase();
         if !base.is_empty() {
             let seg = format!("/{base}/");
             let file_stem = format!("/{base}.");
+            // A TOP-LEVEL directory has no leading slash in a repo-relative path, so `/backend/` never matched
+            // `backend/persist.ts` and `--locate backend` reported "No definition of 'backend' found" for a
+            // directory that plainly exists. It went unseen because the only fixture module was NESTED
+            // (cal.com's `.../lib/handleNewBooking/...`), which does contain the separator — the snapshot case
+            // added for the module branch is what surfaced it, on its first run.
             hits = defs.iter().filter(|d| {
                 let f = d.file.to_lowercase();
-                f.contains(&seg) || f.contains(&file_stem)
+                f.contains(&seg) || f.contains(&file_stem) || f.starts_with(&seg[1..]) || f.starts_with(&file_stem[1..])
             }).collect();
+            if !hits.is_empty() {
+                module_base = Some(base);
+            }
         }
     }
+    // NOT ADDRESSABLE, NOT OFFERED. `--locate`'s contract is "here are the addresses you can pass to --center",
+    // and an object-valued property cannot be one — `--center f.ts#reqBody` does not resolve. Twelve of the 25
+    // rows for `handleNewBooking` were exactly that (see def_table's DESCRIPTOR_KEY branch), so half the answer
+    // was unusable and the agent went hunting with ls/find. The defs stay in the table for the embedding field;
+    // they simply stop being proposed as anchors.
+    hits.retain(|d| d.kind != "property");
+    // ENTRY POINTS FIRST on a module match. `handleNewBooking` is a directory of ~30 files; answering it with
+    // every def it contains, alphabetically by path, buries the way IN — the agent got `addVideoCallDataToEvent`
+    // first and spent 7 of 11 calls looking for the entry by hand. Two deterministic signals, no guessing:
+    // a def in the module's `index.*` barrel, or a def whose NAME is the module's name.
+    let rank = |d: &seam_scan::def_table::Def| -> u8 {
+        let Some(base) = module_base.as_deref() else { return 1 };
+        let f = d.file.to_lowercase();
+        if f.contains("/index.") || f.ends_with(&format!("/{base}.ts")) || f.ends_with(&format!("/{base}.tsx")) {
+            return 0;
+        }
+        if d.name.to_lowercase() == base {
+            return 0;
+        }
+        1
+    };
     // NON-TEST FIRST, then stable by path — the same ordering `resolve_name` uses, so `--locate`'s first row is
     // the one the router would have chosen. A caller comparing the two must not see them disagree.
     hits.sort_by(|a, b| {
-        IS_TEST.is_match(&a.file).cmp(&IS_TEST.is_match(&b.file)).then_with(|| crate::collate::locale_compare(&a.file, &b.file))
+        rank(a).cmp(&rank(b))
+            .then_with(|| IS_TEST.is_match(&a.file).cmp(&IS_TEST.is_match(&b.file)))
+            .then_with(|| crate::collate::locale_compare(&a.file, &b.file))
     });
+    // Did ANY row qualify as an entry point? `rank` is the single definition of that, so ask it rather than
+    // restating the rule — a second copy is how the banner and the ordering would come to disagree.
+    let no_entry = module_base.is_some() && !hits.iter().any(|d| rank(d) == 0);
     hits.into_iter()
         .take(limit)
         .map(|d| LocatedName {
@@ -170,6 +214,8 @@ pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
             signature: d.signature.clone(),
             enclosing: d.enclosing.clone(),
             is_test: IS_TEST.is_match(&d.file),
+            via_module: module_base.is_some(),
+            module_no_entry: no_entry,
         })
         .collect()
 }

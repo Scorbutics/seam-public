@@ -150,8 +150,22 @@ pub fn files_index(repo: &str, anchor_file: &str) -> GroundingIndex {
     if store.is_empty() {
         return idx;
     }
+    // ONLY FILES THE STORE CAN SPEAK FOR. `file_contrib` pushes exclusively inside `store.get(&sck)`, so a file
+    // whose PATH appears in no store key contributes nothing — whatever its floor scan finds. Without this the
+    // loop reads, comment-masks and full-floor-scans every source file in scope to consult a lookup table.
+    //
+    // MEASURED (cal.com, 2026-08-01): `key_index build 4.28s (0 keys)` — 1593 files walked against 71 store
+    // entries (30 in scope), on every `--query consumers` and `--query brief`, i.e. ~8.6s of a 27s engine
+    // budget spent proving there was nothing to find. The store's keys are `"{rel} {sha1}"`, so the reachable
+    // paths are known up front and this is a pure filter: the sha1 still guards staleness for the files that
+    // ARE in the store, and their contributions and ORDER are untouched.
+    let store_paths: std::collections::HashSet<&str> =
+        store.keys().map(|k| k.split_once(' ').map(|(p, _)| p).unwrap_or(k.as_str())).collect();
     let scope = module_scope(repo, anchor_file);
     for rel in seam_fs::source_files(repo, crate::ground::floor::scannable_for_keys) {
+        if !store_paths.contains(rel.as_str()) {
+            continue;
+        }
         if !in_scope(&scope, &rel) {
             continue;
         }

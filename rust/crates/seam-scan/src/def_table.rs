@@ -154,7 +154,18 @@ pub fn defs_in_file(file: &str, text: &str) -> Vec<Def> {
             out.push(Def { name: m[1].to_string(), kind: "method".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if in_obj && DESCRIPTOR_KEY_RE.is_match(&line) {
             let m = DESCRIPTOR_KEY_RE.captures(&line).unwrap();
-            out.push(Def { name: m[1].to_string(), kind: "function".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
+            // `name: {` — an OBJECT-VALUED PROPERTY, and it is not a function. Calling it one put pure data in
+            // front of agents as if it were callable: measured on cal.com 2026-08-01, `--locate handleNewBooking`
+            // returned 25 rows of which TWELVE were this shape — `reqBody` and `eventType` inside the type alias
+            // `CreateBookingParams`, `include`/`select`/`user` inside the object literal `createBookingObj`,
+            // `connect` inside `BookingCreateInput` — every one rendered `[function]` with the signature
+            // `reqBody:`. Half the answer to "where does this module live" was prisma query fragments.
+            //
+            // KEPT, not deleted: descriptor objects are how route tables, config maps and handler registries are
+            // written, and the def table feeds the embedding field, where a named region is real signal. What
+            // was wrong was the LABEL. `locate_name` filters on this kind, so the noise leaves the agent-facing
+            // command without narrowing what the field can see.
+            out.push(Def { name: m[1].to_string(), kind: "property".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if let Some(m) = OBJ_OPEN_RE.captures(&line) {
             if line.contains('{') {
                 stack.push(Scope { name: m[1].to_string(), depth, obj: true });

@@ -59,6 +59,11 @@ run diff        --repo "$R" --file ../sample.patch
 # (Its intent-phrase sibling was tried and DELETED — see bench/anchor-select/README.md: lexical matching cannot
 # be the basis of a structural command.)
 run locate      --repo "$R" --locate persistPayment
+# A MODULE name, not a symbol — the path-fallback branch, which had NO case and so drifted unseen. On cal.com
+# this shape (`handleNewBooking`: a directory, no barrel, no same-named symbol) was printed as "25 definition(s)
+# — YOU choose which one answers your question" and cost an agent 7 of its 11 tool calls hunting for an entry
+# point that does not exist. A green diff on an unexercised branch is the absence of a guarantee, not one.
+run locate_mod  --repo "$R" --locate backend
 # `--format json` — THE MACHINE-READABLE SURFACE, which was accepted and silently ignored by all 11 query
 # shapes until 2026-07-31 (consumers returned the 32-byte human summary). Found by watching a benchmark agent
 # burn 10 of its 16 tool calls re-piping our human render, not by reading code. Gated on booking-app because

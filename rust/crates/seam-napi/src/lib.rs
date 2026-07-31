@@ -2905,6 +2905,10 @@ pub struct LocatedNameDto {
     pub signature: String,
     pub enclosing: String,
     pub is_test: bool,
+    /// The name resolved as a MODULE (directory/file), not as a symbol — see `seam_shapes::LocatedName`.
+    pub via_module: bool,
+    /// A module match with no barrel and no same-named symbol: there is no single entry point to offer.
+    pub module_no_entry: bool,
 }
 
 /// locateName — EVERY definition of a name, ranked. The mechanical half of anchoring: the caller has already
@@ -2914,7 +2918,7 @@ pub struct LocatedNameDto {
 pub fn locate_name(repo: String, name: String, limit: Option<u32>) -> Vec<LocatedNameDto> {
     seam_shapes::locate_name(&repo, &name, limit.unwrap_or(25) as usize)
         .into_iter()
-        .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test })
+        .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
         .collect()
 }
 
