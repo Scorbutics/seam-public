@@ -1,0 +1,17 @@
+{
+  "repo": "/home/scorbutics/dev/keycloak",
+  "cases": 12,
+  "floor": {
+    "hit": 1,
+    "actual": 49,
+    "predicted": 41,
+    "cases": 12
+  },
+  "shape": {
+    "hit": 1,
+    "actual": 49,
+    "predicted": 71,
+    "cases": 12
+  },
+  "shapeErrors": 0
+}
