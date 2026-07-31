@@ -13,6 +13,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { available } from "../../src/codebase/atoms.js";
+import { resolve_backend } from "../../src/core/llm.js";
+
+// THE GUARD MUST CHECK THE CAPABILITY THE TEST NEEDS. `available()` checks that tree-sitter's WASM files are
+// on disk — nothing about an LLM. These cases exercise the SEMANTIC shape router, which needs a `claude` or
+// `copilot` binary, so on a machine with tree-sitter and no LLM (every CI runner) the guard opened and the
+// assertion could not possibly hold. It read as a routing bug and was an environment check aimed at the wrong
+// thing; it cost a red CI that was blamed on three unrelated grow tests.
+const routable = (): boolean => {
+  if (!available()) return false;             // tree-sitter, still genuinely required
+  try { resolve_backend(); return true; } catch { return false; }   // throws when no LLM CLI is installed
+};
 
 const TS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 let REPO = "";
@@ -41,7 +52,7 @@ const run = (args: string[]) => {
 
 describe("--auto-route — a blast-radius intent is answered as the impact shape, a flow intent stays a flow", () => {
   test("a blast-radius intent reroutes to shape:impact and enumerates every transitive consumer across files", () => {
-    if (!available()) return;   // routing is semantic — needs an LLM backend (and tree-sitter)
+    if (!routable()) return;   // routing is semantic — needs an LLM backend AND tree-sitter
     const { model } = run(["--intent", "what breaks if I change normalizeMember", "--auto-route"]);
     expect(model?.shape).toBe("impact");                                   // rerouted, not a flow grow
     const affected = new Set<string>((model.surface ?? []).map((s: any) => s.symbol)
@@ -51,13 +62,13 @@ describe("--auto-route — a blast-radius intent is answered as the impact shape
   }, 60000);
 
   test("a genuine flow intent is NOT rerouted — it still grows a flow (no impact shape)", () => {
-    if (!available()) return;
+    if (!routable()) return;
     const { model } = run(["--intent", "how is a member roster built", "--auto-route"]);
     expect(model?.shape).not.toBe("impact");                              // stayed a flow grow
   }, 60000);
 
   test("WITHOUT --auto-route a blast-radius intent is left as a flow grow (opt-in; no behavior change by default)", () => {
-    if (!available()) return;
+    if (!routable()) return;
     const { model } = run(["--intent", "what breaks if I change normalizeMember"]);
     expect(model?.shape).not.toBe("impact");                              // default path untouched
   }, 60000);
