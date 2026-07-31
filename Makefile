@@ -21,9 +21,25 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-13s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install all deps (engine + extension)
+install: ## Install all deps (engine + extension) + the embedding model
 	cd $(TS_DIR)  && bun install
 	cd $(EXT_DIR) && bun install
+	$(MAKE) embed-model
+
+# THE EMBEDDING MODEL IS PART OF THE INSTALL, not an optional extra. The engine's own words when it is missing:
+# "This is an install fault, not a mode." Without it the intent field is silently off, and relevance ranking,
+# tiering and centre selection all degrade — so intent-guided answers differ from a machine that has it.
+#
+# `bun install` pulls the transformers.js PACKAGE but not the WEIGHTS: those are fetched lazily on first use by
+# the TypeScript side, and since the engine moved to Rust nothing on the TS path ever triggers that fetch.
+# seam-embed only READS the cache. So on any fresh checkout the model never arrived and the field was quietly
+# off — which is exactly what CI was: 3 intent-ranked grow tests failing on ubuntu while passing locally, because
+# this machine had a warm cache from before the migration.
+#
+# BOTH quantized variants, because the cache is keyed on that flag and the core may ask for either.
+# Idempotent: transformers.js no-ops when the files are already cached, so re-running `make install` is cheap.
+embed-model: ## Fetch the sentence-embedding weights the intent field reads (idempotent)
+	cd $(TS_DIR) && bun -e 'const {pipeline,env}=await import("./node_modules/@xenova/transformers/src/transformers.js"); env.cacheDir="./node_modules/@xenova/transformers/.cache"; for (const q of [true,false]) await pipeline("feature-extraction","Xenova/all-MiniLM-L6-v2",{quantized:q});'
 
 vsix: install ## ⭐ Build the self-contained .vsix from zero
 	cd $(EXT_DIR) && bun run package

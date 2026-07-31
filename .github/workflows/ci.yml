@@ -24,7 +24,16 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install deps (engine + extension)
+      # The embedding weights are ~109MB and change only when the model id does, so cache them across runs.
+      # `make install` fetches them when this misses; the key carries the model id so a model change re-fetches
+      # rather than silently reusing the wrong geometry.
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: ts/node_modules/@xenova/transformers/.cache
+          key: xenova-all-MiniLM-L6-v2-v1
+
+      - name: Install deps (engine + extension) + embedding model
         run: make install
 
       # BUILD THE NATIVE CORE, without which this job cannot pass and never could.
@@ -51,6 +60,15 @@ jobs:
         run: |
           bun ts/src/cli/decompose.ts --locate loadAddon --repo . | tee /tmp/core.txt
           grep -q "rust_core.ts" /tmp/core.txt
+
+      # ASSERT THE MODEL IS THERE, rather than letting its absence show up as three unrelated-looking grow
+      # failures. seam-embed DEGRADES SILENTLY by design ("returns an empty result when the model is not
+      # present"), which is right for a user and wrong for a gate: it turns an install fault into a scatter of
+      # assertion errors in intent-ranked tests. That is exactly how these three read before the cause was found.
+      - name: Embedding model present
+        run: |
+          test -f ts/node_modules/@xenova/transformers/.cache/Xenova/all-MiniLM-L6-v2/tokenizer.json
+          test -d ts/node_modules/@xenova/transformers/.cache/Xenova/all-MiniLM-L6-v2/onnx
 
       - name: Typecheck + unit tests
         run: make test
