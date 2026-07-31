@@ -79,3 +79,35 @@ than no baseline: it manufactures a win.
   different anchor rule would move the absolute numbers (not, on inspection, the ordering).
 - Commits of >12 scannable files are dropped as sweeps, the same cut `cochange/` makes.
 - Renames and pure-move commits are not filtered and add unpredictable pairs to the denominator.
+
+## Re-run after the coupling fixes (2026-07-31) — UNCHANGED, and the reason is structural
+
+| arm | 2026-07-30 (207 commits) | 2026-07-31 (228 commits) |
+|---|---|---|
+| seam (coupling only) | 8.2% (67/816) | 7.9% (71/895) |
+| imports | 20.0% (163/816) | 18.5% (166/895) |
+| seam + imports | 26.6% (217/816) | 25.0% (224/895) |
+| random | 2.0% (16/816) | 2.0% (18/895) |
+
+The small movement is the WINDOW, not the engine: 21 new commits landed, so the denominator grew 816 → 895.
+
+**This harness cannot see the coupling work, and that is a gap in the suite rather than a null result.** Its
+only engine calls are:
+
+    addon.floorIndex        # the raw index, grouped by EXACT key
+    addon.buildModuleGraph  # the imports arm
+
+Neither reaches `other_side`, which is where fuzzy route matching, containment, the empty-match fix and
+corroboration all live. So the change that took keycloak's `realms.ts` from 20 of 25 keys unresolved to 2 of 25
+— counterpart sites 6 → 58 — is invisible here BY CONSTRUCTION. The same is true of `bench/cochange`, verified
+earlier by running the old and new matcher on one window and getting byte-identical output.
+
+**What that means for the numbers above:** they measure the FLOOR (do two files share an exact key), not the
+SHAPE (does `--query coupling` find the counterpart). Those are different questions, and only the second is what
+an agent actually calls. Quoting "coupling recall is 7.9%" as the tool's recall now understates it by whatever
+the shape adds, and nothing here can say how much.
+
+**The missing harness**, stated so it is not rediscovered: replay commits as this one does, but ask
+`--query coupling` for the anchor's counterparts instead of grouping `floorIndex` by exact key. That measures
+what the shipped shape answers. Until it exists, the coupling improvements are evidenced by `bench/coupling`
+(capability + decoys) and by spot-checked real-repo pairs, not by a recall number.
