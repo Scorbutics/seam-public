@@ -19,12 +19,14 @@ const caseId = process.argv[2];
 if (!caseId) { console.error("usage: verify-arms.ts <case-id>"); process.exit(2); }
 const OUT = join(dirname(new URL(import.meta.url).pathname), "results");
 
-type Audit = { arm: string; calls: number; cmds: string[]; answer: string; secs: number; text: string };
+type Audit = { arm: string; calls: number; cmds: string[]; blocked: string[]; answer: string; secs: number; text: string };
 
 const readArm = (letter: string): Audit => {
   const p = join(OUT, `${caseId}.${letter}.jsonl`);
   if (!existsSync(p)) { console.error(`ABORT: ${p} missing — run run-arms.sh first.`); process.exit(3); }
-  const cmds: string[] = [];
+  const cmds: string[] = [];          // calls that actually RAN and returned data
+  const blocked: string[] = [];       // calls the permission layer refused — attempted, but yielded nothing
+  const pending = new Map<string, string>();
   let text = "";
   for (const line of readFileSync(p, "utf-8").split("\n").filter(Boolean)) {
     let ev: any;
@@ -33,7 +35,20 @@ const readArm = (letter: string): Audit => {
     for (const b of ev?.message?.content ?? []) {
       if (b?.type === "tool_use") {
         const c = b.input?.command ?? b.input?.pattern ?? b.input?.file_path ?? "";
-        cmds.push(`${b.name}: ${String(c).slice(0, 300)}`);
+        pending.set(b.id, `${b.name}: ${String(c).slice(0, 300)}`);
+      }
+      // A DENIED CALL IS NOT A CALL. The permission layer refuses some invocations, and a refusal returns no
+      // data — so it cannot contaminate an arm. Counting ATTEMPTS instead of SUCCESSES made this auditor
+      // discard a clean run: cal-ab2's arm SEAM "invoked a text search 5x" when all six of its greps were
+      // denied and none returned a byte. The arm reaching for a forbidden tool is worth SEEING (it is reported
+      // separately below) but it is not contamination, and conflating the two throws away valid measurements.
+      if (b?.type === "tool_result" && pending.has(b.tool_use_id)) {
+        const raw = b.content;
+        const t = typeof raw === "string" ? raw
+          : (Array.isArray(raw) ? raw.map((x: any) => x?.text ?? "").join(" ") : "");
+        if (/has been denied|Permission to use/.test(t)) blocked.push(pending.get(b.tool_use_id)!);
+        else cmds.push(pending.get(b.tool_use_id)!);
+        pending.delete(b.tool_use_id);
       }
       if (b?.type === "text") text += b.text + "\n";
     }
@@ -44,7 +59,9 @@ const readArm = (letter: string): Audit => {
   // The canonical block, and ONLY it. Everything before `## ANSWER` is reasoning and is deliberately not scored:
   // scoring prose is how this harness twice produced a false accusation against the engine.
   const m = text.match(/^##\s*ANSWER\s*$([\s\S]*)/m);
-  return { arm: letter, calls: cmds.length, cmds, answer: (m?.[1] ?? "").trim(), secs, text };
+  // Anything still pending never got a result (the run ended mid-call); count it as attempted-not-run.
+  for (const [, v] of pending) blocked.push(v);
+  return { arm: letter, calls: cmds.length, cmds, blocked, answer: (m?.[1] ?? "").trim(), secs, text };
 };
 
 const A = readArm("A"), B = readArm("B");
@@ -124,6 +141,7 @@ for (const a of [A, B]) {
   console.log(`   wall clock      ${a.secs}s`);
   console.log(`   tool calls      ${a.calls}`);
   console.log(`   answer block    ${a.answer ? `${a.answer.split("\n").filter(Boolean).length} line(s)` : "MISSING"}`);
+  if (a.blocked.length) console.log(`   blocked         ${a.blocked.length} call(s) refused by the permission layer (attempted, returned nothing)`);
   const fr = fileReads(a).length;
   // Reported ALWAYS, including zero: a grep over one known file is a read, but many of them would be
   // enumeration wearing a read's clothes, and that has to be visible rather than silently permitted.
