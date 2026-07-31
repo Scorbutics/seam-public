@@ -126,12 +126,35 @@ pub struct LocatedName {
 /// lets the caller choose. `resolve_name` — which collapses to one hit for the LLM router — stays as it is;
 /// silently picking is right for a router that has a question to reason about, and wrong for an address lookup.
 pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
-    let defs = seam_scan::def_table::enumerate_defs(repo, 4000, None, false);
+    // NO DEF CAP. This was `4000`, and `enumerate_files` returns the instant it hits the limit — in file order.
+    // On a monorepo that makes `--locate` search a truncated slice and report "No definition of 'X' found …
+    // grep is the right next step" for symbols that plainly exist: measured 2026-07-31 on cal.com,
+    // `export class BookingRepository` at BookingRepository.ts:375 was reported MISSING. That is a false
+    // negative dressed as a fact, and it is the worst possible failure for this command — the caller trusts it
+    // and goes back to grep. Measured cost of an agent doing exactly that: 10 of 32 tool calls hunting for an
+    // anchor (bench/grep-vs-seam, cal-ab3). The whole-repo enumeration is memoised per (repo, limit).
+    let defs = seam_scan::def_table::enumerate_defs(repo, usize::MAX, None, false);
     let norm = PAREN_TAIL.replace(name, "").trim().to_string();
     let mut hits: Vec<&seam_scan::def_table::Def> = defs.iter().filter(|d| d.name == norm).collect();
     if hits.is_empty() {
         let lower = norm.to_lowercase();
         hits = defs.iter().filter(|d| d.name.to_lowercase() == lower).collect();
+    }
+    // A NAME MAY BE A FILE OR A DIRECTORY, not a symbol — `resolve_name` below already knows this and
+    // `locate_name` did not, so the two disagreed. An agent orienting from a prose task often holds a MODULE
+    // name: on cal.com `handleNewBooking` is a directory of ~30 files, and `--locate handleNewBooking` found
+    // nothing and sent the caller to grep. Fall back to path matching so a module name resolves to the defs it
+    // contains, ranked by the same non-test-first rule.
+    if hits.is_empty() {
+        let base = EXT_TAIL.replace(norm.split('/').next_back().unwrap_or(&norm), "").to_lowercase();
+        if !base.is_empty() {
+            let seg = format!("/{base}/");
+            let file_stem = format!("/{base}.");
+            hits = defs.iter().filter(|d| {
+                let f = d.file.to_lowercase();
+                f.contains(&seg) || f.contains(&file_stem)
+            }).collect();
+        }
     }
     // NON-TEST FIRST, then stable by path — the same ordering `resolve_name` uses, so `--locate`'s first row is
     // the one the router would have chosen. A caller comparing the two must not see them disagree.
