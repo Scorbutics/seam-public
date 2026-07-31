@@ -402,3 +402,27 @@ seventh time in this project a check would have passed without the thing it chec
 
 `snippet-coverage.ts` reports, per shape, how many cited locations carry code — the number a renderer change has
 to move, and a gate against a shape quietly going back to bare pointers.
+
+### The second CONTENT gap: the budget was spent where the render says NOT to look
+
+`snippet-coverage.ts` reported `--query impact` at 27 cited / 0 with code. Half of that was a harness bug — the
+per-file rollup states the file in a group heading and cites only the line (`getBugReportStatusBadge (:250)`), a
+form the coverage regex did not count. The shape snippets that section fine.
+
+The other half was real, and worse than a missing snippet. `## Surface` — the section whose own heading says
+**"re-verify here"** — rendered 27 citations with zero source text, because the 25-citation cap was consumed
+first by the rollup above it, on hop-2 leaves. The render was instructing the reader to verify while withholding
+the evidence.
+
+Fixed by RESERVING the surface's snippets before the rollup runs, not by throttling the rollup. The first attempt
+did throttle — one snippet per file — and the CLI snapshot caught it immediately: on a small fixture, whose
+surface is far too small to starve anything, real call sites vanished from files with two or three impacted
+symbols. A strict loss, bought for nothing. Reserving costs nothing under the cap (the reader memoises by
+`(file, line)`) and only bites when the budget is scarce, which is when priority matters. On the private-app anchor the
+surface went 0 → 125 snippet lines with the rollup keeping 75; on the fixtures, byte-identical output.
+
+`ts/test/codebase/impact_snippet_budget.test.ts` rejects BOTH wrong versions. Its first fixture did not: it put
+one impacted symbol per file, under which "one snippet per file" and "every snippet" are the same output, so it
+passed on the throttling variant it existed to reject. Two symbols per file, and it fails 2 of 4. **A fixture
+that cannot distinguish the fix from the bug is the null-answer trap in a different hat** — the eighth instance
+in this project, and the second in this session.

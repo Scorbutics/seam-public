@@ -35,7 +35,11 @@ const measure = (out: string) => {
   const lines = out.split("\n");
   let cites = 0, covered = 0, pending = false;
   for (const l of lines) {
-    if (/\([\w./@-]+\.\w{1,5}:\d+\)/.test(l)) { cites++; pending = true; continue; }
+    // BOTH citation forms, or this undercounts. `impact`'s per-file rollup states the file in a group heading
+    // and cites only the line — `getBugReportStatusBadge (:250)` (render/shapes.ts `atLine`). Counting only the
+    // full `file:line` form scored that whole section as uncited and reported impact at 0% coverage when it in
+    // fact snippets every entry. The harness was wrong, not the shape; the real impact defect is below.
+    if (/\([\w./@-]+\.\w{1,5}:\d+\)/.test(l) || /\(:\d+\)/.test(l)) { cites++; pending = true; continue; }
     if (/^\s+\d+\s*[│>]/.test(l) && pending) { covered++; pending = false; }
   }
   return { cites, covered };

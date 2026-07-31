@@ -333,6 +333,22 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
   const SURFACE = cap ? (caps.surface ?? 40) : 0;
   const byHop = (a: any, b: any) => (a.hop ?? 0) - (b.hop ?? 0) || String(a.symbol).localeCompare(String(b.symbol));
 
+  // RESERVE THE SURFACE'S SNIPPETS BEFORE THE ROLLUP SPENDS THE BUDGET. `## Surface` is the section whose own
+  // heading says "re-verify here", and it was rendering 27 citations with ZERO source text: the 25-citation cap
+  // (render/snippets.ts) was consumed entirely by the per-file rollup above it, on hop-2 leaves. The render was
+  // instructing the reader to verify while withholding the evidence.
+  //
+  // Reserving, not throttling. The first attempt capped the rollup at one snippet per file, and on a small
+  // answer — where the budget was never under pressure — that was a STRICT LOSS: the CLI snapshot showed real
+  // call sites disappearing from files with two or three impacted symbols, buying nothing, because the fixture
+  // has no surface large enough to starve. Pre-computing here costs nothing when the budget is ample (the reader
+  // memoises by (file, line), so a citation billed here is free if the rollup cites it again) and only bites
+  // when it is scarce, which is exactly when the priority matters. `SURFACE` already bounds this list, so it
+  // cannot run away with the budget in the other direction.
+  const surfAll: any[] = model.surface ?? [];
+  const shownSurf = SURFACE ? surfAll.slice(0, SURFACE) : surfAll;
+  const surfSnips = new Map<any, string>(shownSurf.map((m: any) => [m, snip(sr, m.file, m.line)]));
+
   const files: any[] = model.files ?? [];
   const shownFiles = FILES ? files.slice(0, FILES) : files;
   out.push("## Affected (by file — update these)");
@@ -350,12 +366,10 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
       `  (counts above are complete; --emit-seams carries every entry, SEAM_IMPACT_RENDER_CAP=0 prints them all)`);
   }
   out.push("");
-  if ((model.surface ?? []).length) {
+  if (surfAll.length) {
     out.push("## Surface (outermost callers — where the change ripples to; re-verify here)");
-    const surf: any[] = model.surface;
-    const shownSurf = SURFACE ? surf.slice(0, SURFACE) : surf;
-    for (const m of shownSurf) out.push(`- ${m.symbol} (${at(m.file, m.line)})` + snip(sr, m.file, m.line));
-    if (surf.length > shownSurf.length) out.push(`- … +${surf.length - shownSurf.length} more outermost caller(s) — elided from this render`);
+    for (const m of shownSurf) out.push(`- ${m.symbol} (${at(m.file, m.line)})` + (surfSnips.get(m) ?? ""));
+    if (surfAll.length > shownSurf.length) out.push(`- … +${surfAll.length - shownSurf.length} more outermost caller(s) — elided from this render`);
     out.push("");
   }
   if ((model.crossStack ?? []).length) {
@@ -364,6 +378,10 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
     out.push("");
   }
   out.push(...crossStackTruncationLines(model.crossStackTruncations));
+  // Declare the budget here too. Without it a reader sees some entries carrying code and others not, with
+  // nothing distinguishing them, and the natural reading is "Seam could not resolve those" — the opposite of
+  // the truth. Same reason it is declared on the edge-set and contract shapes.
+  out.push(...snippetCapLines(sr));
   if ((model.gaps ?? []).length) {
     out.push("## Gaps (opaque callers — the impact set may be INCOMPLETE here; grep these)");
     for (const g of model.gaps) out.push(`- ${g.mechanism} — ${g.evidence}`);
