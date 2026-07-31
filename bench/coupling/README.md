@@ -282,3 +282,45 @@ keycloak's two handlers are the SAME endpoint declared in a client interface and
 while the three summarize services are DIFFERENT endpoints. Deciding that needs the class-level route context
 (`/admin/realms/*` vs `/company/*`), which the floor already extracts — comparing composed ANCESTOR paths, not
 just the leaf segment, is the direction worth trying next.
+
+### The signal that separates every case: CORROBORATION, measured (2026-07-31)
+
+The ancestor-path idea, chased to a concrete and testable form. Not yet implemented — the measurement is here so
+the implementation is a mechanical step rather than another guess.
+
+**Exact-key corroboration fails, as it must**: `RealmAdminResource.java` shares 1 exact route key with
+`realms.ts` and `RealmResource.java` shares 0, because the two sides spell keys differently — that is the
+original defect, so it cannot also be the discriminator.
+
+**FUZZY alignment separates cleanly.** Counting how many of a candidate's own routes `route_suffix_match` any of
+the anchor's routes:
+
+| candidate | aligned / total | verdict |
+|---|---|---|
+| `RealmAdminResource.java` | **17 / 40** | true counterpart |
+| `RealmResource.java` | **18 / 43** | true counterpart |
+| `IdentityProvidersResource.java` | **0 / 4** | the FALSE pair |
+
+A file that is the same API surface aligns on many routes; a coincidental word-match aligns on none. The gap is
+17-18 vs 0, so this needs no fitted constant — unlike segment rarity, whose cap had to be placed inside a
+measured gap and still broke `/summarize`.
+
+**It also resolves `/summarize`, which rarity could not.** `AnalyticsService` and `CompanyAdviserService` share
+only the one generic key with the booking caller → 0 corroboration → dropped. `BookingsService` is likewise 0 in
+that synthetic index, and stays kept by the EXISTING filename rule. So the rule is additive, not a replacement:
+
+    keep a 1-literal generic match IF (candidate filename contains a route segment)   [existing]
+                                  OR (candidate has >=1 OTHER route aligning with the anchor's routes)  [new]
+
+Every case in this file is then satisfied: keycloak's `partial-export` pair (17 aligned), the
+`route-shares-one-segment-only` decoy (0 aligned), and all three `/summarize` cases.
+
+**Why it is not implemented yet:** the check needs the ANCHOR FILE's whole key set, and `other_side` receives
+only `(kind, value, produces)` — one key at a time. The anchor's key set exists one layer up, in
+`apply/bridge.rs` (`anchor_keys`) and in the coupling shape. So this is a signature/layering change, not a
+predicate tweak, and it should be made with the decoy and the `/summarize` cases green at every step.
+
+**Note the synthetic-fixture limit found on the way:** `test/coupling/route_match.test.ts`'s `/summarize` index
+contains NO structural signal other than the filename — three files, one key, nothing else. No structural rule
+can pass it, which is why every rarity variant failed there. If the corroboration rule is ever to REPLACE the
+filename heuristic rather than supplement it, that fixture has to carry the ancestor context real code has.
