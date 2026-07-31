@@ -294,6 +294,15 @@ export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
   out.push("─".repeat(4) + " IMPACT (what breaks if you change it — TRANSITIVE, not the direct callers above) " + "─".repeat(4), renderImpact(im, sr), "");
   out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep, sr), "");
   out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct, sr));
+  // COUPLING LAST, and only when it has something to say. It is the one section here a language server cannot
+  // produce at all, so it goes in the bundle rather than waiting for the reader to know `--query coupling`
+  // exists: replaying the keycloak benchmark trace showed four rounds of coupling improvements moving an
+  // agent's cost by zero commands, purely because it never issued that query on a cross-language question.
+  // Suppressed when empty so a symbol with no cross-stack boundary does not grow a heading that says nothing.
+  const cp = model.coupling;
+  if (cp && !cp.noStructure && (cp.keys ?? []).length)
+    out.push("", "─".repeat(4) + " COUPLING (cross-stack — no import or call links these) " + "─".repeat(4),
+      renderCoupling(cp, sr));
   return out.join("\n");
 }
 

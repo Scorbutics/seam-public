@@ -664,3 +664,26 @@ and then it measures something new.
 
 Option 2 is the one to measure first: it needs no agent behaviour change at all, which is the variable this
 benchmark has repeatedly shown is the hardest to move.
+
+### Folding coupling into `brief` (2026-07-31) — shipped, and NOT yet validated
+
+`--query brief`/`--query refactor` now carry a `COUPLING (cross-stack — no import or call links these)` section,
+symbol-scoped, suppressed when empty. On a real anchor it adds 3 shared keys / 9 counterpart sites with snippets
+to a query that previously showed none. One snapshot case drifted, purely additive; 1088 TS pass.
+
+**The replay still reports RECALL 21 (70%), unchanged.** The reason is the same one that motivated the fold, one
+level down: that trace's seam invocations are `--query consumers` and `--format agent`. It never ran `brief`
+either, so folding counterparts into `brief` is as invisible to it as improving `--query coupling` was.
+
+So the fold is **correct but unmeasured**. Validating it needs one of:
+
+1. a trace where the agent runs `brief` — i.e. a new benchmark run, which is what the counterfactual was meant to
+   avoid commissioning;
+2. extending the fold to `--query consumers` and `--format agent`, the shapes agents actually reached for. Note
+   `--format agent` already has a `crossStackSection`; check whether it is gated behind `--data-coupling` before
+   assuming it is absent.
+
+Option 2 is the honest next step, and it makes the prediction sharp: if coupling counterparts appear in
+`consumers`/`agent` and RECALL *still* does not move, then the files that agent hunted were never reachable by
+coupling at all, and the RECALL bin is a recall problem in the ENGINE rather than a routing problem. That is a
+result either way, which is more than can be said for guessing.

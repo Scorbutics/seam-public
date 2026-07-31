@@ -4,9 +4,16 @@
 //!   impact       — the transitive blast radius (what breaks if X changes), the safety net
 //!   dependencies — what X uses (to preserve / rewire)
 //!   contract     — X's module boundary (what it promises + its outbound deps)
+//!   coupling     — the CROSS-STACK boundary: what shares a table/route/config key with X, with no import or
+//!                  call edge to follow. Added 2026-07-31 for a measured reason: replaying the keycloak
+//!                  benchmark trace against a much-improved coupling shape moved the agent's RECALL cost by
+//!                  ZERO commands, because that agent never ran `--query coupling` — on a cross-language
+//!                  question, which is the one class coupling exists for. Shape SELECTION was upstream of
+//!                  shape quality, so the answer is to put the counterparts where the agent already looks.
 //! NOT a new analysis — just the existing shapes, composed. Port of grow/refactor_facts.ts.
 
 use crate::contract::{project_contract, ModuleContract};
+use crate::coupling_shape::{project_coupling, CouplingSet};
 use crate::impact::{project_impact, Impact, ImpactOpts};
 use crate::project_set::{project_dependency_set, ConsumerSet};
 use seam_scan::build_footprint;
@@ -18,6 +25,9 @@ pub struct RefactorFacts {
     pub impact: Impact,
     pub dependencies: ConsumerSet,
     pub contract: ModuleContract,
+    /// SYMBOL-SCOPED, not whole-file: `brief` is about the anchor, and a file-wide key scan would attribute
+    /// every table its module touches to this one symbol.
+    pub coupling: CouplingSet,
 }
 
 pub fn gather_refactor_facts(repo: &str, anchor_file: &str, symbol: &str) -> RefactorFacts {
@@ -42,6 +52,7 @@ pub fn gather_refactor_facts(repo: &str, anchor_file: &str, symbol: &str) -> Ref
         },
     };
     let contract = project_contract(repo, anchor_file);
+    let coupling = project_coupling(repo, anchor_file, Some(symbol));
     RefactorFacts {
         shape: "refactor".to_string(),
         anchor_symbol: symbol.to_string(),
@@ -49,5 +60,6 @@ pub fn gather_refactor_facts(repo: &str, anchor_file: &str, symbol: &str) -> Ref
         impact,
         dependencies,
         contract,
+        coupling,
     }
 }

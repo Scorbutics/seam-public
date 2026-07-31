@@ -1112,6 +1112,9 @@ pub struct RefactorFactsDto {
     pub impact: ImpactDto,
     pub dependencies: ConsumerSetDto,
     pub contract: ModuleContractDto,
+    /// The CROSS-STACK boundary, symbol-scoped. Present so an agent asking `--query brief` gets the couplings
+    /// without knowing to ask for them — see the note on `seam_shapes::RefactorFacts::coupling`.
+    pub coupling: CouplingSetDto,
 }
 
 /// gatherRefactorFacts — the composed FACTS bundle (impact + dependencies + contract) in one call.
@@ -1125,6 +1128,7 @@ pub fn gather_refactor_facts(repo: String, anchor_file: String, symbol: String) 
         impact: f.impact.into(),
         dependencies: f.dependencies.into(),
         contract: f.contract.into(),
+        coupling: coupling_dto(f.coupling),
     }
 }
 
@@ -2464,7 +2468,12 @@ pub struct CouplingSetDto {
 /// sites on the other side. `symbol` scopes the key scan to that symbol's span; omit for the whole file.
 #[napi]
 pub fn project_coupling(repo: String, anchor_file: String, symbol: Option<String>) -> CouplingSetDto {
-    let c = seam_shapes::project_coupling(&repo, &anchor_file, symbol.as_deref());
+    coupling_dto(seam_shapes::project_coupling(&repo, &anchor_file, symbol.as_deref()))
+}
+
+/// One conversion, two callers — `projectCoupling` and the `coupling` leg of `gatherRefactorFacts`. Inlining it
+/// twice is how the two would drift into reporting the same shape differently.
+fn coupling_dto(c: seam_shapes::CouplingSet) -> CouplingSetDto {
     CouplingSetDto {
         shape: c.shape,
         anchor_symbol: c.anchor_symbol,

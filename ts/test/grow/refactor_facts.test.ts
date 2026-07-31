@@ -26,6 +26,8 @@ describe("gatherRefactorFacts", () => {
   test("it is FACTS only — there is no plan field (the plan is the model's judgement)", async () => {
     const rf = await gatherRefactorFacts(repo, "src/checkout.ts", "checkout") as any;
     expect(rf.plan).toBeUndefined();
-    expect(Object.keys(rf).sort()).toEqual(["anchor", "contract", "dependencies", "impact", "shape"]);
+    // `coupling` joined the bundle on 2026-07-31 and is a FACT, so the intent of this case is unchanged: the
+    // assertion is that no JUDGEMENT (a plan) leaks in, not that the fact set never grows.
+    expect(Object.keys(rf).sort()).toEqual(["anchor", "contract", "coupling", "dependencies", "impact", "shape"]);
   });
 });

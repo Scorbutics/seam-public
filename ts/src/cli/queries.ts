@@ -86,6 +86,7 @@ export const rustReachToModel = (r: any): any => ({
 export const rustRefactorToModel = (r: any): any => ({
   shape: "refactor", anchor: anchorOf(r),
   impact: rustImpactToModel(r.impact), dependencies: rustSetToModel(r.dependencies), contract: rustContractToModel(r.contract),
+  coupling: rustCouplingToModel(r.coupling),
 });
 
 const rustWritersToModel = (r: any): any => ({
