@@ -868,6 +868,45 @@ rejected. Then, routing "where does X touch the database" → `--query coupling`
 that omitted the anchor's own write, so it would have measured flat. Now the shape can answer it. **The two
 changes are only useful together, and I shipped them in the order that makes each individually unmeasurable.**
 
+### Re-run with the routing fixed (2026-08-01, n=3) — the mechanism engages
+
+The cause of those zeros was not ranking or distrust. **§D of SKILL.md listed eight shapes; `QUERY_HANDLERS`
+dispatches eleven.** `coupling`, `writers` and `brief` were missing from the catalogue the agent was handed, so
+it could not ask for them. Three rounds of engine work had landed inside that gap. Both skills now list all
+three and route a database question to `coupling` explicitly; `skill_documents_every_shape.test.ts` reads the
+registry from source and fails if they drift again.
+
+| | ARM GREP | ARM SEAM |
+|---|---|---|
+| tool calls, median | 25 (12–26) | **11 (8–20)** |
+| paired, per run | 26 / 12 / 25 | **8 / 11 / 20** |
+| wall clock, median | 91s | 118s |
+
+**What is solid is the mechanism, not the median.** Per run, before → after the skill fix:
+
+| | `--query brief` | `--query coupling` | reads of `createBooking.ts` | write line reached the agent FROM SEAM |
+|---|---|---|---|---|
+| own-r1/2/3 (before) | 0, 0, 0 | 0, 0, 0 | 2, 2, 6 | **0, 0, 0** |
+| route-r1/2/3 (after) | 4, 3, 3 | 0, 1, 3 | **0, 0, 2** | **1, 1, 2** |
+
+All three answers now name `tx.booking.create` — the actual write — and in two of the three the agent never
+opened the file to get it. That last column is the whole chain working end to end: the skill names `brief`,
+`brief` folds in coupling, coupling now carries `own_sites`, and `own_sites` ships the source line. Before, the
+write reached the agent only by opening the file; now it arrives in the tool output.
+
+**The call-count medians are NOT claimed as an effect.** SEAM's median went 20 → 14 → 11 across the two changes,
+but the spread is 12 and the aggregate script's own rule forbids reading a move smaller than the spread. The
+control makes that concrete: **ARM GREP's median went 20 → 25 over the same period with no change to its arm at
+all.** That is the size of the noise. What survives it is the paired comparison — SEAM lower in 3 of 3 runs here,
+5 of 6 across both configurations — and, far more convincingly, the mechanism table above, which is a count of
+whether a thing happened rather than a difference between two noisy numbers.
+
+**The lesson is about ordering, not about coupling.** `own_sites` was correct, tested, and worth nothing on its
+own; the skill line was three sentences and worth nothing on its own. Shipped together they change what the
+agent does. Every "the engine improved but the benchmark did not move" result in this file since run 3 has had
+the same shape, and the check that distinguishes it — *grep the prior traces for the query you just improved* —
+costs one command and was not run for three rounds.
+
 Also found, and it is apparatus rather than result: `own-r3.B` was charged 2 calls for `TaskCreate`/`TaskUpdate`,
 session-inherited tools that are not agent work. `DENY_B`/`DENY_A` list `Agent Task ScheduleWakeup ToolSearch`
 but not the `Task*` family, so r3's 22 is really 20. It does not change the conclusion — nothing does, when the
