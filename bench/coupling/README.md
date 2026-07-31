@@ -247,3 +247,38 @@ heuristic encodes a Next.js/file-routing assumption that does not hold for annot
 The discriminating power should come from the SEGMENT (is `partial-export` rare across the index? yes;
 is `providers`? no), not from the filename. That is a design change, and it must be measured against
 `route-shares-one-segment-only` — which exists precisely because loosening this is how invented edges return.
+
+### Segment rarity: a large verified win that does NOT ship, and why
+
+Replacing the filename heuristic with SEGMENT RARITY was measured, worked on the target case, and was reverted.
+Recording it in full because the win is real and the blocker is specific.
+
+**Measured on keycloak (657 distinct route keys):** every true cross-stack pair sits at 2 keys —
+`partial-export`, `partialImport`, `logout-all`, `client-session-stats` — the word that produced the false edge,
+`providers`, at 6, and generic nouns at 9-34 (`users` 9, `admin` 30, `clients` 30, `realms` 34). A cap of 4 sits
+in the gap.
+
+**Result on `realms.ts`: no-counterpart 20/25 → 4/25, counterpart sites 6 → 45.** Spot-checked as REAL, not
+invented: `client-session-stats` resolves to `getClientSessionStats` in both Java resources that serve it
+(ground truth: 2 Java files, 1 TS), `logout-all` likewise. The original false edge
+(`IdentityProvidersResource.getIdentityProviders`) stayed absent, and `bench/coupling` held at 7/7 positives,
+0/5 false discoveries.
+
+**Why it was reverted:** it breaks the `/summarize` suppression in `test/coupling/route_match.test.ts`. There a
+single generic key `/summarize/*/*` is served by three unrelated services, and a caller must ground only to its
+own. Rarity counts KEYS, so `summarize` reads as frequency 1 — maximally rare — and all three are kept. The two
+cases are structurally alike (a short literal shared by a handful of handlers) and differ only in the signal the
+old rule used: the caller's route contains `booking` and the file is `BookingsService.java`.
+
+Combinations tried and rejected, each breaking something already asserted:
+- rarity OR filename → `/summarize` siblings still kept (rarity alone admits them).
+- rarity AND matched-key file fan-out ≤ cap → drops keycloak's `partial-export` (2 handlers) too.
+- overlap RATIO (shared literals / max literals) → separates these two, but kills the documented motivating
+  case `/api/booking/summarize/*/*` vs `/summarize/*/*` (ratio 1/3), which has its own passing test.
+
+Any threshold that separates `/summarize` (3 files, 1 key) from `partial-export` (2 files, 2 keys) is fitted to
+two data points. **The missing signal is probably not statistical**: what actually distinguishes them is that
+keycloak's two handlers are the SAME endpoint declared in a client interface and its server implementation,
+while the three summarize services are DIFFERENT endpoints. Deciding that needs the class-level route context
+(`/admin/realms/*` vs `/company/*`), which the floor already extracts — comparing composed ANCESTOR paths, not
+just the leaf segment, is the direction worth trying next.
