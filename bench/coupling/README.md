@@ -176,3 +176,38 @@ change. A harness that cannot see a change must not be quoted as evidence that t
 Recall did not move, as expected — the same pair still resolves Java→TS and not TS→Java, because the bridge
 searches for the key as the ANCHOR spells it. That is a separate defect from the matcher, and it is the one
 that owns the remaining 20 of 25.
+
+### The asymmetry: what was tried, what was learned, what did NOT work (2026-07-31)
+
+Recorded as a NEGATIVE RESULT so the next attempt starts here instead of re-deriving it. No code from this
+investigation shipped, because none of it moved a measurement.
+
+**Two gates were found, both real:**
+
+1. *Candidate selection.* `apply/bridge.rs` greps for the key AS THE ANCHOR SPELLS IT. A JAX-RS method's
+   `/partial-export` is a substring of the client's `"/{realm}/partial-export"` and finds it; the client's
+   normalised `/*/partial-export` contains a `*` that is in no source file and finds nothing.
+2. *Complementary match.* Having selected a candidate, the bridge requires `h.value == value` — EXACT string
+   equality. `/partial-export` and `/*/partial-export` are the same route in two spellings, and `==` says no.
+
+**Both were fixed, and neither changed any measurement.** `bench/coupling` stayed 7/7 positives and 0/5 false
+discoveries with and without them; keycloak's `realms.ts` stayed at 20 of 25 keys with no counterpart. So a
+THIRD gate dominates, and it was not found. The changes were reverted rather than committed: a plausible fix
+that moves nothing is exactly what this project has already shipped three times.
+
+**The decisive observation for whoever picks this up: the asymmetry REVERSES.**
+
+| | TS → Java | Java → TS |
+|---|---|---|
+| keycloak `partial-export` | ✗ | ✓ |
+| `bench/coupling` fixture, same shape | ✓ | ✗ |
+
+So it is NOT a fixed direction, and not "the front-end direction is broken". It depends on which side's key
+string happens to contain the other's, which means the remaining gate is upstream of both fixes above —
+in how each side's key is EXTRACTED, not in how the two are compared. Note that the fixture's Java file yields
+a `partial-export` hit when scanned as a CANDIDATE (the render cites it at line 11) but not, apparently, when
+it is the ANCHOR. Anchor-key extraction and candidate-key scanning disagreeing on the same file is the next
+thing to check.
+
+**A symmetry invariant is the test worth writing first**: for every pair (A, B) linked by key K, coupling(A)
+must contain B and coupling(B) must contain A. That turns a defect nobody would notice into a gate.
