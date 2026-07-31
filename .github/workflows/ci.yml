@@ -27,6 +27,31 @@ jobs:
       - name: Install deps (engine + extension)
         run: make install
 
+      # BUILD THE NATIVE CORE, without which this job cannot pass and never could.
+      #
+      # `ts/src/codebase/rust_core.ts` loads `rust/seam_core.node`, and since the TypeScript scan layer was
+      # deleted there is no fallback — every test that touches a shape dies on the missing module. This workflow
+      # had no Rust toolchain and no cargo step, so it had been red at 431 fail / 84 errors, i.e. it was not
+      # measuring the code at all. A gate nobody can read is worse than no gate: it trains everyone to ignore
+      # the one signal that would have caught a real regression.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build the native core
+        working-directory: rust
+        run: |
+          cargo build --release -p seam-napi
+          cp target/release/libseam_napi.so seam_core.node
+
+      # Prove the core LOADS before running a suite whose failures would otherwise all look like logic bugs.
+      - name: Core smoke
+        run: |
+          bun ts/src/cli/decompose.ts --locate loadAddon --repo . | tee /tmp/core.txt
+          grep -q "rust_core.ts" /tmp/core.txt
+
       - name: Typecheck + unit tests
         run: make test
 
