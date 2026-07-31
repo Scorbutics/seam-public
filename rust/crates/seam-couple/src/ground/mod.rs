@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, Mutex};
 
-pub use other_side::{other_side, other_side_scored};
+pub use other_side::{other_side, other_side_scored, other_side_scored_with_context};
 
 /// The repo-wide index: `keyId` → who writes it (producers) / reads it (consumers). Insertion-ordered (JS
 /// `Map` semantics) — `other_side` emits complements in the order the floor walk discovered them. Port of

@@ -16,6 +16,56 @@ const HTTP_ROUTE: &str = "http-route";
 // A generic 1-literal route match is a coupling ONLY if it grounds to at most this many files — a SOLE mount.
 const GENERIC_ROUTE_FANOUT_CAP: usize = 1;
 
+/// Every http-route value each file touches, from the grounding index. Built once per call and only when the
+/// generic fallback is actually reached, so the common paths pay nothing.
+fn file_route_values(index: &GroundingIndex) -> std::collections::HashMap<String, HashSet<String>> {
+    let mut out: std::collections::HashMap<String, HashSet<String>> = std::collections::HashMap::new();
+    for (k, sides) in index.iter() {
+        let Some(val) = k.strip_prefix("http-route ") else { continue };
+        for a in sides.producers.iter().chain(sides.consumers.iter()) {
+            out.entry(a.file.clone()).or_default().insert(val.to_string());
+        }
+    }
+    out
+}
+
+/// CORROBORATION — does this candidate look like the same API SURFACE as the anchor, or did it merely share one
+/// generic word?
+///
+/// A 1-literal route match is weak on its own. What makes it credible is the REST of the candidate's routes: a
+/// file that really serves the anchor's API aligns with it on many paths, while a coincidental word-match aligns
+/// on none. Measured on keycloak against `realms.ts`:
+///
+///   RealmAdminResource.java      17 of 40 routes aligned   (true counterpart)
+///   RealmResource.java           18 of 43 routes aligned   (true counterpart)
+///   IdentityProvidersResource     0 of  4 routes aligned   (the FALSE pair Seam used to emit)
+///
+/// 17-18 against 0 is why this needs no tuned threshold, unlike the segment-rarity attempt that preceded it
+/// (which had to place a cap inside a measured gap and still broke the `/summarize` suppression).
+///
+/// The CURRENT key is excluded from both sides — otherwise every match trivially corroborates itself.
+fn corroborated(
+    index: &GroundingIndex,
+    by_file: &std::collections::HashMap<String, HashSet<String>>,
+    candidate_file: &str,
+    current_value: &str,
+    anchor_routes: &[String],
+) -> bool {
+    let _ = index;
+    if anchor_routes.is_empty() {
+        return false; // no context supplied → this keeper simply does not apply
+    }
+    let Some(cand) = by_file.get(candidate_file) else { return false };
+    cand.iter()
+        .filter(|v| v.as_str() != current_value && !is_bare_wildcard_route(v))
+        .any(|cv| {
+            anchor_routes
+                .iter()
+                .filter(|av| av.as_str() != current_value && !is_bare_wildcard_route(av))
+                .any(|av| route_match_specificity(cv, av) >= 1)
+        })
+}
+
 /// A complement access + the SPECIFICITY of the route it matched on (exact = its full literal count; fuzzy
 /// suffix = its shared-literal count; non-route = 0). Port of the `{access, spec}` pair.
 pub struct Scored {
@@ -32,7 +82,7 @@ pub struct Scored {
 }
 
 /// The SCORED counterpart lookup. Port of `otherSideScored`.
-pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produces: bool) -> Vec<Scored> {
+pub fn other_side_scored_with_context(index: &GroundingIndex, kind: &str, value: &str, produces: bool, anchor_routes: &[String]) -> Vec<Scored> {
     // A CONFIG KEY IS SYMMETRIC, and it is the only kind here that is. A table couples a WRITER to a READER and
     // a route couples a CALLER to a HANDLER, so returning the complement is exactly right for both. But two
     // stacks READING the same environment variable are coupled to each other with nobody writing it at all —
@@ -116,8 +166,14 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
             return out;
         }
         let segs: Vec<String> = route_segs(value).iter().filter(|x| **x != "*" && x.len() >= 4).map(|s| s.to_lowercase()).collect();
+        // TWO keepers, ADDITIVE. The filename rule stays: it is the only signal in the `/summarize` case, whose
+        // index holds three files, one key and nothing else, so no structural rule can decide it. Corroboration
+        // adds the case that rule cannot see — an annotation-routed backend whose filename never mirrors its
+        // routes, which is what left keycloak at 20 of 25 keys unresolved.
+        let by_file = file_route_values(index);
         for g in generics {
-            if segs.iter().any(|seg| g.access.file.to_lowercase().contains(seg)) {
+            let name_match = segs.iter().any(|seg| g.access.file.to_lowercase().contains(seg));
+            if name_match || corroborated(index, &by_file, &g.access.file, value, anchor_routes) {
                 out.push(g);
             }
         }
@@ -128,4 +184,72 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
 /// The counterpart accesses (score dropped). Port of `otherSide`.
 pub fn other_side(index: &GroundingIndex, kind: &str, value: &str, produces: bool) -> Vec<Access> {
     other_side_scored(index, kind, value, produces).into_iter().map(|s| s.access).collect()
+}
+
+/// Back-compatible entry point: no anchor context, so the corroboration keeper does not apply and behaviour is
+/// exactly as before. Callers that KNOW the anchor's own routes (the coupling shape, the bridge) should use
+/// `other_side_scored_with_context` and get the extra recall.
+pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produces: bool) -> Vec<Scored> {
+    other_side_scored_with_context(index, kind, value, produces, &[])
+}
+
+#[cfg(test)]
+mod corroboration_tests {
+    use super::*;
+    use crate::types::{Access, KeySides};
+
+    fn idx(entries: &[(&str, &[&str], &[&str])]) -> GroundingIndex {
+        let mut m = GroundingIndex::new();
+        for (k, prods, cons) in entries {
+            m.insert((*k).to_string(), KeySides {
+                producers: prods.iter().map(|f| Access { file: (*f).to_string(), line: 1 }).collect(),
+                consumers: cons.iter().map(|f| Access { file: (*f).to_string(), line: 1 }).collect(),
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn a_candidate_sharing_the_wider_api_surface_is_corroborated() {
+        // The keycloak shape: the handler serves several routes the client also calls, so a weak 1-literal
+        // match on one of them is credible. Measured for real at 17/40 and 18/43 aligned.
+        let index = idx(&[
+            ("http-route /partial-export", &["Res.java"], &[]),
+            ("http-route /logout-all", &["Res.java"], &[]),
+            ("http-route /*/logout-all", &[], &["client.ts"]),
+        ]);
+        let by_file = file_route_values(&index);
+        let anchor: Vec<String> = vec!["/*/partial-export".into(), "/*/logout-all".into()];
+        assert!(corroborated(&index, &by_file, "Res.java", "/*/partial-export", &anchor));
+    }
+
+    #[test]
+    fn a_candidate_sharing_only_the_one_generic_word_is_not() {
+        // The `/summarize` shape: nothing else about this file lines up with the caller's API.
+        let index = idx(&[
+            ("http-route /summarize/*/*", &["AnalyticsService.java"], &[]),
+            ("http-route /reports/*", &["AnalyticsService.java"], &[]),
+        ]);
+        let by_file = file_route_values(&index);
+        let anchor: Vec<String> = vec!["/manage/rest/booking/summarize/0/*".into()];
+        assert!(!corroborated(&index, &by_file, "AnalyticsService.java", "/manage/rest/booking/summarize/0/*", &anchor));
+    }
+
+    #[test]
+    fn without_anchor_context_the_keeper_does_not_apply() {
+        // `other_side_scored` (no context) must behave exactly as before — the wrapper relies on this.
+        let index = idx(&[("http-route /a/thing", &["X.java"], &[])]);
+        let by_file = file_route_values(&index);
+        assert!(!corroborated(&index, &by_file, "X.java", "/a/thing", &[]));
+    }
+
+    #[test]
+    fn a_key_cannot_corroborate_itself() {
+        // Without excluding the current key every match would trivially self-corroborate and the keeper would
+        // admit everything — the failure mode that makes a "signal" indistinguishable from no rule at all.
+        let index = idx(&[("http-route /*/partial-export", &["Only.java"], &[])]);
+        let by_file = file_route_values(&index);
+        let anchor: Vec<String> = vec!["/*/partial-export".into()];
+        assert!(!corroborated(&index, &by_file, "Only.java", "/*/partial-export", &anchor));
+    }
 }

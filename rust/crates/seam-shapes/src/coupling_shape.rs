@@ -9,7 +9,7 @@
 //! answer reads as a boundary rather than a list.
 
 use seam_couple::apply::columns::{access_columns, symbol_span};
-use seam_couple::{floor_base_index, other_side_scored, scan_file_keys, MaskCtx};
+use seam_couple::{floor_base_index, other_side_scored_with_context, scan_file_keys, MaskCtx};
 use seam_lang::Ctx;
 use std::collections::{HashMap, HashSet};
 
@@ -82,6 +82,14 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
     let idx = floor_base_index(repo);
     let mut parse_cache: HashMap<String, Option<Ctx>> = HashMap::new();
     let mut keys: Vec<CouplingKey> = Vec::new();
+    // THE ANCHOR'S OWN ROUTES, passed down so a weak 1-literal match can be corroborated against the rest of
+    // this file's API surface rather than judged on the candidate's FILENAME alone. See `corroborated` in
+    // ground/other_side.rs for the measurement that motivated it.
+    let anchor_routes: Vec<String> = own
+        .iter()
+        .filter(|(kind, _, _, _)| kind == "http-route")
+        .map(|(_, value, _, _)| value.clone())
+        .collect();
     for (kind, value, reads, writes) in &own {
         let mut sides: Vec<CouplingSide> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -96,7 +104,7 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
             if (pass == "p" && !reads) || (pass == "c" && !writes) {
                 continue;
             }
-            for s in other_side_scored(&idx.floor_base, kind, value, produces) {
+            for s in other_side_scored_with_context(&idx.floor_base, kind, value, produces, &anchor_routes) {
                 let acc = &s.access;
                 if acc.file == anchor_file {
                     continue;

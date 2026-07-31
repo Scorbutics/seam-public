@@ -23,7 +23,7 @@ pub use apply::{resolve_coupling, resolve_coupling_scoped, CouplingResult};
 pub use apply::pipeline::tunables;
 pub use apply::bridge::{anchor_counterparts, coupling_other_sides, grep_files, AnchorCounterpart, BridgeCtx, CouplingOtherSide, Truncation};
 pub use apply::columns::{access_columns, access_columns_in, symbol_span, AccessColumns};
-pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};
+pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, other_side_scored_with_context, FloorIndices, GroundingIndex};
 pub use grounding::file_store_write_count;
 pub use learn::{load_matchers, run_matcher, run_matcher_at, KeyMatcher};
 pub use learn::{learn_matchers, LearnOutcome};

@@ -315,7 +315,7 @@ that synthetic index, and stays kept by the EXISTING filename rule. So the rule 
 Every case in this file is then satisfied: keycloak's `partial-export` pair (17 aligned), the
 `route-shares-one-segment-only` decoy (0 aligned), and all three `/summarize` cases.
 
-**Why it is not implemented yet:** the check needs the ANCHOR FILE's whole key set, and `other_side` receives
+**IMPLEMENTED (see below).** The original blocker, kept for the record: the check needs the ANCHOR FILE's whole key set, and `other_side` receives
 only `(kind, value, produces)` — one key at a time. The anchor's key set exists one layer up, in
 `apply/bridge.rs` (`anchor_keys`) and in the coupling shape. So this is a signature/layering change, not a
 predicate tweak, and it should be made with the decoy and the `/summarize` cases green at every step.
@@ -324,3 +324,28 @@ predicate tweak, and it should be made with the decoy and the `/summarize` cases
 contains NO structural signal other than the filename — three files, one key, nothing else. No structural rule
 can pass it, which is why every rarity variant failed there. If the corroboration rule is ever to REPLACE the
 filename heuristic rather than supplement it, that fixture has to carry the ancestor context real code has.
+
+### Corroboration: IMPLEMENTED and measured (2026-07-31)
+
+`other_side_scored_with_context` takes the anchor's own route values; the coupling shape passes them. The
+generic 1-literal fallback now has TWO additive keepers — the existing filename rule, and corroboration.
+
+**keycloak `realms.ts`:**
+
+| | before | segment rarity (reverted) | corroboration |
+|---|---|---|---|
+| route keys with no counterpart | 20 / 25 | 4 / 25 | **2 / 25** |
+| counterpart sites | 6 | 45 | **58** |
+| `bench/coupling` decoys false | 0 / 5 | 0 / 5 | **0 / 5** |
+| `/summarize` suppression | green | **BROKEN** | **green** |
+
+Better recall than rarity achieved, and without the regression that made rarity unshippable. Precision
+spot-checked against the repo rather than assumed — `ldap-server-capabilities` (java 2 / ts 1),
+`testSMTPConnection` (2 / 2), `users-management-permissions` (1 / 1), `client-session-stats` (2 / 1) all exist
+on both sides, and the original false pair (`IdentityProvidersResource`) stays absent.
+
+Gates: 1088 TS pass / 0 fail, Rust 113 + 6, CLI snapshot byte-identical.
+
+Two properties worth keeping in mind when touching this: the current key is excluded from both sides, or every
+match self-corroborates and the keeper degenerates into "admit everything"; and `other_side_scored` without
+context is unchanged, so callers that do not know the anchor's routes keep the old, stricter behaviour.
