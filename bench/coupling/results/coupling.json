@@ -96,7 +96,7 @@
   {
     "kind": "decoy",
     "id": "route-shares-one-segment-only",
-    "seamFalse": 1,
+    "seamFalse": 0,
     "grepFalse": 0,
     "vacuous": false
   }

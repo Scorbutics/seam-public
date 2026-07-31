@@ -78,7 +78,23 @@ pub fn route_match_specificity(a: &str, b: &str) -> i64 {
             }
             i += 1;
         }
-        if (i == short.len() || off + i == long.len()) && i >= 1 {
+        // THE SHORTER ROUTE MUST BE FULLY CONTAINED. The `|| off + i == long.len()` clause that used to sit
+        // here accepted an alignment that merely RAN OFF THE END of the longer route — so a route whose tail
+        // happened to equal the other's head scored a match on one shared segment.
+        //
+        // That is not hypothetical: on keycloak it linked the admin client's
+        // `/{realm}/client-registration-policy/providers` to `@Path("/providers/{provider_id}")`, two unrelated
+        // resources sharing only the word `providers`. `bench/coupling`'s `route-shares-one-segment-only` decoy
+        // is exactly that pair.
+        //
+        // Raising the literal threshold to 2 would NOT separate them — the true pair
+        // (`/*/partial-export` vs a method-level `/partial-export`) also shares exactly one literal segment.
+        // Containment is what distinguishes them: a method-level path IS a contiguous slice of the full URL,
+        // while `/providers/*` extends past the end of the route it is claimed to match.
+        //
+        // The documented motivating case still holds: `/api/booking/summarize/*/*` vs `/summarize/*/*` consumes
+        // the short route completely at offset 2.
+        if i == short.len() && i >= 1 {
             best = best.max(lit);
         }
     }
@@ -263,6 +279,38 @@ impl CouplingAdapter for HttpRoute {
 
 #[cfg(test)]
 mod tests {
+    use super::{route_suffix_match, route_match_specificity};
+
+    #[test]
+    fn a_method_level_path_matches_the_full_client_url() {
+        // The TRUE pair from keycloak: the client composes `/{realm}/partial-export` and the JAX-RS method
+        // declares only `partial-export`. The short route is a contiguous slice of the long one.
+        assert!(route_suffix_match("/*/partial-export", "/partial-export"));
+        assert!(route_suffix_match("/partial-export", "/*/partial-export"), "must be SYMMETRIC in its arguments");
+    }
+
+    #[test]
+    fn sharing_one_segment_that_runs_off_the_end_is_not_a_match() {
+        // THE DECOY, and the pair Seam actually linked on keycloak. `providers` is the last segment of the
+        // client route and the FIRST of the handler's, so the old `off + i == long.len()` clause accepted it.
+        // `/providers/*` is not contained in the client route: its trailing `*` aligns with nothing.
+        assert!(!route_suffix_match("/*/client-registration-policy/providers", "/providers/*"));
+        assert!(!route_suffix_match("/providers/*", "/*/client-registration-policy/providers"));
+    }
+
+    #[test]
+    fn the_motivating_suffix_case_still_matches() {
+        // Why the fuzzy fallback exists at all (see the module note): a full-URL caller against a
+        // method-level handler. Consumed completely at offset 2, so containment keeps it.
+        assert!(route_suffix_match("/api/booking/summarize/*/*", "/summarize/*/*"));
+        assert_eq!(route_match_specificity("/api/booking/summarize/*/*", "/summarize/*/*"), 1);
+    }
+
+    #[test]
+    fn identical_routes_score_their_literal_count() {
+        assert_eq!(route_match_specificity("/api/technicians", "/api/technicians"), 2);
+    }
+
     use super::*;
     use crate::mask::MaskCtx;
     use crate::types::CouplingAdapter;

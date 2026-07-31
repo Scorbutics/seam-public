@@ -144,3 +144,35 @@ key to the other side, so even a correct pairing states the route wrongly.
 `route-shares-one-segment-only` is committed FAILING, as a documented open defect. Fixing the asymmetry by
 loosening the match further would make that decoy worse, which is precisely why it was written first: recall
 here must not be bought with invented edges.
+
+### The fix, and what could and could not measure it (2026-07-31)
+
+`route_match_specificity` accepted an alignment that either fully consumed the shorter route **or ran off the
+end of the longer one**. That second clause is what admitted the decoy: `providers` is the last segment of the
+client route and the first of the handler's, so one shared literal scored a match.
+
+Raising the literal threshold to 2 would NOT have separated them — the true pair (`/*/partial-export` vs a
+method-level `/partial-export`) also shares exactly one literal segment. **Containment** is what distinguishes
+them: a method-level path IS a contiguous slice of the full URL; `/providers/*` extends past the end of the
+route it was claimed to match. The clause is gone; the documented motivating case
+(`/api/booking/summarize/*/*` vs `/summarize/*/*`) still matches, and is now a unit test.
+
+| | before | after |
+|---|---|---|
+| `bench/coupling` positives | 5/5 | 5/5 |
+| `bench/coupling` decoys false | **1/5** | **0/5** |
+| keycloak `realms.ts` route keys with no counterpart | 19/25 | 20/25 |
+
+The keycloak number going UP is the fix working: the twentieth was the invented edge.
+
+**`bench/cochange` cannot judge this change, and it is worth saying why.** It pairs files on `floorIndex` —
+EXACT key grouping — and never calls `other_side`, so the fuzzy route matcher is invisible to it. Verified by
+running it with the old and new matcher on the same window: byte-identical output. Any http-route difference
+against the numbers in the top-level README is the HISTORY WINDOW (2881 commits there, 393 here), not this
+change. A harness that cannot see a change must not be quoted as evidence that the change was safe.
+
+### Still open: the asymmetry
+
+Recall did not move, as expected — the same pair still resolves Java→TS and not TS→Java, because the bridge
+searches for the key as the ANCHOR spells it. That is a separate defect from the matcher, and it is the one
+that owns the remaining 20 of 25.
