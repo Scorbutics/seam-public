@@ -22,8 +22,9 @@ description: >-
   (meaning, not edges) use embeddings/RAG — Seam routes those away honestly rather than faking them.
   DEFAULT to passing the center you already have: if you've located a candidate symbol (you usually
   have), give it as `--center file#symbol` (or several, comma-separated, for a multi-mechanism concern) —
-  Seam skips center detection and traces+decomposes from it (~11s; omit `--center` to run center-first
-  mechanism detection from the intent). grep to ORIENT, Seam to TRACE.
+  Seam skips center detection and traces+decomposes from it (~11s). `--center` is MANDATORY with `--intent`:
+  the intent SHAPES the answer, it does not choose where to look. Don't know the symbol? `--locate <name>`
+  prints every definition of a name and picks none. grep to ORIENT, Seam to TRACE.
   ALSO for INTERNAL PLANNING before implementing: if a change touches a LOGIC/DATA flow (a spine) you
   haven't mapped and understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST
   (orient grep → named-center grow) to plan against a verified spine, not a guess — not just for "how
@@ -83,8 +84,11 @@ It supersedes the old `--anchor-file`/`--symbol` pair — use `--center` everywh
 - **`--center <file>#<sym>,<file2>#<sym2>,…`** — a comma-separated list of centers → a **multi-mechanism
   concern star** (§C): Seam grows each and renders them as one center-rooted map. Pass the 2–3 mechanisms you
   already identified instead of one anchor; it's zero-LLM (you chose them) and skips center detection.
-- **Omit `--center` entirely** (with `--auto --intent`) → **center-first**: Seam detects the mechanism(s) from
-  the intent (one `center-pick` LLM pass, or the deterministic lexical floor offline).
+- **Omitting `--center` is an ERROR** (removed 2026-07-31). It used to run center-first detection: two LLM
+  passes that chose the anchor for you. Measured on keycloak, same phrase and tree, cache cleared each run:
+  18s-97s, and a DIFFERENT mechanism cluster ~1 run in 3; a 3-sample consensus panel did not improve it.
+  Choosing which symbol answers a prose question is semantic and belongs to YOU, not to a hidden pass inside
+  a deterministic query.
 
 So: grep to ORIENT (find a candidate symbol) → pass it as `--center file#symbol`. Give SEVERAL when the
 question spans a few mechanisms; give NONE when you only have a question, not a symbol.
@@ -211,8 +215,6 @@ DETERMINISTIC** — it floods the resolved crossings (calls, data-coupling, stri
 terminals, bounded by deterministic containment (hub-collapse / tier-convergence). There is **no LLM
 move-picker** and **no per-step pump**. The only LLM passes that can occur are:
 
-- **`center-pick`** — ONLY when you omit `--center` (the no-center path is CENTER-FIRST: the engine picks
-  the concern's *mechanism(s)* from the intent). One pass at the start.
 - **`seam-intent`** — the final tiering/labeling pass, **skipped by `--skeleton`** (recommended for an LLM
   consumer — you tier/label the emitted skeleton yourself).
 - **the coupling flywheel** (`discover-keys` / `discover-key-matchers`) — ONLY with `--data-coupling llm`;
@@ -231,10 +233,8 @@ step, not an option:
   straight from them: **~11s**, zero center-selection LLM, and you avoid it guessing a ubiquitous/sibling
   node. You almost always CAN find a candidate in one or two greps — so do that rather than reaching for the
   fallback below.
-- **Center-first (omit `--center`) — LAST RESORT ONLY** — if, after searching, you genuinely cannot identify
-  any candidate symbol, the engine will detect the mechanism(s) from the intent (a `center-pick` LLM pass;
-  offline → the deterministic lexical floor) and print `[center-first] <n> mechanism(s): …`. It is slower and
-  can mis-pick — don't default to it.
+- **There is no fallback, by design.** If you cannot name a candidate, use `--locate <name>` (every definition
+  of a name, no opinion formed) or grep to orient — then pass `--center`. Seam will NOT guess an anchor for you.
 
 ### C1 — Run it
 
@@ -245,6 +245,12 @@ step, not an option:
   is what a "how is X managed" answer wants.
 - **LINE** — *"how does X flow / where does it culminate"* (trace one path): `--format agent` (spine-first,
   dimmed off-intent tail, blindspots collapsed).
+
+**READ the answer with the default `llm-context`, or `--format agent` for a token-budgeted map. If you need to
+POST-PROCESS it, use `--format json`** — every `--query` shape emits its full model as one JSON object
+(`{mode, shape, anchor, members[…], …}`). Do NOT pipe the human render through grep/sed/awk to rebuild a list:
+that layout is presentation and may change, and it costs you a call per attempt. Measured 2026-07-31: an agent
+that hand-parsed the render spent 10 of its 16 tool calls re-running the SAME query to re-pipe it differently.
 
 Both are token-budgeted and deterministic with `--center` + `--skeleton` + floor coupling — run in the
 FOREGROUND, no bridge:
@@ -259,14 +265,14 @@ $ENGINE --scan --auto --repo "<REPO>" --center "<F>#<S>" \
         --intent "<question>" --max-steps <N> --skeleton --format agent
 ```
 
-If you omit `--center` (center-first) OR add `--data-coupling llm`, there IS a residual LLM pass. Either
-run plainly if a `claude` binary is on PATH (the engine serves it), or start it in the **background** with
-`--llm-bridge "$OUT/bridge"` and pump the one/few passes as in C2 (usually just `center-pick`, once):
+If you add `--data-coupling llm`, there IS a residual LLM pass. Either run plainly if a `claude` binary is on
+PATH (the engine serves it), or start it in the **background** with `--llm-bridge "$OUT/bridge"` and pump the
+pass as in C2:
 
 ```bash
-# center-first (no --center) or --data-coupling llm → serve the residual pass(es) over the bridge:
-$ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> --skeleton \
-        --format agent --llm-bridge "$OUT/bridge"      # run in background, then pump §C2
+# --data-coupling llm → serve the residual pass over the bridge:
+$ENGINE --scan --auto --repo "<REPO>" --center "<file>#<symbol>" --intent "<question>" --max-steps <N> \
+        --skeleton --format agent --llm-bridge "$OUT/bridge"   # run in background, then pump §C2
 ```
 
 `--skeleton` drops the final `seam-intent` tiering pass — as the in-session model you tier/label the
@@ -461,6 +467,6 @@ $ENGINE --scan --repo /path/to/app --ask "who calls createFoo?" --classifier hyb
 # ── Codebase auto-grow (§C) — DETERMINISTIC with --center + --skeleton → run foreground, no bridge ──
 $ENGINE --scan --auto --repo /path/to/app --center lib/foo.ts#createFoo \
         --intent "how does foo flow through the app" --max-steps 4 --skeleton --format agent
-#  …omit --center (center-first) or add --data-coupling llm → one residual pass: run in background with
+#  …add --data-coupling llm → one residual pass: run in background with
 #  --llm-bridge "$OUT/bridge" and pump §C2 (Monitor for req-<n>.json → subagent → resp-<n>.json).
 ```

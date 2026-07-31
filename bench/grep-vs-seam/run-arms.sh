@@ -77,12 +77,24 @@ run_arm A "Bash(rg:*)" "Bash(grep:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)"
 # `Bash(bun:*)` is the narrowest workable grant: the CLI is invoked through bun. It does technically permit other
 # bun scripts, which is why verify-arms.ts audits the transcript for rg/grep use rather than trusting this line.
 # Read is granted to BOTH arms — reading a file it was pointed at is not the capability under test.
+# THE SKILL IS THE PRODUCT SURFACE, and the first run of this harness omitted it — arm SEAM was told to run
+# `--help` and work the CLI out, while arm GREP used a tool it already knew. That is not a fair comparison: it
+# measured an agent DISCOVERING an undocumented CLI. `install.sh --skill` puts SKILL.md in ~/.claude/skills/seam
+# for every real user, so the benchmark must hand arm SEAM the same thing. Injected inline rather than relying
+# on skill auto-discovery, so the arm cannot silently run without it and quietly become the unfair run again.
+SKILL_MD="$(cd "$HERE/../.." && pwd)/.claude/skills/seam/SKILL.md"
+[ -f "$SKILL_MD" ] || { echo "ABORT: $SKILL_MD missing — arm SEAM would run undocumented, which is the unfair run." >&2; exit 3; }
 PROMPT="You are working in the repository at $REPO.
 
 TASK: $TASK
 
-Use the Seam CLI to answer:  bun $SEAM --repo $REPO [flags]
-Start with  bun $SEAM --help  to see what it can answer. Seam is a structural code-analysis tool.
+You have the Seam CLI. Invoke it as:  bun $SEAM --repo $REPO [flags]
+Its documentation follows; it is the same skill a Seam user has installed. Read it and use it — you should not
+need to run --help.
+
+===== BEGIN SEAM SKILL =====
+$(cat "$SKILL_MD")
+===== END SEAM SKILL =====
 $CONTRACT"
 run_arm B "Bash(bun:*)" Read
 

@@ -62,21 +62,55 @@ const A = readArm("A"), B = readArm("B");
 // predecessor's stdout. A search in segment 0 is a search; a search after a `|` is a formatter. Loosening this
 // any further — e.g. ignoring greps that merely "look like formatting" — would be tuning the control until it
 // passes, which is how a bias control dies quietly.
+// QUOTE-AWARE, because a naive split is wrong on exactly the commands this has to judge. `grep -n
+// "export function cn\|export const cn" path/to/file.ts` contains a `|` INSIDE a quoted regex; splitting on it
+// blindly produced a first segment of `grep -n "export function cn\` — no file operand — and the auditor called
+// a single-file read a repo-wide search. The shell does not split inside quotes and neither can this.
 const segments = (c: string): string[] => {
   const body = c.replace(/^\w+:\s*/, "");                 // strip the "Bash: " / "Grep: " tool prefix
-  return body.split(/\|\||&&|;|\|/).map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  let cur = "", quote: string | null = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote) { cur += ch; if (ch === quote && body[i - 1] !== "\\") quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === "|" || ch === ";" || (ch === "&" && body[i + 1] === "&")) {
+      if (body[i + 1] === ch) i++;                        // consume the second char of || or &&
+      out.push(cur); cur = ""; continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim()).filter(Boolean);
 };
-const headIsSearch = (c: string): boolean => {
-  if (/^(Grep|Glob):/.test(c)) return true;               // the native search TOOLS are always a repo search
+// SEARCHING vs READING — the second distinction, and as narrow as I can make it.
+//
+// Arm SEAM ran `grep -n "export function cn" <one absolute path>` to confirm a signature in a file Seam had
+// already pointed it at. Both arms are granted `Read`, so reading a file you already know about is not the
+// capability under test — FINDING it is. A grep whose only operand is a single concrete FILE is a read spelled
+// differently; one with a directory, a glob, `.`, `-r`, or no operand at all is an enumeration and originates
+// knowledge.
+//
+// This is deliberately not "greps that look harmless". The count is REPORTED either way, because file-by-file
+// grepping would be enumeration in disguise and would show up as a high count rather than as zero.
+const FILE_OPERAND = /(?:^|\s)(\/[^\s"']+|[.\w-]+(?:\/[^\s"']+)+\.\w{1,6})(?:\s|$)/;
+const headIsSearch = (c: string): { search: boolean; singleFileRead: boolean } => {
+  if (/^(Grep|Glob):/.test(c)) return { search: true, singleFileRead: false };   // native search TOOLS enumerate
   const segs = segments(c);
-  return segs.length > 0 && /^(rg|grep|egrep|fgrep|ag|ack)\b/.test(segs[0]);
+  if (!segs.length || !/^(rg|grep|egrep|fgrep|ag|ack)\b/.test(segs[0])) return { search: false, singleFileRead: false };
+  const head = segs[0];
+  const recursive = /\s-\w*r/.test(head) || /(?:^|\s)(\.|\*|--glob|--include)/.test(head);
+  const m = head.match(FILE_OPERAND);
+  const singleFile = !!m && !recursive && !m[1].endsWith("/");
+  return { search: !singleFile, singleFileRead: singleFile };
 };
 const headIsSeam = (c: string): boolean => {
   const segs = segments(c);
   return segs.some((s, i) => i === 0 && /decompose\.ts|(^|\/)seam\b/.test(s));
 };
 const usedSeam = (a: Audit) => a.cmds.filter(headIsSeam);
-const usedGrep = (a: Audit) => a.cmds.filter(headIsSearch);
+const usedGrep = (a: Audit) => a.cmds.filter((c) => headIsSearch(c).search);
+const fileReads = (a: Audit) => a.cmds.filter((c) => headIsSearch(c).singleFileRead);
 
 const bad: string[] = [];
 const aSeam = usedSeam(A), bGrep = usedGrep(B);
@@ -90,6 +124,10 @@ for (const a of [A, B]) {
   console.log(`   wall clock      ${a.secs}s`);
   console.log(`   tool calls      ${a.calls}`);
   console.log(`   answer block    ${a.answer ? `${a.answer.split("\n").filter(Boolean).length} line(s)` : "MISSING"}`);
+  const fr = fileReads(a).length;
+  // Reported ALWAYS, including zero: a grep over one known file is a read, but many of them would be
+  // enumeration wearing a read's clothes, and that has to be visible rather than silently permitted.
+  if (fr) console.log(`   single-file greps ${fr}  (counted as READS, not searches — inspect if this is >3)`);
 }
 
 // An arm that produced no canonical block cannot be scored for precision, and silently scoring its prose instead
