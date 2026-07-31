@@ -715,3 +715,29 @@ recall table the whole time and read past.
 
 The folds stay: they are correct, they surface real cross-stack callers, and `--query consumers` reporting a
 route's front-end caller is a genuine capability gain. They are simply not what moves this benchmark.
+
+### Next: the DI / interface→impl index already exists and reaches only ONE shape
+
+Not started — recorded so it begins from evidence.
+
+The RECALL bin is structural, not coupling (see above): interface→impl, decorator→delegate, framework
+registration. The engine ALREADY resolves the first of those. `rust/crates/seam-lang/src/di_bindings.rs` builds
+a DI binding index, and `SEAM_DI_RESOLVE` is ON by default — but its documented effect is scoped to a single
+shape:
+
+    SEAM_DI_RESOLVE  `=0` drops the DI-binding enrichment from a --query dependencies answer.
+
+So an interface→implementation hop is resolved for `--query dependencies` and NOT for `--query consumers` or
+`--query impact` — the two shapes that answer "what breaks if I change this", which is where the benchmark's
+RECALL cost lives. `RealmCacheSession.java` (a `RealmModel` implementation reached from the anchor's interface)
+is exactly the shape of file this would reach.
+
+**This is the third time in a row a capability turned out to exist and be narrowly scoped rather than missing**
+— `--query consumers` had `data_coupling` hardcoded `false`; `--format agent` had snippets only in the pipeline
+section; now the DI index reaches one shape. That is worth stating as a pattern: before building anything for
+this engine, check whether it is already there and switched off.
+
+**The step, and its prediction:** wire the DI binding resolution into the consumers and impact footprints, then
+replay `verification-tax.ts keycloak-cross-language`. If RECALL falls below 21, the structural theory holds and
+the remaining bin is reachable. If it does not, the next suspects are decorator→delegate and framework
+registration, neither of which the engine models at all today — and THAT would be a build, not a flip.
