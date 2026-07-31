@@ -244,7 +244,18 @@ smaller artifact (4,907 vs 5,346 proxy). The proxy measures the answer, not the 
 Arm Seam flagged that `--query consumers` and `--query contract` disagree on the site count for the same symbol
 (**247 vs 313**). Both renders state their counting unit, and the agent still had to stop and reconcile them.
 Two shapes giving two numbers for one relationship is a real usability defect even when both are defensible.
-Not yet fixed.
+
+**FIXED — and this line said "Not yet fixed" for longer than it was true.** Both renders now name the OTHER
+shape's grain and its expected direction, so no reconciliation is left to the reader. `--query consumers`:
+
+> For the per-INVOCATION count, and for the declared signature, run `--query contract` on the module: its
+> `observed: N call sites` counts every call expression, so it is normally LARGER than this figure. Neither is
+> wrong and they are not interchangeable — pick by the question ("who depends on this" = edges, "how many places
+> would I have to edit" = call sites).
+
+and `--query contract` names all three grains, placing the edge count between the file count and the call-site
+count. Stale documentation of an open defect is its own defect: it sends the next reader to re-fix something
+already done, and it is the reason this file now records fixes in place rather than only recording findings.
 
 ## Run 3 results (2026-07-30) — cal.com multi-hop
 
@@ -450,3 +461,28 @@ non-empty before trusting it.
 That is the **ninth** null-answer in this project and the third this session. The pattern is stable enough to
 state as a rule: *after adding a case, revert the fix and confirm the case fails.* A case that has never failed
 has never been shown to test anything.
+
+### The sweep, and what it says now
+
+`bun bench/grep-vs-seam/snippet-coverage.ts <repo> <file#symbol>` runs every shape and reports, per shape, how
+many cited locations carry code. It exits non-zero if any shape cites locations and shows none — verified by
+reverting the agent fix, which takes it to `agent 75 cited / 0 with code` and exit 1.
+
+On `private-app` at `lib/utils.ts#cn`, after the three fixes:
+
+| shape | cited | with code |
+|---|---|---|
+| consumers | 244 | 23 |
+| impact | 154 | 40 |
+| contract | 78 | 22 |
+| refactor / brief | 476 | 61 |
+| agent | 43 | 13 |
+| dependencies / writers / coupling | — | honest negative for this anchor |
+
+**Zero shapes citing locations with no code.** Coverage below 100% is the 25-citation budget cap, which every
+render now declares — and declares as list order rather than a ranking, because it is not one.
+
+It reports THREE outcomes, not two, and the distinction is load-bearing: "errored", "answered nothing to cite"
+and "cited without showing". An ad-hoc version of this sweep passed a module anchor to a symbol shape, the CLI
+aborted correctly, the harness read the empty output as zero citations, and a healthy shape looked like a defect.
+Only the third state is the bug.
