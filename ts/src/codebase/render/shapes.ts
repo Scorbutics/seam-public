@@ -321,6 +321,17 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
     [`impacted: ${model.total}`, `files: ${model.fileCount}`, `surface: ${(model.surface ?? []).length}`,
      ...((model.crossStack ?? []).length ? [`cross-stack: ${model.crossStack.length}`] : []),
      `gaps: ${(model.gaps ?? []).length}`, ...(model.truncated ? ["truncated: yes (impact ≥ shown)"] : [])].join(" | "), "");
+  // TRUNCATION HAS TO BE ACTIONABLE, not merely honest. Measured 2026-07-31 (bench/grep-vs-seam, private-app-ab2): an
+  // agent asked "which files use cn and what breaks if its signature changes", ran `--query impact`, and
+  // ENUMERATED ITS ANSWER from this render — 35 files against a ground truth of 81, 40% recall. The header did
+  // say `truncated: yes`. That was not enough: a flag with no magnitude and no remedy is something a reader
+  // notes and then acts against anyway. So state the size of the gap and name the command that closes it.
+  const _shownFiles0 = Math.min((model.files ?? []).length, 60);
+  if (model.truncated || (model.files ?? []).length > _shownFiles0) {
+    out.push(`> INCOMPLETE LIST — this render shows at most ${_shownFiles0} of ${model.fileCount} file(s). Do NOT`,
+      `> enumerate from it. For the complete set: \`--format json\` (the full model, every entry), or for "which`,
+      `> files use X" specifically, \`--query consumers\` — which answers that directly and is not truncated.`, "");
+  }
   if (model.noStructure) {
     out.push("## Isolated", model.reason === "opaque"
       ? `${sym} has no RESOLVED consumers, but ${(model.gaps ?? []).length} opaque caller(s) exist — verify those before assuming it's safe to change (see gaps below).`
@@ -333,7 +344,9 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
   // symbols across 2413 files, rendering ~147k tokens, which is more than the whole rest of a 30-intent run
   // put together. The MODEL keeps everything (--emit-seams is unaffected); only this human/agent-facing render
   // is bounded, and it says exactly what it elided so the reader is never misled into thinking the set is small.
-  // Nearest hops are kept — they're the sites a change actually has to touch. `SEAM_IMPACT_RENDER_CAP=0` = unbounded.
+  // Nearest hops are kept — they're the sites a change actually has to touch. `caps.bounded === false` = unbounded
+  // (this comment used to advertise `SEAM_IMPACT_RENDER_CAP=0`, a var deleted in the knob cleanup — and the RENDER
+  // told readers to set it too, so the escape hatch it offered had not worked for some time).
   // The caps are PARAMETERS, not environment. They were four SEAM_IMPACT_* vars that only this render read
   // and only its test set — an env round-trip to pass an argument one stack frame.
   const cap = caps.bounded === false ? 0 : 1;                          // false disables ALL the caps below
@@ -372,7 +385,8 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
     const rest = files.slice(shownFiles.length);
     const restSyms = rest.reduce((n: number, f: any) => n + (f.count ?? 0), 0);
     out.push(`- … +${rest.length} more file(s), ${restSyms} symbol(s) — elided from this render, not from the impact set`,
-      `  (counts above are complete; --emit-seams carries every entry, SEAM_IMPACT_RENDER_CAP=0 prints them all)`);
+      `  (counts above are complete. --format json and --emit-seams both carry EVERY entry — use one of those`,
+      `   rather than this list if you need to enumerate.)`);
   }
   out.push("");
   if (surfAll.length) {
@@ -400,7 +414,7 @@ export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = 
     "Every Affected symbol transitively depends on the anchor — these are the sites a change must account",
     "for (hop = distance from the anchor). Surface = the outermost callers the change reaches (entry points /",
     "tests to re-verify). Gaps are where resolution gave out — the true impact may be larger, so grep those.",
-    `${model.truncated ? "Truncated: the closure hit the budget — impact is AT LEAST what's shown. " : ""}This is the`,
+    `${model.truncated ? "Truncated: the closure hit the budget — impact is AT LEAST what's shown, so enumerate from --format json, not from here. " : ""}This is the`,
     "structural blast radius; the refactoring PLAN over it is a judgement for you/the model to make.");
   return out.join("\n");
 }
