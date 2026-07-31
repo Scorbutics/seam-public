@@ -76,11 +76,24 @@ run_arm () {  # run_arm <letter> <allowed-tools...> ; prompt comes from $PROMPT
   local -n deny="DENY_$letter"
   local -n shimverbs="SHIM_$letter"
   local shim="$OUT/.shim-$letter"
+  # A WRITABLE SCRATCH DIR, because its absence was being measured as a tool cost.
+  #
+  # Measured 2026-07-31 (cal-ab5): FOUR of arm SEAM's 32 calls were sandbox refusals, not Seam failures —
+  # "Output redirection to '/tmp/seamrun_out.txt' was blocked", "Redirect target contains $(cmd) output",
+  # "This Bash command contains multiple operations ... require approval". The agent was trying to spool a
+  # large answer to a file so it could page through it.
+  #
+  # That penalty falls on ONE ARM. Seam emits large structured answers an agent naturally saves; the grep arm
+  # pipes to `head` and never needs a file. Leaving it in place means the harness charges the treatment arm for
+  # a restriction the control arm cannot trigger — a bias in the apparatus, not a property of either tool.
+  local scratch="$OUT/.scratch-$letter"
+  rm -rf "$scratch"; mkdir -p "$scratch"
   rm -rf "$shim"; make_shim "$shim" "${shimverbs[@]}"
   # The shim goes FIRST on PATH — this is the layer that actually blocks, since the tool flags do not gate
   # sub-commands inside Bash. An absolute path still defeats it, which is why verify-arms.ts stays.
   PATH="$shim:$PATH" claude -p "$PROMPT" \
     --output-format stream-json --verbose --max-turns 60 \
+    --add-dir "$scratch" \
     --allowedTools "$@" --disallowedTools "${deny[@]}" \
     > "$OUT/$CASE.$letter.jsonl" 2>"$OUT/$CASE.$letter.stderr"
   ended=$(date +%s)
@@ -95,6 +108,9 @@ PROMPT="You are working in the repository at $REPO.
 TASK: $TASK
 
 Use ripgrep/grep and file reads to answer. Work from the repo root: $REPO
+
+A scratch directory you may write to (identical for both arms): $OUT/.scratch-A
+  — use it if you want to save output to a file rather than re-running a command.
 $CONTRACT"
 DENY_A=("Bash(bun:*)" "Bash(node:*)" "Bash(npx:*)")          # no Seam, by any launcher
 SHIM_A=(bun node npx)
@@ -124,6 +140,9 @@ need to run --help.
 ===== BEGIN SEAM SKILL =====
 $(cat "$SKILL_MD")
 ===== END SEAM SKILL =====
+
+A scratch directory you may write to (identical for both arms): $OUT/.scratch-B
+  — use it if you want to save output to a file rather than re-running a command.
 $CONTRACT"
 DENY_B=("Bash(grep:*)" "Bash(rg:*)" "Bash(egrep:*)" "Bash(fgrep:*)" "Bash(ag:*)" "Bash(ack:*)" Grep Glob)
 # NOT `bun`: arm SEAM invokes the CLI through it. Only the SEARCH verbs are shimmed away.
