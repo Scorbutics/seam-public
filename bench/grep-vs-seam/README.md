@@ -607,3 +607,22 @@ emptiness rather than by erroring.
 
 **Two follow-ups, neither done here:** the MCP surface must never pair `FULL` with an empty set without saying
 which engine answered, and `install.sh` needs a staleness check on an existing `~/.seam`.
+
+### The arity disagreement run 4 flagged: the ARM was wrong, not the engine
+
+Run 4's Seam arm reported a ~4-site gap between `--query contract`'s arity histogram and its own scan of `cn`,
+in the 2/3/4-argument buckets, and attributed it to comment and trailing-comma parsing. Checked rather than
+filed: `ast::arg_count` counts NAMED tree-sitter children with comment nodes filtered, so trailing commas
+(anonymous punctuation) and comments cannot inflate it. `ts/test/codebase/observed_arity_edges.test.ts` pins
+that on hostile syntax — trailing comma, a comma inside a comment, a comma inside a template literal, a nested
+call's own arguments, and an `&&` expression as one argument — and it passes.
+
+The arm's scanner was, by its own description, a naive brace-matcher. **That is the side that was wrong.**
+
+Falsified rather than trusted for passing first time: swapping `named_child` for `child` (counting punctuation)
+fails 2 of the 3 cases, `2:5` becoming `2:1`. A test that has never failed has never been shown to test anything
+— the same rule the `--format agent` snapshot gap forced earlier.
+
+This is the fifth accusation against this engine this session that did not survive checking (three by the
+oracle historically, plus `score.ts`'s 35% recall and `verification-tax.ts`'s RECALL 100% today). The engine is
+not above suspicion — but neither is whatever is accusing it.
