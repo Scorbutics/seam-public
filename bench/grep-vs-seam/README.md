@@ -907,6 +907,48 @@ agent does. Every "the engine improved but the benchmark did not move" result in
 the same shape, and the check that distinguishes it — *grep the prior traces for the query you just improved* —
 costs one command and was not run for three rounds.
 
+### Re-run after the three profile fixes (2026-08-01, n=3) — ONE of three moved its target
+
+Shipped together (452f2a7): the `files_index` filter, `--locate`'s `property` rows removed, and the MODULE
+banner. Re-measured on the same task.
+
+| | ARM GREP | ARM SEAM | previous (route-r*) |
+|---|---|---|---|
+| tool calls, median | 14 (13–17) | 13 (11–17) | 25 / 11 |
+| wall clock, median | 58s | 108s | 91s / 118s |
+| **engine (non-API) time** | 2s | **49s / 19s / 20s** | 2s / 29s, 27s, 19s |
+
+**1. The `files_index` fix is real and shows up.** Warm runs went 27s/29s → 19s/20s of engine time, matching the
+~8.6s the profile predicted. `fix3-r1`'s 49s is a COLD run — the `.so` rebuild invalidates `floor_indices`, and
+re-timing immediately after confirms it (`floor_indices LOAD 0.00s`, `key_index build 0.15s`). That cost is real
+for a user upgrading, once, and it is not what the fix addressed.
+
+**2. The two `--locate` fixes did NOT move the behaviour they targeted.** Anchor hunting, before → after:
+
+| | `ls`/`find` | repeated `--locate` | shapes |
+|---|---|---|---|
+| route-r1/2/3 | 2, 3, 5 | 1, 4, 4 | 4, 3, 4 |
+| fix3-r1/2/3 | **5**, 2, 1 | 4, 4, **6** | 3, 6, 3 |
+
+`ls`/`find` fell in two runs and rose in the third; `--locate` retries went UP (9 → 14 total). `fix3-r1` read
+`NO ENTRY POINT: … Do NOT go looking for one` and then ran five `ls`/`find` calls anyway.
+
+**The remaining pattern is NAME GUESSING, which none of the three fixes addressed.** The agent does not re-hunt
+because the output was noisy — it re-hunts because it does not know what the symbol is called, and tries
+`handleNewBooking.ts`, `BookingHandler`, `createBooking`, `bookingCreate`, `createBookingHandler`,
+`routers/viewer/bookings` in turn. Cleaning up `--locate`'s rows made each guess cheaper to read; it did not
+reduce the number of guesses, because the guessing is upstream of the output.
+
+**And the control moved more than the treatment.** ARM GREP's median went 25 → 14 calls with NO change to its
+arm — an 11-call swing, larger than any difference between the arms. Its spread also collapsed (14 → 4). Nothing
+in this table supports a causal claim about call counts in either direction; that is the fourth time this
+benchmark's control has demonstrated that, and the reason `aggregate.ts` refuses overlapping ranges.
+
+**Honest ledger for the three fixes:** one measurable (engine time, warm), one correct-but-invisible (the
+`property` rows are gone and nobody's behaviour changed), one whose stated instruction the agent ignored in 1 of
+3 runs. The `--locate` work is not wasted — it removed a real false claim about what the code is, and it caught
+the top-level-directory bug — but it was aimed at the wrong half of the anchor problem.
+
 Also found, and it is apparatus rather than result: `own-r3.B` was charged 2 calls for `TaskCreate`/`TaskUpdate`,
 session-inherited tools that are not agent work. `DENY_B`/`DENY_A` list `Agent Task ScheduleWakeup ToolSearch`
 but not the `Task*` family, so r3's 22 is really 20. It does not change the conclusion — nothing does, when the
