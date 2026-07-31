@@ -211,3 +211,39 @@ thing to check.
 
 **A symmetry invariant is the test worth writing first**: for every pair (A, B) linked by key K, coupling(A)
 must contain B and coupling(B) must contain A. That turns a defect nobody would notice into a gate.
+
+### The third gate, FOUND and fixed (2026-07-31)
+
+`other_side` pushed every route key scoring ≥1 into `scored` **including those whose complementary side was
+empty**, and then computed `has_specific` over that list. A key that contributes NOTHING could therefore
+suppress the generic (1-literal) fallback that held the real match, while emitting nothing itself.
+
+That is the asymmetry. Querying `/admin/realms/*/partial-export` from the Java resource, the anchor's OWN
+class-level key `/admin/realms/*` scores 2 against it and has no consumers — it silenced the 1-literal match on
+the client's `/*/partial-export`. Direction-dependent because that class-level key exists only on the Java side,
+which is why the broken direction FLIPPED between keycloak and this fixture.
+
+Fixed by scoring only keys that actually contribute an access. Reproduction, before → after:
+
+    otherSide(repo, "http-route", "/*/partial-export", false)               -> RealmAdminResource.java  (both)
+    otherSide(repo, "http-route", "/admin/realms/*/partial-export", true)   -> []  ->  realmsClient.ts
+
+Positives 7/7, decoys 0/5 false, CLI snapshot byte-identical.
+
+### The FOURTH gate, named but not fixed
+
+keycloak's `realms.ts` is still 20 of 25 with no counterpart, because a different rule binds there. The pair
+matches (spec 1), but `GENERIC_ROUTE_FANOUT_CAP = 1` and two legitimate Java handlers serve `/partial-export`
+(`RealmAdminResource.java` and `RealmResource.java`). Over the cap, survival is decided by:
+
+```rust
+if segs.iter().any(|seg| g.access.file.to_lowercase().contains(seg))
+```
+
+i.e. **the candidate's FILENAME must contain a literal segment of the route**. `RealmAdminResource.java` does not
+contain `partial-export`, and a JAX-RS resource filename essentially never mirrors its route segments — the
+heuristic encodes a Next.js/file-routing assumption that does not hold for annotation-routed backends.
+
+The discriminating power should come from the SEGMENT (is `partial-export` rare across the index? yes;
+is `providers`? no), not from the filename. That is a design change, and it must be measured against
+`route-shares-one-segment-only` — which exists precisely because loosening this is how invented edges return.

@@ -80,7 +80,20 @@ pub fn other_side_scored(index: &GroundingIndex, kind: &str, value: &str, produc
         }
         let spec = route_match_specificity(val, value);
         if spec >= 1 {
-            scored.push((spec, side(v)));
+            // ONLY SCORE A KEY THAT ACTUALLY CONTRIBUTES A COUNTERPART. `side(v)` is empty whenever the matched
+            // key holds no access on the COMPLEMENTARY side — and such an entry used to be pushed anyway, where
+            // it still counted towards `has_specific` below. A high-scoring key with nothing on the other side
+            // therefore SUPPRESSED the generic fallback that held the real match, and emitted nothing itself.
+            //
+            // That is the whole coupling asymmetry. Querying `/admin/realms/*/partial-export` from the Java
+            // resource, the anchor's OWN class-level key `/admin/realms/*` scores 2 against it and has no
+            // consumers; it silenced the 1-literal match on the client's `/*/partial-export` and the pair
+            // resolved in one direction only. It is direction-dependent because that class-level key exists on
+            // the Java side and has no counterpart on the TypeScript one.
+            let accesses = side(v);
+            if !accesses.is_empty() {
+                scored.push((spec, accesses));
+            }
         }
     }
     let has_specific = scored.iter().any(|(spec, _)| *spec >= 2);
