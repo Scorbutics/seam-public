@@ -102,7 +102,7 @@ $CONTRACT"
 # The session-inherited tools are denied to BOTH arms in identical words: an agent that spawns a
 # subagent or schedules a wakeup is not exercising grep OR Seam, and counting those as tool calls
 # measured the harness. Observed in base-r3: ScheduleWakeup x2, Agent, ToolSearch, sleep x3.
-DENY_A=("Bash(bun:*)" "Bash(node:*)" "Bash(npx:*)" "Bash(sleep:*)" Agent Task ScheduleWakeup ToolSearch CronCreate WebSearch WebFetch)          # no Seam, by any launcher
+DENY_A=("Bash(bun:*)" "Bash(node:*)" "Bash(npx:*)" "Bash(sleep:*)" Agent Task TaskCreate TaskUpdate TaskList TaskGet TaskOutput TaskStop ScheduleWakeup ToolSearch CronCreate WebSearch WebFetch)          # no Seam, by any launcher
 run_arm A "Bash(rg:*)" "Bash(grep:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)" "Bash(tail:*)" \
           "Bash(wc:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" "Bash(cut:*)" \
           "Bash(awk:*)" "Bash(comm:*)" Read Glob Grep
@@ -133,7 +133,7 @@ $(cat "$SKILL_MD")
 A scratch directory you may write to (identical for both arms): $OUT/.scratch-B
   — use it if you want to save output to a file rather than re-running a command.
 $CONTRACT"
-DENY_B=("Bash(grep:*)" "Bash(rg:*)" "Bash(egrep:*)" "Bash(fgrep:*)" "Bash(ag:*)" "Bash(ack:*)" Grep Glob "Bash(sleep:*)" Agent Task ScheduleWakeup ToolSearch CronCreate WebSearch WebFetch)
+DENY_B=("Bash(grep:*)" "Bash(rg:*)" "Bash(egrep:*)" "Bash(fgrep:*)" "Bash(ag:*)" "Bash(ack:*)" Grep Glob "Bash(sleep:*)" Agent Task TaskCreate TaskUpdate TaskList TaskGet TaskOutput TaskStop ScheduleWakeup ToolSearch CronCreate WebSearch WebFetch)
 run_arm B "Bash(bun:*)" Read
 
 echo "done: $CASE"

@@ -834,6 +834,45 @@ additive plus the reworded legend. `brief`/`refactor` share `renderCoupling`, so
 refuted; the standing finding is that it does not. What is claimed is narrower and was measured: the anchor's
 own write line was underivable from any shape, and now it is the first thing the shape prints.
 
+### Re-run on cal-booking-flow (2026-08-01, n=3 per arm) — THE FIX WAS NEVER EXERCISED
+
+Same task, same harness, skill deliberately UNCHANGED so any movement would be attributable to `own_sites`
+alone rather than to two changes at once. Bias control verified clean on all three pairs.
+
+| | ARM GREP | ARM SEAM | prior baseline (n=3) |
+|---|---|---|---|
+| tool calls, median | 20 | **14** | 20 / 20 |
+| range | 11–20 | 9–22 | 17–22 / 16–20 |
+| wall clock, median | 71s | 146s | 75s / 195s |
+
+**And that 20 → 14 must not be reported as an effect, because the shape it changed was never invoked:**
+
+    --query coupling invocations, own-r1/r2/r3:   0, 0, 0
+    --query writers  invocations, own-r1/r2/r3:   0, 0, 0
+    (and 0, 0, 0 in the three baseline runs too — six runs, two configurations, zero)
+
+The agent reached for `--locate`, `--query contract`, `--query consumers`, `--query dependencies` and
+`--scan --auto --concern`. Never coupling. It also still opened `createBooking.ts` in every run (2, 2 and 6
+reads) — the exact behaviour the fix targets, unchanged, because the answer it now contains was never asked
+for. By the aggregate script's own rule the medians are inside the spread (13 calls for SEAM) and the ranges
+overlap, so the honest report is **no detectable difference at this n, and no mechanism to attribute one to.**
+
+**This is the keycloak routing finding, third occurrence, and this time it was predictable.** The pattern
+written down two sections above — *"the agent's shape SELECTION is upstream of the shape's quality, and no
+amount of engine work moves a number for a query nobody issues"* — applies verbatim, and the check that would
+have caught it before spending three runs is one grep over the prior traces, which reads `0`. The engine change
+is still correct and still tested; it is simply unreachable from how the agent actually drives the CLI.
+
+So the routing half I declined to ship earlier is no longer optional — but it is also no longer the thing I
+rejected. Then, routing "where does X touch the database" → `--query coupling` would have produced an answer
+that omitted the anchor's own write, so it would have measured flat. Now the shape can answer it. **The two
+changes are only useful together, and I shipped them in the order that makes each individually unmeasurable.**
+
+Also found, and it is apparatus rather than result: `own-r3.B` was charged 2 calls for `TaskCreate`/`TaskUpdate`,
+session-inherited tools that are not agent work. `DENY_B`/`DENY_A` list `Agent Task ScheduleWakeup ToolSearch`
+but not the `Task*` family, so r3's 22 is really 20. It does not change the conclusion — nothing does, when the
+mechanism was never run — but it is the fourth time this harness has charged an arm for its own leakage.
+
 ### The measurement this does NOT justify
 
 No claim here that fixing it lowers tool calls. Runs 2 and 4 both predicted richer output would cut calls and
