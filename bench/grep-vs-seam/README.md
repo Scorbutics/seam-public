@@ -716,28 +716,51 @@ recall table the whole time and read past.
 The folds stay: they are correct, they surface real cross-stack callers, and `--query consumers` reporting a
 route's front-end caller is a genuine capability gain. They are simply not what moves this benchmark.
 
-### Next: the DI / interface→impl index already exists and reaches only ONE shape
+### The DI / interface→impl step: NOT TAKEN, and the reason refutes the structural theory
 
-Not started — recorded so it begins from evidence.
+The recorded plan was to wire DI resolution into the consumers and impact footprints, predicting RECALL would
+fall below 21. The pre-build check killed it on two independent grounds, so nothing was built. Recorded in full
+because a refuted prediction is the cheaper half of this benchmark.
 
-The RECALL bin is structural, not coupling (see above): interface→impl, decorator→delegate, framework
-registration. The engine ALREADY resolves the first of those. `rust/crates/seam-lang/src/di_bindings.rs` builds
-a DI binding index, and `SEAM_DI_RESOLVE` is ON by default — but its documented effect is scoped to a single
-shape:
+**Ground 1 — the DI binding grammar cannot apply to the case it was going to be measured on.**
+`rust/crates/seam-lang/src/di_bindings.rs:1` states its own scope: "TS/ioctopus DI BINDING RESOLUTION", a closed
+grammar over `bind` / `toClass` / `toFactory` / `toValue`. Keycloak is Java. Wiring it into two more shapes and
+replaying the keycloak trace would have measured a guaranteed no-op and reported it as a disproof of the
+structural theory. The plan conflated it with `rust/crates/seam-resolve/src/interface_index.rs`, which IS
+framework-agnostic (grounded on `implements`/`extends`, not annotations) and does reach Java — two different
+indexes, only one of which was ever the lever.
 
-    SEAM_DI_RESOLVE  `=0` drops the DI-binding enrichment from a --query dependencies answer.
+**Ground 2 — the interface index needs no wiring either, because consumers already reaches the targets.**
+Anchoring on the case's own declared anchor, `RealmModel.java#RealmModel`, and counting TRUE `(path:line)`
+citations rather than substring hits:
 
-So an interface→implementation hop is resolved for `--query dependencies` and NOT for `--query consumers` or
-`--query impact` — the two shapes that answer "what breaks if I change this", which is where the benchmark's
-RECALL cost lives. `RealmCacheSession.java` (a `RealmModel` implementation reached from the anchor's interface)
-is exactly the shape of file this would reach.
+    ModelToRepresentation.java      46      AdminConsole.java         8
+    ExportImportManager.java        34      RealmResource.java        6
+    DefaultExportImportManager.java 32      AdminPermissions.java     2
+    KeycloakProcessor.java          16      KeycloakApplication.java  1
 
-**This is the third time in a row a capability turned out to exist and be narrowly scoped rather than missing**
-— `--query consumers` had `data_coupling` hardcoded `false`; `--format agent` had snippets only in the pipeline
-section; now the DI index reaches one shape. That is worth stating as a pattern: before building anything for
-this engine, check whether it is already there and switched off.
+Eight of the eleven RECALL-binned files are ALREADY cited, with line numbers, today. The three that genuinely
+are not — `GeneralTab.tsx`, `realmRepresentation.ts`, `fetchWithError.ts` — are the TypeScript side of the REST
+hop, which `cases.json` declares up front as this case's honest blindspot.
 
-**The step, and its prediction:** wire the DI binding resolution into the consumers and impact footprints, then
-replay `verification-tax.ts keycloak-cross-language`. If RECALL falls below 21, the structural theory holds and
-the remaining bin is reachable. If it does not, the next suspects are decorator→delegate and framework
-registration, neither of which the engine models at all today — and THAT would be a build, not a flip.
+**What the bin actually measures: answer SIZE, not engine reach.** That output is 12,807 lines — 12,659 edges
+over 2,948 files. The agent never ran it. It anchored on `RealmAdminResource.java#updateRealm` instead, got 28
+lines, and piped even that through `tail -40`; its other seam call was `--format agent | tail -150`. The agent
+SELF-TRUNCATES our output because it is unreadable at full size. So the two answers on offer are 28 lines and
+too narrow, or 12,807 lines and unusable. DI enrichment adds members to both — it widens the narrow one
+marginally and makes the huge one huger. It cannot lower RECALL by construction.
+
+**The classifier was re-verified before any of this was trusted**, since a bad instrument would invalidate the
+baseline. A first pass appeared to show these files in the replay output; the hits were `UIRealmResource` (a
+different class) and incidental mentions inside snippet bodies — an import line, a method call. The citation
+regex at line 83 correctly requires a real path, so those are not citations. **RECALL 21 stands.**
+
+**The pattern from the three previous rounds still holds and is now sharper.** Three times a capability turned
+out to exist and be narrowly scoped rather than missing (`data_coupling` hardcoded `false`; `--format agent`
+snippets only in the pipeline section; the DI index reaching one shape). The correction: checking whether a
+capability is switched off is not enough — check whether it is already REACHING the target and the answer is
+unusable anyway. That was the case here, and only a citation count on the real anchor could show it.
+
+**The next lever is ranking/scoping, not reach.** Getting a 2,948-file consumer set down to something an agent
+reads without a `tail` is a different problem from the one written down here, and it is where the remaining
+RECALL bin actually lives.
