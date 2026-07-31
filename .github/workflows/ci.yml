@@ -2,7 +2,7 @@
 # "fresh machine" — installs from zero and runs the same checks `make ci` runs locally:
 # typecheck + unit tests, the README commands verbatim (offline subset; the model-backed ones
 # are skipped honestly since no `claude` CLI exists in CI), an offline smoke over every sample
-# diff, and finally a from-zero .vsix build (uploaded as an artifact).
+# diff. The .vsix build was removed when the VS Code extension was deprecated (2026-07-31).
 name: ci
 
 on:
@@ -79,11 +79,3 @@ jobs:
       - name: Offline smoke on every sample diff
         run: make smoke
 
-      - name: Build the .vsix from zero
-        run: make vsix
-
-      - name: Upload the .vsix
-        uses: actions/upload-artifact@v4
-        with:
-          name: seam-vsix
-          path: vscode-extension/*.vsix

@@ -6,10 +6,16 @@
 # ts/node_modules) and in vscode-extension/ (esbuild, vsce, typescript).
 name: release
 
+# DEPRECATED (2026-07-31) — the tag trigger is REMOVED, manual dispatch only.
+#
+# The VS Code extension is unused, and this workflow attaching it automatically is what put a
+# `seam-0.2.4.vsix` on the `v0.3.0` release: the extension's version lives in vscode-extension/package.json
+# and had drifted from the engine's, so every tag shipped a stale, silently mismatched artifact next to the
+# native cores. Prebuilt cores come from core-prebuilt.yml and are unaffected.
+#
+# Left dispatchable rather than deleted, because "for now" — if the extension comes back, restore the trigger
+# AND fix the version drift first, or it will ship the same mismatch again.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:

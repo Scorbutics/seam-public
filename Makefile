@@ -1,8 +1,7 @@
 # Seam — build & verification entrypoints.
 #
-# One command to go from a fresh checkout to a shippable .vsix:
-#
-#     make vsix
+# DEPRECATED (2026-07-31): the VS Code extension is unused and no longer built by CI or attached to
+# releases. `make vsix` still works for anyone who wants a local build; nothing depends on it.
 #
 # Run `make` (or `make help`) for the full list. Every target is idempotent and assumes
 # nothing but `bun` (https://bun.sh) on PATH — `make install` brings up both the engine
@@ -41,7 +40,7 @@ install: ## Install all deps (engine + extension) + the embedding model
 embed-model: ## Fetch the sentence-embedding weights the intent field reads (idempotent)
 	cd $(TS_DIR) && bun -e 'const {pipeline,env}=await import("./node_modules/@xenova/transformers/src/transformers.js"); env.cacheDir="./node_modules/@xenova/transformers/.cache"; for (const q of [true,false]) await pipeline("feature-extraction","Xenova/all-MiniLM-L6-v2",{quantized:q});'
 
-vsix: install ## ⭐ Build the self-contained .vsix from zero
+vsix: install ## DEPRECATED — build the .vsix locally (unused; not in CI, not in releases)
 	cd $(EXT_DIR) && bun run package
 	@echo && ls -lh $(EXT_DIR)/*.vsix
 

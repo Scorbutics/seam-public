@@ -267,9 +267,11 @@ because it is useful for review — but the codebase shapes above are the mainta
 `--review` cross-checks a change against the structure it perturbs: a backend-only diff touching a shared table
 whose front-end reader is not in the PR gets flagged.
 
-### VS Code extension
+### VS Code extension — DEPRECATED (2026-07-31)
 
-A self-contained `.vsix` on [Releases](https://github.com/Scorbutics/seam/releases), or `make vsix`.
+Unused, and no longer built by CI or attached to releases. The source stays in `vscode-extension/` and
+`make vsix` still builds it locally, but it is not maintained and its version has drifted from the engine's —
+`v0.3.0` shipped a `0.2.4`-versioned `.vsix`, which is what prompted retiring it. Use the CLI.
 
 ---
 
