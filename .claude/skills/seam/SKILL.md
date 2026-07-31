@@ -15,7 +15,10 @@ description: >-
   breaks if you change X (`--query impact`), the FACTS to refactor X (`--query refactor` =
   impact+dependencies+contract; the PLAN stays yours), can A reach B + a witness path
   (`--query reaches`), a module's boundary (`--query contract`), the cohesive subsystem around X
-  (`--query neighborhood`), how A and B differ (`--query compare`); or `--ask "<question>"` (§E)
+  (`--query neighborhood`), how A and B differ (`--query compare`), **where X touches the DATABASE or any
+  cross-stack shared key** (`--query coupling`), **who WRITES the state X reads** (`--query writers`), or
+  EVERYTHING structural about one symbol in one call (`--query brief` — start here when unsure);
+  or `--ask "<question>"` (§E)
   ROUTES a plain question to the right shape. The
   discriminator: use Seam when the answer's correctness needs RESOLVED EDGES. For a quick one-fact
   lookup grep is still instant (Seam to MAP/VERIFY, grep to DRILL); for "what code is ABOUT X"
@@ -369,6 +372,22 @@ $ENGINE --scan --repo "<REPO>" --query reaches --center "<F>#<A>" --to-symbol "<
 
 # a module's BOUNDARY — used exports + consumers, dead exports, outbound deps, fan-in/out
 $ENGINE --scan --repo "<REPO>" --query contract --center "<F>" --format llm-context
+
+# WHERE DOES IT HIT THE DATABASE? — the shared keys (db tables / http routes / events) the symbol touches.
+# `●` lines are the ANCHOR'S OWN access sites: the exact line inside it that reads or writes the key, with the
+# source text. Those answer "where does this write to the DB" directly — you do NOT need to open the file.
+# The `←`/`→` lines are the OTHER side: code coupled to it through the key with no import or call between
+# them, which a call-graph and a grep both miss. This is the shape for any cross-stack or "who else touches
+# this table/route/event" question.
+$ENGINE --scan --repo "<REPO>" --query coupling --center "<F>[#<S>]" --format llm-context
+
+# who WRITES the state this symbol READS — reverse data coupling, column-grained where the ORM allows it
+$ENGINE --scan --repo "<REPO>" --query writers --center "<F>#<S>" --format llm-context
+
+# EVERYTHING structural about one symbol in ONE call — consumers + transitive impact + dependencies +
+# contract, plus cross-stack coupling when the symbol has any. START HERE when you are not yet sure which
+# of the shapes above you want; it is one call instead of four.
+$ENGINE --scan --repo "<REPO>" --query brief --center "<F>#<S>" --format llm-context
 
 # the cohesive SUBSYSTEM around a symbol (core vs periphery, weak-community)
 $ENGINE --scan --repo "<REPO>" --query neighborhood --center "<F>#<S>" --format llm-context

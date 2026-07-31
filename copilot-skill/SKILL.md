@@ -41,6 +41,9 @@ a field the map omits.
 | *"How is &lt;X&gt; MANAGED / handled across the app?"* (a STAR — one mechanism, many entry points) | **pick the center FIRST (see below), then** `seam --scan --auto --concern --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format concern` | a center-first map: In (entry ──HTTP/db──▶ ●) / Out (● ──writes──▶ db) |
 | *"How does &lt;X&gt; FLOW / where does it culminate?"* (a LINE — trace one path) | **pick the center FIRST, then** `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several: `--center <f1>#<s1>,<f2>#<s2>`) | an auto-grown spine → culmination |
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
+| *"where does X hit the DATABASE?" · "what table/route/event does it touch?" · "who else touches it?"* | `seam --scan --query coupling --repo <repo> --center <f>[#<s>] --format llm-context` | per shared key: `●` = the anchor's OWN access line + source text (answers it directly — no need to open the file); `←`/`→` = the code coupled through that key with no import or call between them |
+| *"who WRITES the state X reads?"* | `seam --scan --query writers --repo <repo> --center <f>#<s> --format llm-context` | the reverse data coupling, column-grained where the ORM allows it |
+| *anything structural about one symbol, when you are not sure which shape you want* | `seam --scan --query brief\|refactor --repo <repo> --center <f>#<s> --format llm-context` | consumers + transitive impact + dependencies + contract + cross-stack coupling, in ONE call |
 | *"what does this module export, how do I call it, and how do callers actually use it?"* | `seam --scan --query contract --repo <repo> --center <file> --format llm-context` | per export: its DECLARED signature + OBSERVED call sites (count + argument-count histogram) + its consumers |
 
 **`--query contract` replaces the grep-for-the-signature step.** For each export it prints the declared parameter
@@ -64,7 +67,7 @@ first step — never run the grow with only `--intent` and let the engine guess:
    twice what the analysis itself cost. Look for the class/service/handler named after the domain noun in the
    question. E.g. for *"how are bookings managed"*:
    ```bash
-   rg -il 'booking' --type java        # → BookingService.java, BookingsController.java, …
+   seam --repo <repo> --locate BookingService     # every definition of the name, repo-wide, ~0.8s
    ```
    Pick the 1–3 that actually implement the behaviour (a `*Service` / `*Manager` / `*Controller` /
    `*Handler`), not tests or DTOs.
