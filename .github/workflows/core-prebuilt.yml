@@ -24,10 +24,18 @@ jobs:
       fail-fast: false          # one broken target must not hide the state of the other three
       matrix:
         include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  asset: seam_core-linux-x64.node,    lib: libseam_napi.so }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, asset: seam_core-linux-arm64.node, lib: libseam_napi.so }
-          - { os: macos-14,       target: aarch64-apple-darwin,      asset: seam_core-darwin-arm64.node, lib: libseam_napi.dylib }
-          - { os: macos-13,       target: x86_64-apple-darwin,       asset: seam_core-darwin-x64.node,   lib: libseam_napi.dylib }
+          # `loadcheck` is EXPLICIT rather than inferred from the OS. The x64 macOS entry is cross-built on an
+          # arm64 runner, so it must not attempt to dlopen its own artifact — and expressing that as another
+          # `os != …` string comparison is how the rule silently rots the next time a runner label changes.
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  asset: seam_core-linux-x64.node,    lib: libseam_napi.so,    loadcheck: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, asset: seam_core-linux-arm64.node, lib: libseam_napi.so,   loadcheck: false }
+          - { os: macos-14,       target: aarch64-apple-darwin,      asset: seam_core-darwin-arm64.node, lib: libseam_napi.dylib, loadcheck: true }
+          # WAS `macos-13`, which never ran: GitHub is retiring that image, so the job sat queued until it
+          # expired and the matrix could never go green — the release job needs all four. macOS ships an SDK
+          # with both architectures, so the arm64 runner cross-builds the x64 target. The artifact is therefore
+          # UNVERIFIED BY LOADING on this leg, which is stated here rather than hidden: it is a compile-only
+          # guarantee, exactly like the linux-arm64 leg.
+          - { os: macos-14,       target: x86_64-apple-darwin,       asset: seam_core-darwin-x64.node,   lib: libseam_napi.dylib, loadcheck: false }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -49,11 +57,12 @@ jobs:
         run: cp "target/${{ matrix.target }}/release/${{ matrix.lib }}" "${{ matrix.asset }}"
 
       # SMOKE THE ARTIFACT, not just the build. A cdylib that compiles and then fails to LOAD is the failure mode
-      # that matters here, and it is invisible to `cargo build`. Only on a native runner — a cross-built artifact
-      # cannot be loaded by the machine that produced it, and pretending otherwise would be a green check that
-      # means nothing.
+      # that matters here, and it is invisible to `cargo build`. Runs only where `loadcheck` is set — a
+      # cross-built artifact cannot be loaded by the machine that produced it, and pretending otherwise would be
+      # a green check that means nothing. Two of the four legs are therefore compile-only, which is a weaker
+      # guarantee and is named as such in the matrix rather than left for a reader to infer from a skipped step.
       - name: Load-check (native targets only)
-        if: matrix.os != 'ubuntu-24.04-arm'
+        if: matrix.loadcheck
         run: |
           curl -fsSL https://bun.sh/install | bash
           export PATH="$HOME/.bun/bin:$PATH"
