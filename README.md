@@ -220,6 +220,13 @@ Three benchmarks, in [`bench/`](bench/). They exist to find where the tool loses
   together are linked by an ordinary import. Its value is the files imports cannot reach: adding it lifts recall
   **20.0% → 26.6%** and **7.7% → 9.8%**, replicated on two corpora. Absolute recall is low because a commit bundles
   unrelated work, which depresses every arm equally — read the arms against each other, never the raw percentage.
+- **Route coupling is ASYMMETRIC, and that is a live defect.** Querying the two ends of the same pair can give
+  two different answers: on keycloak, `partial-export` resolves from the Java resource to the TypeScript client
+  but not the other way, and **20 of 25 route keys on `realms.ts` report no counterpart** despite the counterpart
+  existing. The cause is that each side searches for the key as IT spells it (`/partial-export` vs
+  `/*/partial-export`). Two contributing gates are fixed; a third has not been found, and the direction that
+  breaks flips between repos. See [`bench/coupling`](bench/coupling/) for the full negative result. The flagship
+  example above is a case that works — it is not evidence the general case does.
 - **Cross-language co-change rests on 42 pairs** in one repo — directionally supported, thinly sampled.
 - **The oracle is TypeScript-only** (its judge is `tsc`) and covers `export function`, not arrow exports.
   Correctness on the Java/Ruby/Python sides is not measured by it.
