@@ -24,6 +24,11 @@ pub fn gather_refactor_facts(repo: &str, anchor_file: &str, symbol: &str) -> Ref
     let impact = project_impact(repo, anchor_file, symbol, &ImpactOpts::default());
     let dependencies = match build_footprint(repo, anchor_file, Some(symbol), "down", false) {
         Some(g) => project_dependency_set(&g),
+        // THE FOOTPRINT COULD NOT BE BUILT AT ALL — unreadable file, unparseable language, symbol not found.
+        // This branch used to report `reason: "none"` with `resolution_quality: "FULL"`, i.e. `--query refactor`
+        // answered "resolution: FULL | resolved: 0 dependency edges" when the analysis had never run. That is a
+        // stronger overclaim than the empty-set one it shares a crate with: there the scan ran and found
+        // nothing; here there was no scan. `unavailable` → UNKNOWN says so.
         None => ConsumerSet {
             shape: "deps".to_string(),
             anchor_symbol: symbol.to_string(),
@@ -32,8 +37,8 @@ pub fn gather_refactor_facts(repo: &str, anchor_file: &str, symbol: &str) -> Ref
             unresolved: Vec::new(),
             recalled: Vec::new(),
             no_structure: true,
-            reason: Some("none".to_string()),
-            resolution_quality: "FULL".to_string(),
+            reason: Some("unavailable".to_string()),
+            resolution_quality: crate::project_set::quality_for(true, Some("unavailable")).to_string(),
         },
     };
     let contract = project_contract(repo, anchor_file);

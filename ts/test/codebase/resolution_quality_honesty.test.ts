@@ -60,4 +60,37 @@ describe("resolutionQuality never overstates an empty answer", () => {
     const empty: any = projectConsumerSet(REPO, "src/lib.ts", "orphan");
     expect(resolved.resolutionQuality).not.toBe(empty.resolutionQuality);
   });
+
+  // THE FAILURE PATHS, which overclaimed harder than the empty ones. `--query writers` on an unreadable file
+  // and `--query refactor` with no buildable footprint both reported `FULL` — a verified-complete answer from
+  // an analysis that never ran. "I looked and found nothing" and "I could not look" are different facts.
+  test("writers on an unreadable file is UNKNOWN, not FULL", () => {
+    const core: any = loadAddon();
+    const s: any = core.projectWriters(REPO, "src/does-not-exist.ts", null);
+    expect(s.members.length).toBe(0);
+    expect(s.resolutionQuality).not.toBe("FULL");
+    expect(s.resolutionQuality).toBe("UNKNOWN");
+  });
+
+  // NOT "UNKNOWN", and the reason is worth recording rather than asserting away. `refactor` builds its
+  // dependency slice with direction "down", and `build_footprint` wraps that in `Some(...)` unconditionally
+  // (`build_dependency_graph` returns a graph, never an Option) — so refactor's `None` branch is UNREACHABLE
+  // today. The `unavailable`/UNKNOWN label added there is DEFENSIVE, for if that ever changes; it is not a live
+  // fix and must not be reported as one. What is live is the invariant below: never FULL over an empty set.
+  //
+  // A missing file also cannot reach here through the product — the CLI validates the anchor and aborts first.
+  test("refactor's dependency slice never claims FULL when it resolved nothing", () => {
+    const core: any = loadAddon();
+    const f: any = core.gatherRefactorFacts(REPO, "src/does-not-exist.ts", "nope");
+    expect(f.dependencies.members.length).toBe(0);
+    expect(f.dependencies.resolutionQuality).not.toBe("FULL");
+  });
+
+  test("a real writers answer with nothing to resolve is EMPTY — the two negatives stay distinct", () => {
+    const core: any = loadAddon();
+    const s: any = core.projectWriters(REPO, "src/lib.ts", null);   // real file, reads no DB table
+    expect(s.resolutionQuality).toBe("EMPTY");
+    const gone: any = core.projectWriters(REPO, "src/does-not-exist.ts", null);
+    expect(s.resolutionQuality).not.toBe(gone.resolutionQuality);
+  });
 });

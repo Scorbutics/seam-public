@@ -58,6 +58,32 @@ fn is_resolved(p: &str) -> bool {
     p == "RESOLVED_FULL" || p == "RESOLVED_PARTIAL"
 }
 
+/// THE RESOLUTION LABEL — one rule, shared by every set-shaped projection (consumers, dependencies, writers,
+/// refactor). `resolution_quality` used to be the literal `"FULL"` at every construction site in this crate, so
+/// a shape that resolved nothing — or could not even run — still rendered
+/// `resolution: FULL | resolved: 0 consumer edges`. That reads as "I scanned exhaustively and there is genuinely
+/// nothing", which is the most expensive sentence this tool can produce: a reader acts on it by stopping.
+///
+/// Benchmark run 4 hit it for real — `{"noStructure":true,"resolutionQuality":"FULL","members":[]}` on a symbol
+/// with 247 resolved consumer edges in 81 files. The engine there was a stale build, but the LABEL is what made
+/// a wrong answer authoritative, and the label is generated here.
+///
+/// FULL is a claim about the RESOLUTION, so it is only made when something resolved:
+///   FULL    — something resolved; the per-member tiers say how much.
+///   NONE    — candidates existed but none resolve statically (opaque dispatch) → grep is the right next tool.
+///   EMPTY   — the scan RAN and found nothing to resolve. Possibly true, possibly a blind spot; not a proof.
+///   UNKNOWN — the scan COULD NOT RUN (unreadable file, no footprint). Distinct from EMPTY on purpose: "I
+///             looked and found nothing" and "I could not look" are different facts, and collapsing them into
+///             one word is how an I/O failure gets reported as a verified negative.
+pub fn quality_for(no_structure: bool, reason: Option<&str>) -> &'static str {
+    match (no_structure, reason) {
+        (false, _) => "FULL",
+        (true, Some("opaque")) => "NONE",
+        (true, Some("unavailable")) => "UNKNOWN",
+        (true, _) => "EMPTY",
+    }
+}
+
 // THE LINE CONTRACT — the one place the engine's internal line convention meets the rendered one. EVERY line the
 // scan produces is 0-BASED (`Ctx::span` / `Ctx::ln` count newlines before the offset); a projected member's
 // `line` is what a human/editor jumps to, so it is 1-BASED. Converting per-branch is what produced the systematic
@@ -152,11 +178,7 @@ fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> Consume
     // FULL is a claim about the RESOLUTION, so it is only honest when something resolved:
     //   NONE  — in-edges exist but none resolve statically (opaque dispatch): grep is the right next tool.
     //   EMPTY — nothing was found at all: possibly true, possibly a blind spot, and NOT a verified negative.
-    let resolution_quality = match (no_structure, reason.as_deref()) {
-        (false, _) => "FULL",
-        (true, Some("opaque")) => "NONE",
-        (true, _) => "EMPTY",
-    };
+    let resolution_quality = quality_for(no_structure, reason.as_deref());
 
     ConsumerSet {
         shape: shape.to_string(),

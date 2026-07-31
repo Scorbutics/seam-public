@@ -63,9 +63,12 @@ pub fn project_writers(repo: &str, anchor_file: &str, symbol: Option<&str>) -> W
         filter_columns: Vec::new(),
         no_structure: true,
         reason: Some(reason.into()),
-        resolution_quality: "FULL".into(),
+        // Derived from the REASON, never asserted. `empty("unavailable")` is the unreadable-file path, which
+        // used to report FULL — an I/O failure rendered as a verified negative.
+        resolution_quality: crate::project_set::quality_for(true, Some(reason)).into(),
     };
-    let Ok(bytes) = std::fs::read(format!("{repo}/{anchor_file}")) else { return empty("none") };
+    // The file could not be READ. That is not "reads no resolvable table" — it is "no answer was computed".
+    let Ok(bytes) = std::fs::read(format!("{repo}/{anchor_file}")) else { return empty("unavailable") };
     let text = String::from_utf8_lossy(&bytes).into_owned();
 
     // 1) the tables the CENTER reads (db-table, CONSUME role), span-scoped when a symbol was given.
@@ -166,6 +169,6 @@ pub fn project_writers(repo: &str, anchor_file: &str, symbol: Option<&str>) -> W
         filter_columns,
         no_structure,
         reason: if no_structure { Some("opaque".into()) } else { None },
-        resolution_quality: "FULL".into(),
+        resolution_quality: crate::project_set::quality_for(no_structure, if no_structure { Some("opaque") } else { None }).into(),
     }
 }
