@@ -626,3 +626,41 @@ fails 2 of the 3 cases, `2:5` becoming `2:1`. A test that has never failed has n
 This is the fifth accusation against this engine this session that did not survive checking (three by the
 oracle historically, plus `score.ts`'s 35% recall and `verification-tax.ts`'s RECALL 100% today). The engine is
 not above suspicion — but neither is whatever is accusing it.
+
+## Do we need a run 5? The cheap counterfactual says NO — and says something better
+
+`verification-tax.ts` REPLAYS the stored seam invocations against whatever engine is checked out, so the effect
+of an engine change on a past agent run can be measured without commissioning new agents. Replaying the keycloak
+trace, run-1 engine → current:
+
+| bin | then | now |
+|---|---|---|
+| CONTENT | 7 (23%) | **4 (13%)** |
+| RECALL | 21 (70%) | **21 (70%)** |
+| TRUST | 2 (7%) | 5 (17%) |
+| total tax | 30 / 41 | **30 / 41** |
+
+Cited files carrying source text went 2 → 24, and CONTENT fell accordingly — the snippet work is real and shows
+up. **RECALL did not move by one command**, even though `--query coupling` on `realms.ts` went from 20 of 25
+keys unresolved to 2 of 25 over four fixes.
+
+**The reason is routing, not resolution: that agent never ran `--query coupling`.** It used `--query consumers`
+and `--format agent`. On a CROSS-LANGUAGE question — the one class coupling exists for, and the one where a
+language server returns nothing — the agent did not reach for the shape built to answer it, so every improvement
+to that shape was invisible to its tax.
+
+### What this means for the next round
+
+**A run 5 would mostly re-measure this.** The agent's shape SELECTION is upstream of the shape's quality, and no
+amount of engine work moves a number for a query nobody issues. Commission a run only after the routing changes,
+and then it measures something new.
+
+**The lever is discoverability**, and there are three candidates, cheapest first:
+1. `seam --help` and the skill route by QUESTION already; neither says "if the answer might be in another
+   language, this is the query". A cross-stack question has no obvious entry point.
+2. `--query brief`/`--format agent` could FOLD IN coupling counterparts for an anchor with shared keys, so the
+   agent gets them without knowing to ask.
+3. `--query ask` routes semantically but needs an LLM; the deterministic router does not consider coupling.
+
+Option 2 is the one to measure first: it needs no agent behaviour change at all, which is the variable this
+benchmark has repeatedly shown is the hardest to move.
