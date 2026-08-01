@@ -68,6 +68,47 @@ function snippetCapLines(sr?: SnippetReader): string[] {
     : [];
 }
 
+
+// TRANSPORT-SIZED LISTS — emit rows until the inline ceiling, then DECLARE the remainder.
+//
+// MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). The harness delivers a tool result inline up to ~32 KB
+// and SPILLS anything larger to a file the agent must spend an extra call reading back — largest inline Bash
+// result observed 28.7 KB, smallest spilled 37.9 KB. `--query dependencies` on one anchor renders 36 KB (200
+// uncapped members) and `brief`/`refactor` 59.6 KB, so each of those cost a guaranteed extra round trip.
+//
+// This is the ONE class of fix that has actually moved this benchmark: it removes a call the agent is FORCED to
+// make. Three attempts at removing a REASON to call (richer contract, content-gap snippets, the snippet ladder)
+// each measured flat — see the run 2, run 4 and kc5 notes.
+//
+// The cap is DECLARED, never silent, and names the remedy — the honesty contract this engine holds everywhere:
+// a truncated list presented as complete is the failure mode, not the truncation itself.
+const INLINE_CEILING = 24000;   // bytes. The threshold is only BRACKETED by observation — largest inline result
+                                // seen 28.7 KB, smallest spilled 37.9 KB — so the exact cut-off is unknown and
+                                // this leaves real headroom rather than sitting against an inferred edge. A first
+                                // attempt at 30000 put `brief` at 32,752 B, i.e. 16 bytes under a limit that was
+                                // never measured directly; that is a guess wearing a number.
+// The BUNDLE (`brief`/`refactor`) renders four shapes into ONE tool result, so each section that fits alone can
+// still spill in aggregate: on keycloak, dependencies 31.9 KB + contract 19.6 KB = 55 KB. Each section gets a
+// SHARE, and each declares its own cut naming the standalone shape — which is the right advice anyway, since
+// `--query dependencies` answers that part in full and is one call.
+const BUNDLE_SHARE = Math.floor(INLINE_CEILING / 6);   // /6 not /4: the four sections also carry headers,
+let _ceiling = INLINE_CEILING;   // set by the bundle around each sub-render; a render is synchronous, so this
+                                 // cannot interleave — and threading it through six signatures for one caller
+                                 // would put the transport limit in every shape's public API.
+function fitRows(rows: string[], usedBytes: number, unit: string, remedy: string): string[] {
+  let used = usedBytes;
+  const kept: string[] = [];
+  for (const r of rows) {
+    if (used + r.length > _ceiling) break;
+    kept.push(r);
+    used += r.length + 1;
+  }
+  if (kept.length === rows.length) return kept;
+  return [...kept, "",
+    `> INCOMPLETE LIST — showing ${kept.length} of ${rows.length} ${unit}. The rest are resolved just as firmly;`,
+    `> they did not fit the tool-result ceiling. Do NOT enumerate from this. For the complete set: ${remedy}`];
+}
+
 function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string {
   const members: any[] = model.members ?? [];
   const unresolved: any[] = model.unresolved ?? [];
@@ -121,7 +162,8 @@ function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string
     + (prov ? `  {${prov}}` : "") + bindLine(m) + snip(sr, m.file, m.line);
   if (resolved.length) {
     out.push(`## Resolved ${L.nounPl} (verified edges)`);
-    for (const m of resolved) out.push(member(m, m.provenance));
+    out.push(...fitRows(resolved.map((m: any) => member(m, m.provenance)), out.join("\n").length, L.unit + "(s)",
+      "`--format json` (the full model, every entry)."));
     out.push("");
   }
   if (suggested.length) {
@@ -304,10 +346,11 @@ export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
   // CONSUMERS first, because "who calls this" is the question a reader actually opens with, and because IMPACT
   // answers a different one (the transitive radius). Printing the radius before the direct callers invited the
   // reader to mistake one for the other.
-  if (model.consumers) out.push("─".repeat(4) + " CONSUMERS (who calls it, directly) " + "─".repeat(4), renderConsumerSet(model.consumers, sr), "");
-  out.push("─".repeat(4) + " IMPACT (what breaks if you change it — TRANSITIVE, not the direct callers above) " + "─".repeat(4), renderImpact(im, sr), "");
-  out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep, sr), "");
-  out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct, sr));
+  const share = <T>(f: () => T): T => { _ceiling = BUNDLE_SHARE; try { return f(); } finally { _ceiling = INLINE_CEILING; } };
+  if (model.consumers) out.push("─".repeat(4) + " CONSUMERS (who calls it, directly) " + "─".repeat(4), share(() => renderConsumerSet(model.consumers, sr)), "");
+  out.push("─".repeat(4) + " IMPACT (what breaks if you change it — TRANSITIVE, not the direct callers above) " + "─".repeat(4), share(() => renderImpact(im, sr)), "");
+  out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), share(() => renderDependencySet(dep, sr)), "");
+  out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), share(() => renderContract(ct, sr)));
   // COUPLING LAST, and only when it has something to say. It is the one section here a language server cannot
   // produce at all, so it goes in the bundle rather than waiting for the reader to know `--query coupling`
   // exists: replaying the keycloak benchmark trace showed four rounds of coupling improvements moving an
@@ -568,7 +611,8 @@ export function renderContract(model: any, sr?: SnippetReader): string {
     // the content-gap work; the fix never reached here, so the shape named every symbol and addressed none.
     // `at()` is the shared citation helper, so a missing line degrades to a bare name rather than fabricating `:0`.
     out.push("## Unused exports (no external consumer — dead public API)",
-      ...model.unusedExports.map((u: any) => `- ${u.symbol}  (${at(model.module, u.line)})`), "");
+      ...fitRows(model.unusedExports.map((u: any) => `- ${u.symbol}  (${at(model.module, u.line)})`),
+        out.join("\n").length, "dead export(s)", "`--query contract` on this module alone, or `--format json`."), "");
   }
   if ((model.depends ?? []).length) {
     out.push("## Depends (outbound — resolved external imports)");
