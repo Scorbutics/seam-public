@@ -1717,6 +1717,26 @@ pub fn dynamic_dispatch_evidence(file_text: String, body: String) -> String {
     seam_lang::atoms::dynamic_dispatch_evidence(&body, &imports).unwrap_or_default()
 }
 
+/// The imported identifiers of a file — the PER-FILE half of `dynamicDispatchEvidence`, hoisted so a caller
+/// scanning many nodes in one file pays for it once.
+///
+/// MEASURED (2026-08-01, cal.com). `detect_dynamic_dispatch_blindspots` walks every node in the grown footprint
+/// and called `dynamicDispatchEvidence(WHOLE FILE, body)` per node — 1817 times. That is 10.9s, 93% of the
+/// decompose stage and 58% of an 18.7s query, spent three ways over and over: re-joining the file's lines into
+/// one string, marshalling that whole string across the FFI boundary, and re-deriving the SAME import list from
+/// it. Only the third argument — the node's body — ever varies.
+#[napi]
+pub fn imported_idents(file_text: String) -> Vec<String> {
+    seam_lang::atoms::imported_idents(&file_text)
+}
+
+/// `dynamicDispatchEvidence` with the file's imports supplied — the per-NODE half. Same function underneath, so
+/// the two entries cannot disagree about what counts as evidence.
+#[napi]
+pub fn dynamic_dispatch_evidence_for(body: String, imports: Vec<String>) -> String {
+    seam_lang::atoms::dynamic_dispatch_evidence(&body, &imports).unwrap_or_default()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy

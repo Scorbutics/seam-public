@@ -62,13 +62,21 @@ export function detect_dynamic_dispatch_blindspots(g: Graph, repo: string): void
   const _BOUNDARY = new Set(["table", "db-table", "route", "queue", "topic", "event", "service", "cache", "file"]);
   const core = loadAddon();
   if (!core) return;
-  const textCache = new Map<string, string[] | null>();
-  const load = (rel: string): string[] | null => {
+  // PER-FILE WORK, DONE PER FILE. This loop visits every node in the footprint and only the node's BODY varies;
+  // the file's import list does not. It used to call `dynamicDispatchEvidence(lines.join("\n"), body)` per node,
+  // which re-joined the whole file, marshalled that whole string across the FFI boundary, and re-derived the
+  // same imports from it — 1817 times on the cal.com benchmark anchor, for 10.9s: 93% of the decompose stage
+  // and 58% of an 18.7s query. The imports are now derived ONCE per file and only the body crosses per node.
+  const textCache = new Map<string, { lines: string[]; imports: string[] } | null>();
+  const load = (rel: string): { lines: string[]; imports: string[] } | null => {
     if (textCache.has(rel)) return textCache.get(rel)!;
-    let lines: string[] | null = null;
-    try { lines = readFileSync(join(repo, rel), "utf-8").split("\n"); } catch { /* unreadable */ }
-    textCache.set(rel, lines);
-    return lines;
+    let entry: { lines: string[]; imports: string[] } | null = null;
+    try {
+      const text = readFileSync(join(repo, rel), "utf-8");
+      entry = { lines: text.split("\n"), imports: (core.importedIdents(text) as string[]) ?? [] };
+    } catch { /* unreadable */ }
+    textCache.set(rel, entry);
+    return entry;
   };
   let emitted = 0;
   const seen = new Set<string>();
@@ -77,10 +85,11 @@ export function detect_dynamic_dispatch_blindspots(g: Graph, repo: string): void
     if (!n.file || (n as any).coupling || _BOUNDARY.has(n.kind) || !_SCAN_EXT.some((e) => n.file.endsWith(e))) continue;
     if (!(n.end > n.start)) continue;   // needs a real body span
     const key = `${n.file}#${n.start}`; if (seen.has(key)) continue; seen.add(key);
-    const lines = load(n.file); if (!lines) continue;
+    const f = load(n.file); if (!f) continue;
     // The core reads the FILE for its imports and the BODY for the dispatch shape — a registry subscript only
-    // counts when its receiver came from another module, which the node's own span cannot tell you.
-    const evidence = core.dynamicDispatchEvidence(lines.join("\n"), lines.slice(n.start, n.end + 1).join("\n")) as string;
+    // counts when its receiver came from another module, which the node's own span cannot tell you. The file
+    // half is memoised above; only the body is derived per node.
+    const evidence = core.dynamicDispatchEvidenceFor(f.lines.slice(n.start, n.end + 1).join("\n"), f.imports) as string;
     if (!evidence) continue;
     g.blindspots.push({ node: n.id, mechanism: "dynamic-dispatch",
       evidence: `${n.label} ${evidence} — the concrete impl (and its data sink) is chosen at runtime; static resolution stops here`,

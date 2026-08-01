@@ -10,6 +10,7 @@ use crate::treesitter::Ctx;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Mutex;
 use tree_sitter::Node;
 
 /// One inner function of the anchor: its line span and every identifier it mentions.
@@ -478,6 +479,36 @@ pub fn imported_idents(text: &str) -> Vec<String> {
 /// is a blind spot, because only it resolves to an impl with a data sink — so the result must be ACTIVATED as
 /// code (awaited, called, constructed, or dynamically imported), either directly or through a `const X =
 /// REG[key]` binding. Without that, every enum lookup in the repo reads as a lost flow.
+/// The two per-IDENT dispatch patterns, compiled once and reused. See the note in `dynamic_dispatch_evidence`
+/// for the measurement that made this necessary; a `Regex` is cheap to share (`is_match` takes `&self`) and
+/// expensive to build, so the memo is the difference between ~100k compilations and ~30 per query.
+static IDENT_PATTERNS: Lazy<Mutex<HashMap<String, (Regex, Regex)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn ident_patterns(ident: &str) -> Option<(Regex, Regex)> {
+    if let Some(hit) = IDENT_PATTERNS.lock().ok()?.get(ident) {
+        return Some(hit.clone());
+    }
+    let esc = regex::escape(ident);
+    let sub = format!(r#"{esc}\[\s*[^\]'"\s][^\]]*\]"#); // REG[<non-literal key>]
+    let direct = Regex::new(&format!(r"(?:await\s+|new\s+|import\(\s*){sub}|{sub}\s*\(")).ok()?;
+    let bind = Regex::new(&format!(r"(?:const|let|var)\s+(\w+)\s*=\s*{sub}")).ok()?;
+    IDENT_PATTERNS.lock().ok()?.insert(ident.to_string(), (direct.clone(), bind.clone()));
+    Some((direct, bind))
+}
+
+/// Same memo for the `const X = REG[k]` binding's USE pattern, keyed by the bound variable name.
+static BINDING_USE: Lazy<Mutex<HashMap<String, Regex>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn binding_use_pattern(var: &str) -> Option<Regex> {
+    if let Some(hit) = BINDING_USE.lock().ok()?.get(var) {
+        return Some(hit.clone());
+    }
+    let v = regex::escape(var);
+    let re = Regex::new(&format!(r"(?:await\s+{v}\b|\b{v}\s*\(|new\s+{v}\b|import\(\s*{v}\b)")).ok()?;
+    BINDING_USE.lock().ok()?.insert(var.to_string(), re.clone());
+    Some(re)
+}
+
 pub fn dynamic_dispatch_evidence(body: &str, imports: &[String]) -> Option<String> {
     if DYN_IMPORT_NONLITERAL.is_match(body) {
         return Some("dynamic-imports a non-literal module path".to_string());
@@ -485,15 +516,20 @@ pub fn dynamic_dispatch_evidence(body: &str, imports: &[String]) -> Option<Strin
     // IN THE CALLER'S ORDER (see `imported_idents`) — the evidence names ONE registry, and the first match
     // wins, so the iteration order is part of the answer rather than an implementation detail.
     for ident in imports {
-        let esc = regex::escape(ident);
-        let sub = format!(r#"{esc}\[\s*[^\]'"\s][^\]]*\]"#); // REG[<non-literal key>]
-        let direct = Regex::new(&format!(r"(?:await\s+|new\s+|import\(\s*){sub}|{sub}\s*\(")).ok()?;
+        // THE PATTERNS ARE MEMOISED PER IDENT, and that is the whole cost of this function.
+        //
+        // MEASURED (2026-08-01, cal.com). `detect_dynamic_dispatch_blindspots` calls this once per node in the
+        // footprint — 1817 nodes — and each call compiled two regexes PER IMPORTED IDENT, plus one more per
+        // `const X = REG[k]` capture. A file importing ~30 identifiers therefore compiled ~100k regexes over a
+        // single query: 10.9s, 93% of the decompose stage and 58% of an 18.7s answer. The patterns depend only
+        // on the ident, which repeats across every node of a file and across files, so a global memo hits
+        // essentially always. Hoisting the file's import list first bought only 8% — the compilation was the
+        // cost, not the marshalling, which is why that measurement came before this change rather than after.
+        let (direct, bind) = ident_patterns(ident)?;
         let mut hit = direct.is_match(body);
         if !hit {
-            let bind = Regex::new(&format!(r"(?:const|let|var)\s+(\w+)\s*=\s*{sub}")).ok()?;
             for c in bind.captures_iter(body) {
-                let v = regex::escape(&c[1]);
-                let used = Regex::new(&format!(r"(?:await\s+{v}\b|\b{v}\s*\(|new\s+{v}\b|import\(\s*{v}\b)")).ok()?;
+                let used = binding_use_pattern(&c[1])?;
                 if used.is_match(body) {
                     hit = true;
                     break;

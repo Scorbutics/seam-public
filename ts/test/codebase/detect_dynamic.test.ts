@@ -29,6 +29,20 @@ beforeAll(() => {
   w("src/alsoLazy.ts", `export async function load2() { return import("../src/payment"); }\n`);
   // a consumer that ALREADY resolves statically — must not be re-reported as a blind spot
   w("src/staticUser.ts", `import { charge } from "./payment";\nexport const go = () => charge();\n`);
+  // TWO IMPORTS WHERE ONLY THE SECOND IS THE REGISTRY — the per-ident memo's discriminator.
+  //
+  // `dynamic_dispatch_evidence` compiles its patterns PER IMPORTED IDENT and now memoises them (they were being
+  // rebuilt once per node: ~100k compilations and 10.9s on the cal.com benchmark anchor). A memo keyed wrongly —
+  // one entry shared by every ident — still passes every case where the registry is the FIRST import, because
+  // the first ident's pattern is the one that gets cached. Verified: deliberately breaking the key that way left
+  // this file at 6 pass / 0 fail. This fixture puts a non-registry import FIRST so the second lookup must return
+  // its OWN pattern, and names the registry in the evidence so a right-answer-for-the-wrong-reason fails too.
+  w("src/dispatchSecond.ts", `import { Formatter } from "./fmt";\nimport { HandlerRegistry } from "./registry";
+export async function pick(key: string) {
+  const h = HandlerRegistry[key];
+  return await h();
+}
+`);
   w("src/dispatch.ts", `import { PaymentServiceMap } from "./generated";\nimport { ErrorCode } from "./codes";
 export async function run(key: string) {
   const svc = PaymentServiceMap[key];
@@ -106,6 +120,22 @@ describe("detect_dynamic_dispatch_blindspots — the runtime impl choice", () =>
     const g = nodeGraph([{ id: "e1", label: "describeError", kind: "function", file: "src/dispatch.ts", start: 7, end: 9 }]);
     detect_dynamic_dispatch_blindspots(g, REPO);
     expect(g.blindspots.length).toBe(0);
+  });
+
+  test("the registry is found when it is the SECOND import — the per-ident memo's discriminator", () => {
+    // `src/dispatchSecond.ts` imports `Formatter` first and `HandlerRegistry` second, and only the second is a
+    // registry. `dynamic_dispatch_evidence` memoises its compiled patterns per ident; a memo that shares ONE
+    // entry across idents returns `Formatter`'s pattern for the `HandlerRegistry` lookup and finds nothing.
+    // Verified: with the key deliberately broken that way, every OTHER case in this file still passed — the
+    // registry is the first import in all of them, so the wrong cached pattern was accidentally the right one.
+    const g: any = new Graph();
+    g.anchor = "p1";
+    g.nodes.set("p1", { id: "p1", label: "pick", kind: "function", file: "src/dispatchSecond.ts", start: 2, end: 5 });
+    detect_dynamic_dispatch_blindspots(g, REPO);
+    expect(g.blindspots.length).toBe(1);
+    // Naming it matters: a pass that reported SOME registry would satisfy a bare length check while proving
+    // the lookup had returned the wrong ident's pattern.
+    expect(g.blindspots[0].evidence).toContain("HandlerRegistry");
   });
 
   test("a node with no body span is skipped rather than scanned as an empty body", () => {
