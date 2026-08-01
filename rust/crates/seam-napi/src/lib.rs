@@ -938,7 +938,9 @@ pub struct ExternalDepDto {
 pub struct ModuleContractDto {
     pub module: String,
     pub provides: Vec<ProvidedSymbolDto>,
-    pub unused_exports: Vec<String>,
+    /// Dead public API, each WITH ITS LINE. Bare names here cost a benchmark agent seven paging reads of one
+    /// 1,449-line file to find two methods this shape had already listed — see `seam_shapes::UnusedExport`.
+    pub unused_exports: Vec<UnusedExportDto>,
     pub depends: Vec<ExternalDepDto>,
     pub afferent: u32,
     pub efferent: u32,
@@ -967,7 +969,7 @@ impl From<seam_shapes::ModuleContract> for ModuleContractDto {
                     },
                 })
                 .collect(),
-            unused_exports: c.unused_exports,
+            unused_exports: c.unused_exports.into_iter().map(|u| UnusedExportDto { symbol: u.symbol, line: u.line.map(|l| l as u32) }).collect(),
             depends: c.depends.into_iter().map(|d| ExternalDepDto { symbol: d.symbol, source: d.source, file: d.file }).collect(),
             afferent: c.afferent as u32,
             efferent: c.efferent as u32,
@@ -2929,6 +2931,42 @@ pub struct LocatedNameDto {
     pub via_module: bool,
     /// A module match with no barrel and no same-named symbol: there is no single entry point to offer.
     pub module_no_entry: bool,
+}
+
+/// Wire form of a `seam_shapes::UnusedExport`.
+#[napi(object)]
+pub struct UnusedExportDto {
+    pub symbol: String,
+    pub line: Option<u32>,
+}
+
+/// locateNames — the BATCHED lookup: comma-separated names, each resolved independently, in the order given.
+///
+/// Measured on keycloak: agents already chain `--locate A; echo ===; --locate B` in one shell call (19, 23 and
+/// 10 invocations across 12, 16 and 8 Bash calls) because the CLI took one name at a time — and `--locate "A,B"`
+/// looked up the literal string and answered "No definition of 'A,B' found", a confident false negative for two
+/// symbols that both exist.
+#[napi]
+pub fn locate_names(repo: String, names: String, limit: Option<u32>) -> Vec<LocateGroupDto> {
+    seam_shapes::locate_names(&repo, &names, limit.unwrap_or(25) as usize)
+        .into_iter()
+        .map(|(name, rows)| LocateGroupDto {
+            name,
+            rows: rows
+                .into_iter()
+                .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
+                .collect(),
+        })
+        .collect()
+}
+
+/// One requested name and everything found for it. Grouped rather than flattened so a caller can tell WHICH of
+/// its names came back empty — a flat list cannot say that, and "which of these does not exist" is precisely
+/// the question a batch lookup is asked.
+#[napi(object)]
+pub struct LocateGroupDto {
+    pub name: String,
+    pub rows: Vec<LocatedNameDto>,
 }
 
 /// locateName — EVERY definition of a name, ranked. The mechanical half of anchoring: the caller has already

@@ -16,13 +16,13 @@ pub mod writers;
 
 pub use collate::locale_compare;
 pub use compare::{project_compare, Comparison, CompareOpts, Dep};
-pub use contract::{project_contract, Consumer, ExternalDep, ModuleContract, ProvidedSymbol};
+pub use contract::{project_contract, Consumer, ExternalDep, ModuleContract, ProvidedSymbol, UnusedExport};
 pub use impact::{project_impact, Impact, ImpactFile, ImpactGap, ImpactOpts, ImpactedSymbol};
 pub use project_set::{
     attach_recalled, project_consumer_set, project_dependency_set, ConsumerMember, ConsumerSet,
     NameConsumer, UnresolvedCaller,
 };
-pub use route::{locate_name, parse_route, resolve_name, route_prompt, LocatedName, ResolvedName, RouteDecision, ShapeSpec, SHAPES};
+pub use route::{locate_name, locate_names, parse_route, resolve_name, route_prompt, LocatedName, ResolvedName, RouteDecision, ShapeSpec, SHAPES};
 pub use reach::{find_reach, ReachOpts, ReachResult, ReachStep};
 pub use refactor_facts::{gather_refactor_facts, RefactorFacts};
 pub use neighborhood::{project_neighborhood, Neighborhood, NeighborFile, NeighborhoodOpts};

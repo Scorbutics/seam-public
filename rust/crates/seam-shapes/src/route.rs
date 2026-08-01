@@ -132,6 +132,29 @@ pub struct LocatedName {
 /// So it returns ALL candidates with what distinguishes them (kind, signature, enclosing type, test-ness) and
 /// lets the caller choose. `resolve_name` — which collapses to one hit for the LLM router — stays as it is;
 /// silently picking is right for a router that has a question to reason about, and wrong for an address lookup.
+/// EVERY definition of EACH comma-separated name, in the order given — the batched form of `locate_name`.
+///
+/// MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). Anchor hunting dominated the Seam arm: 12, 16 and 8
+/// `--locate` Bash calls per run. But those calls carried 19, 23 and 10 INVOCATIONS — the agent was already
+/// shell-chaining `--locate A; echo ===; --locate B` because the CLI took one name per call, in 5, 6 and 2
+/// calls respectively. It wanted a batch and had to fake one.
+///
+/// And the obvious spelling was WORSE THAN UNSUPPORTED: `--locate "A,B"` looked up the literal string `A,B`,
+/// found nothing, and printed "No definition of 'A,B' found … grep is the right next step" for two symbols that
+/// both exist. A confident false negative, which is the single failure mode this command must not have (see
+/// locate_recall.test.ts) — reached through a spelling nobody had tested.
+///
+/// Each name is resolved INDEPENDENTLY and keeps its own `limit`, so one name having many definitions cannot
+/// crowd another out of the answer.
+pub fn locate_names(repo: &str, names: &str, limit: usize) -> Vec<(String, Vec<LocatedName>)> {
+    names
+        .split(',')
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .map(|n| (n.to_string(), locate_name(repo, n, limit)))
+        .collect()
+}
+
 pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
     // NO DEF CAP. This was `4000`, and `enumerate_files` returns the instant it hits the limit — in file order.
     // On a monorepo that makes `--locate` search a truncated slice and report "No definition of 'X' found …

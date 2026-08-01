@@ -33,7 +33,7 @@ describe("projectContract", () => {
 
   test("untraced.ts: exported `make` is unused (dead public API), fan-in 0", async () => {
     const c = await projectContract(repo, "src/untraced.ts");
-    expect(c.unusedExports).toContain("make");
+    expect(c.unusedExports.map((u: any) => u.symbol)).toContain("make");
     expect(c.afferent).toBe(0);
     expect(c.efferent).toBe(1);                      // it imports the service
   });
@@ -65,7 +65,7 @@ describe("projectContract — type-level exports", () => {
     expect(provided).toContain("makeThing");                       // the value export (footprint)
     expect(provided).toContain("UsedType");                        // the USED type export — was invisible before
     expect(c.provides.find((p: any) => p.symbol === "UsedType")?.kind).toBe("type");
-    expect(c.unusedExports).toContain("DeadType");                 // the DEAD type export — was silently dropped before
-    expect(c.unusedExports).toContain("DeadIface");                // dead interface too
+    expect(c.unusedExports.map((u: any) => u.symbol)).toContain("DeadType");                 // the DEAD type export — was silently dropped before
+    expect(c.unusedExports.map((u: any) => u.symbol)).toContain("DeadIface");                // dead interface too
   });
 });

@@ -86,7 +86,7 @@ describe("Rust core — shape fixes mirrored from the TS engine", () => {
     expect(by.get("named")?.consumerCount).toBe(1);
     expect(by.get("slot")?.consumerCount).toBe(1);   // the wrapped DEFAULT slot. Pre-port: absent entirely.
     expect(by.get("Shape")?.consumerCount).toBe(1);  // a type export. Pre-port: absent entirely.
-    expect(c.unusedExports).toContain("Unused");     // a DEAD type export is a real safe-to-narrow signal
+    expect(c.unusedExports.map((u: any) => u.symbol)).toContain("Unused");     // a DEAD type export is a real safe-to-narrow signal
     expect(c.afferent).toBe(3);                      // fan-in = the three distinct consuming files
   });
 

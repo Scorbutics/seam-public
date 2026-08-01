@@ -62,6 +62,47 @@ describe("object-valued properties are not offered as anchors", () => {
   });
 });
 
+describe("a BATCH of names is one call, and names its misses", () => {
+  // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). Anchor hunting dominated the Seam arm, and the call
+  // count understated it: 12, 16 and 8 Bash calls carried 19, 23 and 10 `--locate` INVOCATIONS, because agents
+  // were already chaining `--locate A; echo ===; --locate B` in a single shell command. They wanted a batch.
+  //
+  // Worse, the natural spelling was a FALSE NEGATIVE, not merely unsupported: `--locate "A,B"` looked up the
+  // literal string `A,B` and printed "No definition of 'A,B' found ... grep is the right next step" for two
+  // symbols that both exist. That is the one failure this command must not have (see locate_recall.test.ts),
+  // reached through a spelling nobody had tested.
+  test("comma-separated names each get their own answer", () => {
+    const out = run("charge,refund");
+    expect(out).toContain("charge.ts#charge");
+    expect(out).toContain("refund.ts#refund");
+    // NOT the old false negative
+    expect(out).not.toContain("No definition of 'charge,refund'");
+  });
+
+  test("a name that misses is NAMED, not silently dropped", () => {
+    // Which of the batch came back empty is precisely what a batch lookup is asked, and a flat merged list
+    // cannot say it — hence the grouped result. A batch that quietly returns only the hits would let a caller
+    // believe a symbol exists somewhere in the noise.
+    const out = run("charge,definitelyNotAnythingHere");
+    expect(out).toContain("charge.ts#charge");
+    expect(out).toMatch(/definitelyNotAnythingHere — no definition found/);
+    expect(out).toContain("1 resolved, 1 not found");
+  });
+
+  test("whitespace around names is tolerated", () => {
+    // Agents write `--locate "A, B"`. Failing on the space would reproduce the false negative in a new spelling.
+    const out = run("charge, refund");
+    expect(out).toContain("charge.ts#charge");
+    expect(out).toContain("refund.ts#refund");
+  });
+
+  test("a single name is unchanged — the batched path must not capture it", () => {
+    const out = run("charge");
+    expect(out).not.toContain("name(s)");
+    expect(out).toContain("charge.ts#charge");
+  });
+});
+
 describe("a MODULE match says so, and says whether there is a way in", () => {
   test("no barrel, no same-named symbol → it declares the dead end", () => {
     const out = run("paymentFlow");

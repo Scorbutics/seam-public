@@ -12,10 +12,51 @@ import type { Args } from "./args.js";
 import { loadAddon } from "../codebase/rust_core.js";
 import { err } from "./util.js";
 
+// ONE row renderer for both the single-name and batched forms — two copies is how they would come to disagree
+// about what a definition looks like.
+const row = (r: any): string => {
+  const sig = r.signature ? `${r.signature}` : "";
+  const encl = r.enclosing ? `  in ${r.enclosing}` : "";
+  // `signature` is ALREADY the full declaration text, so prefixing the symbol printed `cnexport function cn(`.
+  return `- ${r.file}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n` + (sig ? `    ${sig}\n` : "");
+};
+
 export async function runLocate(a: Args): Promise<number> {
   const name = (a.locate ?? "").trim();
   if (!name) err("--locate needs a symbol or file name");
   const addon: any = loadAddon();
+
+  // COMMA-SEPARATED NAMES — one call, one answer per name.
+  //
+  // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). Anchor hunting dominated the Seam arm, but the call
+  // count understated it: 12, 16 and 8 Bash calls carried 19, 23 and 10 `--locate` INVOCATIONS, because agents
+  // were already chaining `--locate A; echo ===; --locate B` in one shell command. They wanted a batch and had
+  // to fake one.
+  //
+  // And the natural spelling was worse than unsupported: `--locate "A,B"` looked up the LITERAL string `A,B`,
+  // found nothing, and printed "No definition of 'A,B' found … grep is the right next step" — a confident false
+  // negative for two symbols that both exist. That is the single failure this command must not have
+  // (locate_recall.test.ts), reached through a spelling nobody had tested.
+  if (name.includes(",")) {
+    const groups: any[] = addon.locateNames(a.repo, name, 25) ?? [];
+    const found = groups.filter((g) => g.rows.length);
+    process.stdout.write(`# Locate: ${groups.length} name(s)\n`
+      + `${found.length} resolved, ${groups.length - found.length} not found — YOU choose which answers your question.\n\n`);
+    for (const g of groups) {
+      if (!g.rows.length) {
+        // NAMED, not silently dropped. Which of the batch came back empty is exactly what a batch lookup is
+        // asked, and a flat merged list could not say it.
+        process.stdout.write(`## ${g.name} — no definition found (external package, dynamic, or spelled differently)\n\n`);
+        continue;
+      }
+      process.stdout.write(`## ${g.name} — ${g.rows.length} definition(s)\n`);
+      for (const r of g.rows) process.stdout.write(row(r));
+      process.stdout.write("\n");
+    }
+    process.stdout.write(`## Next\nPick one per name and pass it as --center "<file>#<symbol>".\n`);
+    return 0;
+  }
+
   const rows: any[] = addon.locateName(a.repo, name, 25) ?? [];
 
   if (!rows.length) {
@@ -47,13 +88,7 @@ export async function runLocate(a: Args): Promise<number> {
         + `Do NOT go looking for one — pick the member below that does the work, or anchor on a CALLER instead.\n`
       : "")
     + `\n`);
-  for (const r of rows) {
-    const sig = r.signature ? `${r.signature}` : "";
-    const encl = r.enclosing ? `  in ${r.enclosing}` : "";
-    process.stdout.write(`- ${r.file}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n`
-      // `signature` is ALREADY the full declaration text, so prefixing the symbol printed `cnexport function cn(`.
-      + (sig ? `    ${sig}\n` : ""));
-  }
+  for (const r of rows) process.stdout.write(row(r));
   // The paste-ready line: this command exists to produce the argument of the NEXT one.
   process.stdout.write(`\n## Next\n`
     + (one

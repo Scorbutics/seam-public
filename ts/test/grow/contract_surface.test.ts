@@ -49,7 +49,7 @@ describe("projectContract — public surface", () => {
     if (!available()) return;
     const c = await projectContract(repo, "src/index.ts");
     expect(c.noStructure).toBeFalsy();
-    const names = [...c.provides.map((p: any) => p.symbol), ...c.unusedExports];
+    const names = [...c.provides.map((p: any) => p.symbol), ...c.unusedExports.map((u: any) => u.symbol)];
     expect(names).toContain("alpha");
     // `export { beta as renamedBeta }` — the EXPORTED name is what crosses the boundary, not the local alias
     expect(names).toContain("renamedBeta");
@@ -60,7 +60,7 @@ describe("projectContract — public surface", () => {
     if (!available()) return;
     const c = await projectContract(repo, "java/Authn.java");
     expect(c.noStructure).toBeFalsy();
-    const names = [...c.provides.map((p: any) => p.symbol), ...c.unusedExports];
+    const names = [...c.provides.map((p: any) => p.symbol), ...c.unusedExports.map((u: any) => u.symbol)];
     expect(names).toContain("Authn");            // the type itself
     expect(names).toContain("authenticate");     // and the methods it declares
     expect(names).toContain("close");

@@ -74,11 +74,25 @@ pub struct ExternalDep {
     pub file: String,
 }
 
+/// A declared export with NO external consumer — dead public API, and a jump target.
+///
+/// `line` is 1-BASED and was absent until 2026-08-01. Measured on keycloak: `--query contract` on
+/// `RealmAdminResource.java` listed all 57 methods here as BARE NAMES — `getRealm` and `updateRealm` among
+/// them — with an address for none. A benchmark agent that wanted exactly those two paged the 1,449-line file
+/// in SEVEN windows (offsets 160, 240, 420, 592, 1120, 1199, 1259) to find lines 429 and 474, which this shape
+/// already knew. Same defect as the `line: None` hole closed in the PROVIDES section during the content-gap
+/// work; that fix never reached this section, so the shape named every symbol in the file and addressed none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnusedExport {
+    pub symbol: String,
+    pub line: Option<usize>, // 1-BASED
+}
+
 #[derive(Clone, Debug)]
 pub struct ModuleContract {
     pub module: String,
     pub provides: Vec<ProvidedSymbol>,
-    pub unused_exports: Vec<String>,
+    pub unused_exports: Vec<UnusedExport>,
     pub depends: Vec<ExternalDep>,
     pub afferent: usize,
     pub efferent: usize,
@@ -94,7 +108,7 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
 
     // PROVIDES — members (nodes on the module file) + their external consumers, from the footprint edges.
     let mut provides: Vec<ProvidedSymbol> = Vec::new();
-    let mut unused_exports: Vec<String> = Vec::new();
+    let mut unused_exports: Vec<UnusedExport> = Vec::new();
     if let Some(g) = &g {
         let by_id: HashMap<&str, &seam_scan::GraphNode> = g.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
         let members: Vec<&seam_scan::GraphNode> = g.nodes.iter().filter(|n| n.id != "mod" && normpath(&n.file) == mod_norm).collect();
@@ -127,11 +141,16 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
                     let count = cons.iter().map(|c| c.file.as_str()).collect::<HashSet<_>>().len();
                     provides.push(ProvidedSymbol { symbol: m.symbol.clone(), kind: m.kind.clone(), consumers: cons, consumer_count: count, signature: None, observed: Observed::default() });
                 }
-                _ => unused_exports.push(m.symbol.clone()),
+                // `range.0 + 1` — the start of the DECLARATION, which for an annotated Java method is its `@GET`/javadoc
+                // block, not the signature line (keycloak `getRealm`: cited 420, signature at 429). That is deliberate
+                // and it is the convention EVERY citation in this engine uses; "fixing" it to the signature here would
+                // make this section disagree with `## Provides`, the impact rollup and the agent map about where the
+                // same symbol starts. A reader lands on the route mapping, which is the useful end of a REST method.
+                _ => unused_exports.push(UnusedExport { symbol: m.symbol.clone(), line: Some(m.range.0 + 1) }),
             }
         }
         provides.sort_by(|a, b| b.consumer_count.cmp(&a.consumer_count).then_with(|| locale_compare(&a.symbol, &b.symbol)));
-        unused_exports.sort(); // JS default Array.sort = codepoint order (NOT localeCompare)
+        unused_exports.sort_by(|a, b| a.symbol.cmp(&b.symbol)); // JS default Array.sort = codepoint order
     }
 
     let src_text = std::fs::read(format!("{repo}/{module_file}")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
@@ -174,22 +193,25 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
     // signal) was wrongly reported as "0 unused". Enumerate them from source and resolve their consumers via the
     // reverse-import index, scoped to refs that resolve back to THIS module. Interfaces/enums already in
     // `members` (captured as footprint nodes) are skipped to avoid double-counting. Port of the contract.ts block.
-    let mut type_exports: Vec<(String, String)> = Vec::new(); // (kind, name), in source order
+    let mut type_exports: Vec<(String, String, usize)> = Vec::new(); // (kind, name, 1-based line), source order
     if !src_text.is_empty() {
-        let member_names: HashSet<&str> = provides.iter().map(|p| p.symbol.as_str()).chain(unused_exports.iter().map(|s| s.as_str())).collect();
+        let member_names: HashSet<&str> = provides.iter().map(|p| p.symbol.as_str()).chain(unused_exports.iter().map(|u| u.symbol.as_str())).collect();
         // JS `\w` is ASCII-only — spelled out so the Rust regex (Unicode `\w`) matches the same names.
         static TYPE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
         let re = TYPE_RE.get_or_init(|| regex::Regex::new(r"(?m)^[ \t]*export[ \t]+(?:declare[ \t]+)?(type|interface|enum)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)").unwrap());
         for c in re.captures_iter(&src_text) {
             let (kind, name) = (c[1].to_string(), c[2].to_string());
             if !member_names.contains(name.as_str()) {
-                type_exports.push((kind, name));
+                // The match offset IS the location — a type export has no call site, so its own declaration is
+                // the only address there is, and it is still an address.
+                let line = src_text[..c.get(0).unwrap().start()].matches('\n').count() + 1;
+                type_exports.push((kind, name, line));
             }
         }
     }
     if !type_exports.is_empty() {
         let ws = Workspace::cached(repo);
-        let type_names: HashSet<&str> = type_exports.iter().map(|(_, n)| n.as_str()).collect();
+        let type_names: HashSet<&str> = type_exports.iter().map(|(_, n, _)| n.as_str()).collect();
         let mut by_target = ws.file_importers();
         // order-free: JS iterates the Set in insertion order, but every consumer list is SORTED below
         let importers: Vec<String> = by_target.remove(&mod_norm).map(|s| s.into_iter().collect()).unwrap_or_default();
@@ -215,7 +237,7 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
                 imports_from_module.insert(imp.as_str(), names);
             }
         }
-        for (kind, name) in &type_exports {
+        for (kind, name, decl_line) in &type_exports {
             let mut cons: Vec<Consumer> = importers
                 .iter()
                 .filter(|imp| imports_from_module.get(imp.as_str()).is_some_and(|n| n.contains_key(name)))
@@ -226,7 +248,7 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
                 })
                 .collect();
             if cons.is_empty() {
-                unused_exports.push(name.clone());
+                unused_exports.push(UnusedExport { symbol: name.clone(), line: Some(*decl_line) });
                 continue;
             }
             cons.sort_by(|a, b| locale_compare(&a.file, &b.file));
@@ -234,7 +256,7 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
             provides.push(ProvidedSymbol { symbol: name.clone(), kind: kind.clone(), consumers: cons, consumer_count: count, signature: None, observed: Observed::default() });
         }
         provides.sort_by(|a, b| b.consumer_count.cmp(&a.consumer_count).then_with(|| locale_compare(&a.symbol, &b.symbol)));
-        unused_exports.sort(); // JS default Array.sort = codepoint order (NOT localeCompare)
+        unused_exports.sort_by(|a, b| a.symbol.cmp(&b.symbol)); // JS default Array.sort = codepoint order
     }
 
     // ── THE OBSERVED CONTRACT ───────────────────────────────────────────────────────────────────────────────

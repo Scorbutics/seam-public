@@ -88,7 +88,7 @@ describe("the module contract follows barrel re-exports", () => {
   test("an export nobody imports through any barrel stays unused", () => {
     // FALSIFICATION of the walk: following barrels must not turn every export into a consumed one. If a hop
     // over-reached — attributing a barrel's whole name set to every member — this would go green-and-wrong.
-    expect(contract.unusedExports).toContain("unusedByAnyone");
+    expect(contract.unusedExports.map((u: any) => u.symbol)).toContain("unusedByAnyone");
     expect(got("unusedByAnyone")).toBeUndefined();
   });
 });

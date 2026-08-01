@@ -561,7 +561,14 @@ export function renderContract(model: any, sr?: SnippetReader): string {
     out.push("");
   }
   if ((model.unusedExports ?? []).length) {
-    out.push("## Unused exports (no external consumer — dead public API)", ...model.unusedExports.map((s: string) => `- ${s}`), "");
+    // WITH THE LINE. These were bare names until 2026-08-01, and the omission was measured: on keycloak this
+    // section listed all 57 methods of `RealmAdminResource.java` — `getRealm` and `updateRealm` among them —
+    // and an agent that wanted exactly those two paged the 1,449-line file in SEVEN windows to find lines 429
+    // and 474, which the shape already knew. Same defect as the `line: None` hole closed in ## Provides during
+    // the content-gap work; the fix never reached here, so the shape named every symbol and addressed none.
+    // `at()` is the shared citation helper, so a missing line degrades to a bare name rather than fabricating `:0`.
+    out.push("## Unused exports (no external consumer — dead public API)",
+      ...model.unusedExports.map((u: any) => `- ${u.symbol}  (${at(model.module, u.line)})`), "");
   }
   if ((model.depends ?? []).length) {
     out.push("## Depends (outbound — resolved external imports)");
