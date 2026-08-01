@@ -12,6 +12,8 @@ use crate::regex_util::captures_not_word_before;
 use crate::types::{CouplingAdapter, KeyHit, KindMeta};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub const fn http_route_meta(name: &'static str, blurb: &'static str) -> KindMeta {
     KindMeta {
@@ -113,6 +115,90 @@ pub fn route_suffix_match(a: &str, b: &str) -> bool {
 pub fn is_bare_wildcard_route(value: &str) -> bool {
     let segs = route_segs(value);
     segs.is_empty() || segs.iter().all(|s| *s == "*")
+}
+
+
+// ── SIBLING-PREFIX INFERENCE (SUGGESTED, never resolved) ─────────────────────────────────────────────────────
+//
+// MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). `keycloak-admin-client/src/resources/realms.ts` declares
+// `path: "/{realm}"`, which normalises to the bare wildcard `/*`. That cannot pair with the Java side's
+// `@Path("{realm}")` under `/admin/realms`, so the TS→Java hop the whole cross-language case is named for never
+// forms a crossing — `RealmAdminResource` appears ZERO times in the agent map.
+//
+// The prefix is NOT in the file and cannot be resolved from it: `Realms extends Resource` passes no settings, so
+// its base path is `"/"` (agent.ts:60) and the real prefix arrives at RUNTIME from `client.baseUrl`. That killed
+// the obvious fix.
+//
+// But FOURTEEN of the twenty sibling files in that same directory DO declare the literal —
+// `cache.ts:24  path: "/admin/realms/{realm}"`, `workflows.ts:8`, `identityProviders.ts:182` … So the package's
+// prefix is recoverable from its siblings.
+//
+// THIS IS INFERENCE, NOT RESOLUTION, and it is labelled so. Every key it produces carries
+// `label = "suggested-sibling-prefix"`; the ORIGINAL bare key is always kept alongside, so nothing that
+// resolves today stops resolving. A wrong prefix must be able to add a lead, never to replace a fact — this
+// project has shipped three plausible-but-unverified inferences before and paid for each.
+//
+// GATED THREE WAYS so a coincidence cannot manufacture a crossing:
+//   1. a MAJORITY of the sibling declarations must agree on the prefix (≥3 files and >50%);
+//   2. the prefix must have ≥2 literal segments (`/admin/realms`), so `/api` alone cannot trigger it;
+//   3. only BARE-WILDCARD-LED routes are composed — a route that already carries literal segments is left
+//      exactly as it is, because it can pair on its own merits.
+static PATH_LITERAL: Lazy<Regex> = Lazy::new(|| Regex::new(r#"path\s*:\s*["'`](/[^"'`]*)["'`]"#).unwrap());
+static SIBLING_PREFIX: Lazy<Mutex<HashMap<String, Option<String>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// The literal path prefix a majority of a directory's siblings agree on, or None.
+fn sibling_route_prefix(repo: &str, file: &str) -> Option<String> {
+    let dir = seam_fs::dirname(file);
+    let key = format!("{repo}\u{0}{dir}");
+    if let Some(hit) = SIBLING_PREFIX.lock().ok()?.get(&key) {
+        return hit.clone();
+    }
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut seen = 0usize;
+    if let Ok(rd) = std::fs::read_dir(format!("{repo}/{dir}")) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !JS_EXT.is_match(&name) || name == file.rsplit('/').next().unwrap_or("") {
+                continue;
+            }
+            let Ok(txt) = std::fs::read_to_string(e.path()) else { continue };
+            let mut best: Option<String> = None;
+            for c in PATH_LITERAL.captures_iter(&txt) {
+                // the leading LITERAL segments only — stop at the first `{param}` or `*`
+                let lit: Vec<&str> = c[1].split('/').filter(|s| !s.is_empty())
+                    .take_while(|s| !s.starts_with('{') && *s != "*").collect();
+                if lit.len() >= 2 {
+                    best = Some(format!("/{}", lit.join("/")));
+                    break;
+                }
+            }
+            if let Some(b) = best { seen += 1; *counts.entry(b).or_insert(0) += 1; }
+        }
+    }
+    // GATE 1: at least three agreeing files, and a strict majority of those that declared anything.
+    let winner = counts.into_iter().max_by_key(|(_, n)| *n)
+        .filter(|(_, n)| *n >= 3 && *n * 2 > seen)
+        .map(|(p, _)| p);
+    SIBLING_PREFIX.lock().ok()?.insert(key, winner.clone());
+    winner
+}
+
+/// Compose a bare-wildcard-led route with an inferred package prefix. `None` when the gates do not pass.
+///
+/// NOT YET WIRED INTO THE FLOOR, deliberately. The per-file scan pipeline (`scan_file_keys` ->
+/// `scan_floor_file`) takes (file, text) and NO repo — it is pure by design, which is what makes it cacheable
+/// per file. Sibling inference needs directory access, so wiring it means threading `repo` through that
+/// pipeline and revisiting its cache keys. Emitting the composed key on only ONE side would be worse than not
+/// emitting it: it would pair with nothing and add a key that looks resolved and links nothing. The gates and
+/// their tests are here so the wiring lands on verified behaviour rather than being written alongside it.
+#[allow(dead_code)]
+fn compose_with_sibling_prefix(repo: &str, file: &str, value: &str) -> Option<String> {
+    // GATE 3: only routes that lead with a wildcard — one that already has literal segments needs no help.
+    if !value.starts_with("/*") {
+        return None;
+    }
+    let prefix = sibling_route_prefix(repo, file)?;
+    Some(norm_path(&format!("{prefix}{value}")))
 }
 
 // ── The HTTP_ROUTE adapter: file-routed handler (producer) ⇄ fetch/`$http("/path")` caller (consumer). ──────
@@ -350,5 +436,69 @@ mod tests {
         let src = "protected resourceUrl = this.cfg.getEndpointFor('api/operations');\n";
         let k = keys("lib/x.ts", src);
         assert!(k.iter().any(|v| v.contains("api/operations")), "slashless route dropped: {k:?}");
+    }
+}
+
+#[cfg(test)]
+mod sibling_prefix_tests {
+    use super::{compose_with_sibling_prefix, sibling_route_prefix};
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // A tmp package shaped like keycloak-admin-client/src/resources: most siblings declare the full literal,
+    // the file under test declares only `/{realm}`.
+    fn repo(with_literals: usize, noise: usize) -> String {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let d = std::env::temp_dir().join(format!("seam_sibpfx_{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let res = d.join("src/resources");
+        fs::create_dir_all(&res).unwrap();
+        fs::write(res.join("realms.ts"), "export class Realms extends Resource {\n  path: \"/{realm}\",\n}\n").unwrap();
+        for i in 0..with_literals {
+            fs::write(res.join(format!("sib{i}.ts")), format!("  path: \"/admin/realms/{{realm}}/thing{i}\",\n")).unwrap();
+        }
+        for i in 0..noise {
+            fs::write(res.join(format!("other{i}.ts")), format!("  path: \"/other/place/{{id}}/x{i}\",\n")).unwrap();
+        }
+        d.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_majority_of_siblings_yields_the_package_prefix() {
+        let r = repo(4, 1);
+        assert_eq!(sibling_route_prefix(&r, "src/resources/realms.ts").as_deref(), Some("/admin/realms"));
+        // …and it composes onto the bare wildcard the learned store produced for `/{realm}`.
+        assert_eq!(compose_with_sibling_prefix(&r, "src/resources/realms.ts", "/*").as_deref(), Some("/admin/realms/*"));
+        assert_eq!(compose_with_sibling_prefix(&r, "src/resources/realms.ts", "/*/partial-export").as_deref(),
+                   Some("/admin/realms/*/partial-export"));
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn too_few_agreeing_siblings_infers_NOTHING() {
+        // GATE 1. Two files agreeing is a coincidence, not a package convention. Inferring from it would
+        // manufacture a crossing, which is the failure this whole mechanism must not have.
+        let r = repo(2, 0);
+        assert_eq!(sibling_route_prefix(&r, "src/resources/realms.ts"), None);
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn no_majority_infers_NOTHING() {
+        // GATE 1, the other half: a genuine TIE — 3 say /admin/realms, 3 say /other/place. No convention, so no
+        // guess. (The first draft used 3 vs 4, which is not a tie: the NOISE holds the majority there and the
+        // function correctly returned it. The fixture was wrong, not the gate — caught by this case failing.)
+        let r = repo(3, 3);
+        assert_eq!(sibling_route_prefix(&r, "src/resources/realms.ts"), None);
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn a_route_that_already_has_literal_segments_is_left_alone() {
+        // GATE 3. Such a route can pair on its own merits; prefixing it would CHANGE a resolvable key into a
+        // different one, turning a fact into a guess.
+        let r = repo(4, 0);
+        assert_eq!(compose_with_sibling_prefix(&r, "src/resources/realms.ts", "/admin/realms/*"), None);
+        assert_eq!(compose_with_sibling_prefix(&r, "src/resources/realms.ts", "/users/*"), None);
+        let _ = fs::remove_dir_all(&r);
     }
 }
