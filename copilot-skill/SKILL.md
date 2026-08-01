@@ -36,6 +36,12 @@ a field the map omits.
 
 | The question | Command | You read |
 |---|---|---|
+**FIRST: is the question a PATH or ONE SYMBOL?** A path across symbols — *"how does X work end to end"*,
+*"which modules participate"*, *"where does it hit the database"* — is ONE flow-grow call (rows 3-4 below). Every
+`--query` shape is scoped to one symbol, so tracing an N-hop flow with shapes costs N calls: a grep loop with
+`--query consumers` as the verb. Measured 2026-08-01: 11 of 23 shape calls in a benchmark were `consumers`
+re-anchored one hop at a time, for a question one grow answers.
+
 | *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --format llm` (or `--file <patch>`) | a markdown summary: clusters → seams + roles |
 | *"Where does this symbol/module live — who consumes it, what does it wire?"* | `seam --scan --repo <repo> --center <f>[#<s>] --intent "<q>" --skeleton --format agent` | a compact footprint map |
 | *"How is &lt;X&gt; MANAGED / handled across the app?"* (a STAR — one mechanism, many entry points) | **pick the center FIRST (see below), then** `seam --scan --auto --concern --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format concern` | a center-first map: In (entry ──HTTP/db──▶ ●) / Out (● ──writes──▶ db) |
@@ -43,7 +49,7 @@ a field the map omits.
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
 | *"where does X hit the DATABASE?" · "what table/route/event does it touch?" · "who else touches it?"* | `seam --scan --query coupling --repo <repo> --center <f>[#<s>] --format llm-context` | per shared key: `●` = the anchor's OWN access line + source text (answers it directly — no need to open the file); `←`/`→` = the code coupled through that key with no import or call between them |
 | *"who WRITES the state X reads?"* | `seam --scan --query writers --repo <repo> --center <f>#<s> --format llm-context` | the reverse data coupling, column-grained where the ORM allows it |
-| *anything structural about one symbol, when you are not sure which shape you want* | `seam --scan --query brief\|refactor --repo <repo> --center <f>#<s> --format llm-context` | consumers + transitive impact + dependencies + contract + cross-stack coupling, in ONE call |
+| *anything structural about ONE SYMBOL, when unsure which shape (a PATH question goes to the flow grow above, not here)* | `seam --scan --query brief\|refactor --repo <repo> --center <f>#<s> --format llm-context` | consumers + transitive impact + dependencies + contract + cross-stack coupling, in ONE call |
 | *"what does this module export, how do I call it, and how do callers actually use it?"* | `seam --scan --query contract --repo <repo> --center <file> --format llm-context` | per export: its DECLARED signature + OBSERVED call sites (count + argument-count histogram) + its consumers |
 
 **`--query contract` replaces the grep-for-the-signature step.** For each export it prints the declared parameter

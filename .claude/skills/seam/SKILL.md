@@ -9,7 +9,22 @@ description: >-
   Seam", "where does X live", "map the footprint of X", or to grow an intent across a codebase.
   ROUTING — reach for Seam when the answer is a PATH/FLOW/STRUCTURE across multiple files (how a
   feature works, where a flow ends, what's the blast radius, mapping a flow before editing it):
-  prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand. Seam ALSO answers non-flow
+  prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand.
+
+  FIRST DECIDE WHICH KIND OF QUESTION IT IS — this choice, not which shape, is what costs calls:
+    • A PATH ACROSS SYMBOLS — "how does X work end to end", "trace X", "which modules participate",
+      "where does the flow culminate", "where does it hit the database" → ONE FLOW GROW (§C):
+      `--scan --auto --center <f>#<s> --intent "<question>" --skeleton --format agent`. It walks the
+      whole path in a SINGLE call and opens with `## Persists / reads` — the anchor's own DB/route/event
+      access lines with their source text.
+    • ONE SYMBOL — "who calls X", "what breaks if I change X", "what does this module expose" → a SHAPE
+      (§D, list below).
+  DO NOT answer a path question with per-symbol shapes. Every shape below is scoped to ONE symbol, so
+  tracing an N-hop flow with them costs N calls — a grep loop with `--query consumers` as the verb.
+  Measured (bench/grep-vs-seam, 2026-08-01): 11 of 23 shape calls across six runs were `--query consumers`
+  re-anchored one hop at a time, for a question one grow call answers.
+
+  Seam ALSO answers non-flow
   STRUCTURAL questions as deterministic SHAPES (§D): who calls X — RESOLVED, no grep false-positives —
   (`--query consumers`), what X depends on (`--query dependencies`), the transitive blast radius / what
   breaks if you change X (`--query impact`), the FACTS to refactor X (`--query refactor` =
@@ -17,7 +32,8 @@ description: >-
   (`--query reaches`), a module's boundary (`--query contract`), the cohesive subsystem around X
   (`--query neighborhood`), how A and B differ (`--query compare`), **where X touches the DATABASE or any
   cross-stack shared key** (`--query coupling`), **who WRITES the state X reads** (`--query writers`), or
-  EVERYTHING structural about one symbol in one call (`--query brief` — start here when unsure);
+  EVERYTHING structural about ONE SYMBOL in one call (`--query brief` — start here when the question is
+  about one symbol; for a PATH question use the flow grow above, not this);
   or `--ask "<question>"` (§E)
   ROUTES a plain question to the right shape. The
   discriminator: use Seam when the answer's correctness needs RESOLVED EDGES. For a quick one-fact
