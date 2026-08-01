@@ -1379,6 +1379,49 @@ by a center the agent does not choose.
 That is the same finding as the DI step and the coupling routing: a capability that exists, is switched on, and
 is not REACHED. The lever is which center a cross-language question anchors on — not more learning.
 
+## ANSWER QUALITY on keycloak, scored at last (2026-08-01)
+
+The whole cross-language study measured COST. Recall was never scored here — `cases.json` declares no ground
+truth — so we optimised call counts for a day on a case where the product's actual claim was unmeasured.
+
+Ground truth built INDEPENDENTLY of both tools (`results/keycloak-cross-language.truth.txt`): the chain traced
+by hand from source with grep/read only, 12 entries, each cited with the line that justifies it. A truth set
+derived from the thing under test is not a control. One entry is a WILDCARD (`js/apps/admin-ui/src/**` — any of
+the ~20 `adminClient.realms.update` callers), because naming one example would score an arm on which it picked,
+the prose-style defect run 4 had to fix.
+
+| run | GREP | SEAM |
+|---|---|---|
+| kc7-r1 | 11/12 | **12/12** |
+| kc7-r2 | 11/12 | **12/12** |
+| kc7-r3 | 11/12 | 11/12 |
+
+**Seam is at parity-to-slightly-better and more consistent** — 12,12,11 against 11,11,11. Grep missed
+`RealmAdapter.java` (the JPA persistence hop, the deepest point of the trace) in ALL THREE runs; Seam found it
+every time. Seam's one miss was `ModelToRepresentation` in r3.
+
+That is a real result and a small one: one entry in twelve, at n=3. It does NOT support "Seam finds more"; it
+supports "Seam finds the same set slightly more reliably, and reaches one hop deeper".
+
+### THE HONESTY AXIS: BOTH ARMS FAIL, and that is the finding
+
+The README defines the metric as completeness and honesty TOGETHER — *"here is the set, and here is exactly what
+I could not resolve"*. This case exists because the TS→Java hop is a REST call that **no static tool can resolve
+by symbol**, which `cases.json` declares up front.
+
+    does the answer state that the TS->Java hop is not statically resolvable?
+      GREP  no / no / no
+      SEAM  no / no / no
+
+**Zero of six answers said it.** Seam's own blindspot machinery — the thing that makes an honest negative its
+differentiator — did not reach the answer in any run. Both arms present a complete-looking chain across a hop
+neither could verify.
+
+This is worth more than the call-count work of the whole session. A tool whose distinctive claim is declared
+blindspots, on the case built to showcase them, produced none. Whether that is the engine not surfacing them,
+the render dropping them, or the agent discarding them on the way to the answer block is not yet known, and is
+the next thing to find out.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
