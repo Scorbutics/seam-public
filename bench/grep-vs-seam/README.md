@@ -1329,6 +1329,56 @@ cannot be seen at n=3 regardless of which category it belongs to. The remaining 
 predicted effect to be measurable is locate RANKING (4–9 lookups → 1–2); everything else on this case is now
 below the noise floor.
 
+### The two owed checks, done (2026-08-01)
+
+**1. cal.com regression check — the keycloak-tuned work is SAFE.** Eight engine changes had landed since cal.com
+was last measured, every one sized against keycloak. Re-run, n=3:
+
+| | perf-r* | regr-r* |
+|---|---|---|
+| SEAM calls | 10 (8–11) | 13 (11–14) |
+| shape calls | 2, 4, 4 | 6, 8, 6 |
+| — of which `--format json` RE-RUNS | **0** | **6** |
+| repo Reads | 0, 0, 2 | 1, 0, 3 |
+| write line from Seam / from file | 1,1,1 / 0,0,0 | 1,2,1 / 1,0,1 |
+
+The rise is entirely the agent re-running queries in `--format json`, and my changes are ruled out mechanically,
+not by assertion: `INCOMPLETE LIST` appeared **0** times (the shape caps never fired), the `## Persists / reads`
+cap notice **0** times (that anchor has no shared key), and mentions of `--format json` in anything the agent
+read *before* invoking it: **0**. It came from the skill, not the render. GREP moved 30 → 28 in the same window
+with no change to its arm.
+
+**2. The flywheel warm-up — done at last, and it changes nothing.** The run-3 protocol has demanded this since
+it was written. One-time setup cost: **77s, exit 0**. Delta:
+
+    files examined      168 -> 168
+    learned signatures   16 ->  17
+    rules                 0 ->   0        <- still zero
+    files WITH a key      4 ->   4        <- unchanged
+
+164 of 168 examined files yield nothing, and no adapter rule was synthesised. **A keycloak re-run was NOT
+commissioned**: the warm state is materially identical to the state every kc batch already ran against, so it
+would re-measure the same engine — the same pre-build check that killed three other levers today.
+
+**But the 4 files that DO carry keys are the interesting part**, and they vindicate the design while indicting
+the delivery. They are exactly the TS→Java hop:
+
+    realms.ts               http-route /*/partial-export, /*/default-groups/*, …
+    RealmAdminResource.java http-route /clients, /attack-detection, …
+    UIRealmResource.java    http-route /info
+    AdminRoot.java          http-route /admin, /admin/realms, …
+
+and `--query coupling --center realms.ts#Realms` returns **25 shared keys / 58 counterpart sites** — the hop
+`cases.json` declares neither tool can resolve by symbol. It works.
+
+**The agent almost never sees it.** Across kc6, coupling was invoked on anchors returning `shared keys: 0` in
+every run but one (kc6-r3 got 40 once). The Java-side anchor it naturally picks — `RealmAdminResource#updateRealm`
+— returns **0 keys**, while the TS-side module anchor returns 25. The moat is real, already warm, and addressed
+by a center the agent does not choose.
+
+That is the same finding as the DI step and the coupling routing: a capability that exists, is switched on, and
+is not REACHED. The lever is which center a cross-language question anchors on — not more learning.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
