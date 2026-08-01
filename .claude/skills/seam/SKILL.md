@@ -267,7 +267,9 @@ step, not an option:
 
 - **STEP 1 — `--locate <name>`. ONE CALL. Do this before anything else.**
 
-      seam --repo <repo> --locate handleNewBooking     # or BookingRepository, or any name in the question
+      seam --repo <repo> --locate handleNewBooking            # one name
+   seam --repo <repo> --locate "Realms,updateRealm,agent.ts" # SEVERAL at once — one call, one block per name
+   seam --repo <repo> --locate getRealm --in services/src/   # narrow when it says the list was cut
 
   It takes a SYMBOL name, a FILE name, or a DIRECTORY/module name, searches the whole repo, and prints every
   definition with its kind and signature — forming no opinion about which you want. That output IS your

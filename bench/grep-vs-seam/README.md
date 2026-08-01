@@ -1226,6 +1226,42 @@ this case is misdirected. Either Seam resolves the TS→Java REST hop — which 
 it cannot, and which is the honest blindspot the case exists to surface — or the agent keeps crossing it by
 hand, and 11–16 `--locate` calls is what that costs.
 
+### keycloak, four batches: SEAM CROSSES BELOW GREP ON CALLS (2026-08-01)
+
+Same task, same harness, four engine states. Every batch n=3, bias control clean.
+
+| batch | change | GREP calls | **SEAM calls** | SEAM engine | SEAM turns |
+|---|---|---|---|---|---|
+| kc | (baseline) | 22 | 34 | 150s | 41 |
+| kc2 | def-table disk shard | 23 | 30 | 56s | 37 |
+| kc3 | budget 12000 → 8000 (spill) | 23 | 23 | 86s | 27 |
+| **kc4** | **`--locate` line + cut + batch; contract addresses** | 25 | **21** | 66s | 27 |
+
+**21 vs 25 — the first time Seam uses fewer tool calls than grep on this case.** The trajectory is 34 → 30 →
+23 → 21 against a control sitting at 22–25 throughout.
+
+The mechanism counts say which fix did what:
+
+| | `--locate` calls | of which BATCHED | repo Reads | re-reads | `ls`/`find` |
+|---|---|---|---|---|---|
+| kc2 (before) | 12, 16, 8 | 0 | 5, 18, 7 | 1, **7**, 2 | 0, 0, 1 |
+| **kc4 (after)** | **5, 6, 8** | **4, 6, 7** | 9, 9, 9 | **1, 2, 0** | **0, 0, 0** |
+
+- **Batching is adopted**: 4, 6 and 7 of the locate calls carry comma-separated names. The agent stopped
+  shell-chaining because it no longer has to.
+- **Paging collapsed**: the 7-window walk of `RealmAdminResource.java` is gone (re-reads 7 → 2). Reads are now
+  a flat 9 per run and mostly first-time — the citation tells it where to look, so it looks once.
+- `ls`/`find` is zero in all three runs.
+
+**Prediction check, recorded before the run.** Directionally right, optimistic on magnitude: I said `--locate`
+would fall from 8–16 "toward ~3" — it halved to 5–8, not 3. I said paging would go "toward zero" — it did. I
+said the wall-clock gap would not close — it did not (207s vs 95s), because that gap is 142s of API across 27
+turns, i.e. the agent thinking, not Seam waiting.
+
+**What is left, and it is no longer Seam's latency.** Engine time is 66s of a 207s run and turns have been flat
+at 27 for two batches while calls fell — so the remaining cost is per-turn model work on a cross-language trace,
+not tool count. Spills persist (2, 2, 1) from large *shape* outputs, which the 8000 budget does not govern.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
