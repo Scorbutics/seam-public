@@ -1468,6 +1468,45 @@ The honest closing position on the moat: it resolves cross-stack hops wherever t
 the client file, which is 14 of 20 files here — and misses this one because keycloak's `Realms` resource
 happens to inherit its prefix at runtime.
 
+## COULD ONE SEAM CALL BE ENOUGH? — binned empirically (2026-08-01)
+
+Not today, and the reason is specific rather than general. Every SHAPE call issued AFTER a flow grow, across
+six keycloak runs, scored by whether it cited files the map had already named:
+
+| shape | post-grow calls | citations | NEW (file absent from the map) | % new |
+|---|---|---|---|---|
+| **contract** | **13** | 102 | 87 | **85%** |
+| consumers | 6 | 11 | 11 | 100% |
+| coupling | 4 | 43 | 28 | 65% |
+| brief | 1 | 2 | 2 | 100% |
+
+**The follow-ups are not redundant.** They return 65–100% material the grow never mentioned, so the agent is not
+re-asking out of distrust — the map genuinely lacks what it needs next. That rules out "make the answer more
+trustworthy" as a call-reduction lever, which is the third independent line of evidence against it.
+
+**And the follow-ups are all the same four files:**
+
+    agent.ts                  x6    the TS transport frame — the last TypeScript hop
+    RealmsAdminResource.java  x3    the JAX-RS router
+    RealmAdminResource.java   x2    the endpoint
+    AdminRoot.java            x2    the routing root
+
+all of them ABSENT from the map. The grow covers each side's interior and stops at the frames where the
+crossing happens.
+
+### This unifies with the moat gap — they are one defect
+
+`realms.ts` reads `http-route "/*"` (its prefix arrives at runtime, see above), so no route key pairs the TS
+client with the Java routers, so `RealmsAdminResource` / `AdminRoot` never enter the grown region, so the agent
+fetches them one `--query contract` at a time. **The unresolved route and the thirteen follow-up calls are the
+same problem seen from two ends** — one shows up as a missing cross-stack link, the other as call count.
+
+So "can one call answer it" reduces to: **can the region span the boundary?** Today it cannot, for a mechanical
+and now well-understood reason. That makes the sibling-prefix inference (14 of 20 files in that directory carry
+the literal `/admin/realms/...`) worth more than it looked when it was only about the moat — it would close a
+recall gap AND remove the largest remaining block of calls. It is still INFERENCE and must be labelled
+SUGGESTED, but it is now the only candidate on the table that both axes point at.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
