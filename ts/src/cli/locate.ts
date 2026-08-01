@@ -11,6 +11,7 @@
 import type { Args } from "./args.js";
 import { loadAddon } from "../codebase/rust_core.js";
 import { err } from "./util.js";
+import { at } from "../codebase/render/shapes.js";
 
 // ONE row renderer for both the single-name and batched forms — two copies is how they would come to disagree
 // about what a definition looks like.
@@ -18,7 +19,10 @@ const row = (r: any): string => {
   const sig = r.signature ? `${r.signature}` : "";
   const encl = r.enclosing ? `  in ${r.enclosing}` : "";
   // `signature` is ALREADY the full declaration text, so prefixing the symbol printed `cnexport function cn(`.
-  return `- ${r.file}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n` + (sig ? `    ${sig}\n` : "");
+  // `file:line#symbol` — the LINE is what makes this a jump rather than a search. Without it a caller who has
+  // just been told where a symbol lives still has to open the file and look, which is exactly what a benchmark
+  // agent did: seven paging reads of a 1,449-line Java file after Seam had named it.
+  return `- ${at(r.file, r.line)}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n` + (sig ? `    ${sig}\n` : "");
 };
 
 export async function runLocate(a: Args): Promise<number> {
@@ -38,7 +42,7 @@ export async function runLocate(a: Args): Promise<number> {
   // negative for two symbols that both exist. That is the single failure this command must not have
   // (locate_recall.test.ts), reached through a spelling nobody had tested.
   if (name.includes(",")) {
-    const groups: any[] = addon.locateNames(a.repo, name, 25) ?? [];
+    const groups: any[] = addon.locateNames(a.repo, name, 25, a.locateIn ?? undefined) ?? [];
     const found = groups.filter((g) => g.rows.length);
     process.stdout.write(`# Locate: ${groups.length} name(s)\n`
       + `${found.length} resolved, ${groups.length - found.length} not found — YOU choose which answers your question.\n\n`);
@@ -49,7 +53,8 @@ export async function runLocate(a: Args): Promise<number> {
         process.stdout.write(`## ${g.name} — no definition found (external package, dynamic, or spelled differently)\n\n`);
         continue;
       }
-      process.stdout.write(`## ${g.name} — ${g.rows.length} definition(s)\n`);
+      process.stdout.write(`## ${g.name} — ${g.rows.length} definition(s)`
+        + (g.total > g.rows.length ? ` of ${g.total} — narrow with \`--in <path-prefix>\`` : "") + `\n`);
       for (const r of g.rows) process.stdout.write(row(r));
       process.stdout.write("\n");
     }
@@ -57,11 +62,22 @@ export async function runLocate(a: Args): Promise<number> {
     return 0;
   }
 
-  const rows: any[] = addon.locateName(a.repo, name, 25) ?? [];
+  const groups: any[] = addon.locateNames(a.repo, name, 25, a.locateIn ?? undefined) ?? [];
+  const rows: any[] = groups[0]?.rows ?? [];
+  const total: number = groups[0]?.total ?? rows.length;
+
+  // THE CUT, DECLARED. `--locate getRealm` on keycloak has 206 definitions; 25 are shown; the one the caller
+  // wanted ranks 167th. Printing "25 definition(s)" for that is a silently partial answer that reads as
+  // complete, and the transcripts show the only recourse an agent has: guess another name. Saying the true
+  // total and naming the narrowing flag turns a second guess into a second, better-scoped call.
+  const cutLine = total > rows.length
+    ? `showing ${rows.length} of ${total} — NOT all of them. Narrow with \`--in <path-prefix>\` (e.g. --in ${(rows[0]?.file ?? "src/").split("/").slice(0, 2).join("/")}/).\n`
+    : "";
+
 
   if (!rows.length) {
     // An honest empty: say which corpus was searched, so the caller knows whether to widen or to spell it right.
-    process.stdout.write(`No definition of '${name}' found in ${a.repo}.\n`
+    process.stdout.write(`No definition of '${name}' found in ${a.repo}${a.locateIn ? ` under '${a.locateIn}'` : ""}.\n`
       + `It may be an external package symbol, defined dynamically, or spelled differently — grep is the right next step.\n`);
     return 0;
   }
@@ -81,6 +97,7 @@ export async function runLocate(a: Args): Promise<number> {
       ? `'${name}' is a MODULE (a directory or file), not a symbol — nothing declares that name.\n`
         + `${rows.length} definition(s) INSIDE it${noEntry ? "" : ", entry point(s) first"}.\n`
       : `${rows.length} definition(s)${one ? "" : " — YOU choose which one answers your question; this only resolves addresses"}\n`)
+    + cutLine
     + (viaModule && noEntry
       // The honest negative. An agent that knows there is no way in stops looking for one; that is the whole
       // saving. Stating it costs one line and replaces a hunt.

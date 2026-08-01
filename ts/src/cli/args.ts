@@ -6,7 +6,7 @@ export interface Args {
   format: string;
   /// did the caller CHOOSE the format, or is it the default? A map format asked for explicitly opts into the
   /// grow, but the DEFAULT must not — see decompose.ts's _MAP_FMT routing.
-  formatExplicit?: boolean; tokenBudget?: number; classifier?: string; cluster?: string; roles?: string; wiring?: string;
+  locateIn?: string; formatExplicit?: boolean; tokenBudget?: number; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
@@ -130,6 +130,7 @@ export function parseArgs(argv: string[]): Args {
       case "--max-hops": a.maxHops = parseInt(next() ?? "40", 10); break;   // --query reaches: BFS budget
       case "--ask": a.ask = next(); break;
       // --locate <name>: where does a name I ALREADY chose live? Address lookup, not center selection.
+      case "--in": a.locateIn = next(); break;   // --locate scope: only definitions under this path prefix
       case "--locate": a.locate = next(); break;   // natural-language question → LLM routes to the right shape
       case "--review-impact": a.reviewImpact = true; break;   // diff: annotate seams with codebase impact + cross-stack coupling
       case "--triage": a.triage = true; break;   // review-impact: LLM triage of the `unknown` relevance residual

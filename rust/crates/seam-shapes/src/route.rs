@@ -111,6 +111,10 @@ pub struct LocatedName {
     pub kind: String,
     pub signature: String,
     pub enclosing: String,
+    /// 1-BASED declaration line. Absent until 2026-08-01: this command printed `file#symbol` and no line, so a
+    /// caller who had just been told WHERE a symbol lives still had to open the file to find it. Measured on
+    /// keycloak: seven paging reads of a 1,449-line file, after Seam had already named it.
+    pub line: usize,
     pub is_test: bool,
     /// This row came from a MODULE match (the name is a directory or file), not from a symbol of that name.
     /// The caller renders a different banner for it: a list of a directory's members is not an answer to
@@ -147,11 +151,40 @@ pub struct LocatedName {
 /// Each name is resolved INDEPENDENTLY and keeps its own `limit`, so one name having many definitions cannot
 /// crowd another out of the answer.
 pub fn locate_names(repo: &str, names: &str, limit: usize) -> Vec<(String, Vec<LocatedName>)> {
+    locate_names_scoped(repo, names, limit, None).into_iter().map(|g| (g.name, g.rows)).collect()
+}
+
+/// One requested name, what was found, and HOW MUCH WAS CUT.
+pub struct LocateGroup {
+    pub name: String,
+    pub rows: Vec<LocatedName>,
+    /// Matches BEFORE the limit — the number the caller needs in order to know it is not seeing everything.
+    pub total: usize,
+}
+
+/// The batched lookup, optionally scoped to a path prefix, always reporting the true total.
+///
+/// THE CAP WAS HIDING THE ANSWER (measured, keycloak, 2026-08-01). `--locate getRealm` has **206** definitions
+/// in that repo; the CLI shows 25; the one the caller wanted — `RealmAdminResource.java#getRealm` — sits at
+/// rank **167** and was simply absent, with nothing in the output saying so. That is the same false-negative
+/// class the uncapped enumeration fixed, surviving in the OUTPUT: a silently partial answer reads as complete,
+/// and the agent's only recourse is to guess a different name, which is what the transcripts show it doing.
+///
+/// So: report `total`, and let the caller narrow by path prefix in the SAME call instead of guessing again.
+pub fn locate_names_scoped(repo: &str, names: &str, limit: usize, in_prefix: Option<&str>) -> Vec<LocateGroup> {
     names
         .split(',')
         .map(|n| n.trim())
         .filter(|n| !n.is_empty())
-        .map(|n| (n.to_string(), locate_name(repo, n, limit)))
+        .map(|n| {
+            let mut all = locate_name(repo, n, usize::MAX);
+            if let Some(p) = in_prefix.filter(|p| !p.is_empty()) {
+                all.retain(|r| r.file.starts_with(p));
+            }
+            let total = all.len();
+            all.truncate(limit);
+            LocateGroup { name: n.to_string(), rows: all, total }
+        })
         .collect()
 }
 
@@ -236,6 +269,7 @@ pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
             kind: d.kind.clone(),
             signature: d.signature.clone(),
             enclosing: d.enclosing.clone(),
+            line: d.line + 1,   // 0-based internally, 1-based at every render boundary (`to1`)
             is_test: IS_TEST.is_match(&d.file),
             via_module: module_base.is_some(),
             module_no_entry: no_entry,

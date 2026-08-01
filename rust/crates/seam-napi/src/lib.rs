@@ -2923,6 +2923,8 @@ pub fn resolve_name(repo: String, name: String) -> Option<ResolvedNameDto> {
 pub struct LocatedNameDto {
     pub symbol: String,
     pub file: String,
+    /// 1-BASED declaration line — so a caller can jump instead of opening the file to search for the symbol.
+    pub line: u32,
     pub kind: String,
     pub signature: String,
     pub enclosing: String,
@@ -2947,14 +2949,15 @@ pub struct UnusedExportDto {
 /// looked up the literal string and answered "No definition of 'A,B' found", a confident false negative for two
 /// symbols that both exist.
 #[napi]
-pub fn locate_names(repo: String, names: String, limit: Option<u32>) -> Vec<LocateGroupDto> {
-    seam_shapes::locate_names(&repo, &names, limit.unwrap_or(25) as usize)
+pub fn locate_names(repo: String, names: String, limit: Option<u32>, in_prefix: Option<String>) -> Vec<LocateGroupDto> {
+    seam_shapes::locate_names_scoped(&repo, &names, limit.unwrap_or(25) as usize, in_prefix.as_deref())
         .into_iter()
-        .map(|(name, rows)| LocateGroupDto {
-            name,
-            rows: rows
+        .map(|g| LocateGroupDto {
+            name: g.name,
+            total: g.total as u32,
+            rows: g.rows
                 .into_iter()
-                .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
+                .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, line: r.line as u32, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
                 .collect(),
         })
         .collect()
@@ -2967,6 +2970,9 @@ pub fn locate_names(repo: String, names: String, limit: Option<u32>) -> Vec<Loca
 pub struct LocateGroupDto {
     pub name: String,
     pub rows: Vec<LocatedNameDto>,
+    /// Matches BEFORE the limit. A silently-truncated answer reads as complete — on keycloak `getRealm` has 206
+    /// definitions and the wanted one ranks 167th, so the 25 shown answered a different question.
+    pub total: u32,
 }
 
 /// locateName — EVERY definition of a name, ranked. The mechanical half of anchoring: the caller has already
@@ -2976,7 +2982,7 @@ pub struct LocateGroupDto {
 pub fn locate_name(repo: String, name: String, limit: Option<u32>) -> Vec<LocatedNameDto> {
     seam_shapes::locate_name(&repo, &name, limit.unwrap_or(25) as usize)
         .into_iter()
-        .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
+        .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, line: r.line as u32, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test, via_module: r.via_module, module_no_entry: r.module_no_entry })
         .collect()
 }
 

@@ -24,6 +24,12 @@ pub struct Def {
     pub name: String,
     pub kind: String,
     pub file: String,
+    /// 0-BASED declaration row — the engine's internal convention (`to1` converts at every render boundary).
+    ///
+    /// Absent until 2026-08-01, which made `--locate` unable to cite one: it printed `file#symbol` and the
+    /// caller then had to OPEN the file to find the symbol. Measured on keycloak, that is what a benchmark
+    /// agent did — seven paging reads of a 1,449-line file after Seam had already named it.
+    pub line: usize,
     pub signature: String,
     pub enclosing: String,
     pub doc: String,
@@ -141,17 +147,17 @@ pub fn defs_in_file(file: &str, text: &str) -> Vec<Def> {
             d
         };
         if let Some(m) = CLASS_RE.captures(&line) {
-            out.push(Def { name: m[2].to_string(), kind: m[1].to_string(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: None });
+            out.push(Def { name: m[2].to_string(), kind: m[1].to_string(), file: file.to_string(), line: li, signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: None });
             if line.contains('{') {
                 stack.push(Scope { name: m[2].to_string(), depth, obj: false });
             }
         } else if let Some(m) = FN_RE.captures(&line) {
-            out.push(Def { name: m[1].to_string(), kind: "function".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
+            out.push(Def { name: m[1].to_string(), kind: "function".into(), file: file.to_string(), line: li, signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if let Some(m) = ARROW_RE.captures(&line) {
-            out.push(Def { name: m[1].to_string(), kind: "function".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
+            out.push(Def { name: m[1].to_string(), kind: "function".into(), file: file.to_string(), line: li, signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if !enclosing.is_empty() && METHOD_RE.captures(&line).map(|m| !METHOD_SKIP.contains(&m[1])).unwrap_or(false) {
             let m = METHOD_RE.captures(&line).unwrap();
-            out.push(Def { name: m[1].to_string(), kind: "method".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
+            out.push(Def { name: m[1].to_string(), kind: "method".into(), file: file.to_string(), line: li, signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if in_obj && DESCRIPTOR_KEY_RE.is_match(&line) {
             let m = DESCRIPTOR_KEY_RE.captures(&line).unwrap();
             // `name: {` — an OBJECT-VALUED PROPERTY, and it is not a function. Calling it one put pure data in
@@ -165,7 +171,7 @@ pub fn defs_in_file(file: &str, text: &str) -> Vec<Def> {
             // written, and the def table feeds the embedding field, where a named region is real signal. What
             // was wrong was the LABEL. `locate_name` filters on this kind, so the noise leaves the agent-facing
             // command without narrowing what the field can see.
-            out.push(Def { name: m[1].to_string(), kind: "property".into(), file: file.to_string(), signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
+            out.push(Def { name: m[1].to_string(), kind: "property".into(), file: file.to_string(), line: li, signature: sig.clone(), enclosing, doc: take(&mut pending_doc), body: Some(body_window(&lines, li as isize)) });
         } else if let Some(m) = OBJ_OPEN_RE.captures(&line) {
             if line.contains('{') {
                 stack.push(Scope { name: m[1].to_string(), depth, obj: true });
@@ -231,6 +237,7 @@ pub fn module_def(rel: &str, text: &str) -> Def {
         name: base.to_string(),
         kind: "module".into(),
         file: rel.to_string(),
+        line: 0,   // a MODULE def is the file itself — its declaration is line 1
         signature: format!("module {base}"),
         enclosing: String::new(),
         doc: take_chars(doc.trim(), DOC_CAP),
@@ -328,13 +335,13 @@ pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
         if CONTAINER.contains(kind) {
             if let Some(name) = field_name(ctx, n) {
                 let dk = if kind.contains("interface") { "interface" } else if kind.contains("enum") { "enum" } else { "class" };
-                out.push(Def { name: name.clone(), kind: dk.into(), file: String::new(), signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: None });
+                out.push(Def { name: name.clone(), kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: None });
                 next_enclosing = name;
             }
         } else if CALLABLE.contains(kind) {
             if let Some(name) = field_name(ctx, n).or_else(|| declarator_name(ctx, n)) {
                 let dk = if enclosing.is_empty() { "function" } else { "method" };
-                out.push(Def { name, kind: dk.into(), file: String::new(), signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
+                out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
             }
         } else if ARROW_HOLDERS.contains(kind) {
             for i in 0..n.named_child_count() {
@@ -346,7 +353,7 @@ pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
                     if FN_VALUES.contains(v.kind()) {
                         if let Some(name) = field_name(ctx, d) {
                             let dk = if enclosing.is_empty() { "function" } else { "method" };
-                            out.push(Def { name, kind: dk.into(), file: String::new(), signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: None });
+                            out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: None });
                         }
                     }
                 }
@@ -409,7 +416,7 @@ fn enumerate_all(repo: &str, module_defs: bool) -> Vec<Def> {
     let epoch = seam_cache::epoch_of(repo);
     let out: Vec<Def> = seam_cache::cached(
         repo,
-        "def-table-v1",
+        "def-table-v2",   // v2: `Def.line` added — a v1 shard lacks it, and defaulting it to 0 would cite line 1 everywhere
         &format!("all-{module_defs}"),
         &format!("{module_defs}"),
         &epoch,

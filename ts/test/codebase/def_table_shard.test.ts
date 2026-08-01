@@ -45,8 +45,11 @@ describe("warm reuse is transparent", () => {
     expect(warm).toContain("src/beta.ts#Beta");
     // The shard must actually exist — otherwise this file is asserting that an ABSENT cache is transparent,
     // which it trivially is. That is the null-answer shape this project keeps re-finding.
-    const dir = join(repo, ".seam", "rust", "def-table-v1", "f");
-    expect(existsSync(dir), "no def-table-v1 shard was written — the disk layer is not engaged").toBe(true);
+    // NAMED VERSION, deliberately: the schema is bumped when `Def` gains a field (v1 -> v2 when `line` was
+    // added), because a stale shard deserialised with `serde(default)` would silently yield line 0 and cite
+    // line 1 for every symbol in the repo. This assertion caught exactly that bump, which is what it is for.
+    const dir = join(repo, ".seam", "rust", "def-table-v2", "f");
+    expect(existsSync(dir), "no def-table-v2 shard was written — the disk layer is not engaged").toBe(true);
     expect(readdirSync(dir).length).toBeGreaterThan(0);
   });
 });

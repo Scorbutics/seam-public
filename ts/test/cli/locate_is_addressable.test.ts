@@ -22,6 +22,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { loadAddon } from "../../src/codebase/rust_core.js";
 
 const CLI = join(import.meta.dir, "..", "..", "src", "cli", "decompose.ts");
@@ -62,6 +63,48 @@ describe("object-valued properties are not offered as anchors", () => {
   });
 });
 
+describe("a definition is an ADDRESS, and a partial answer says so", () => {
+  test("every row cites file:line, not just file#symbol", () => {
+    // Without the line, a caller told WHERE a symbol lives must still open the file and search for it. Measured
+    // on keycloak: seven paging reads of a 1,449-line Java file, after Seam had already named it.
+    const out = run("charge");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
+  });
+
+  test("the cited line is the DECLARATION, verified against the source", () => {
+    // Asserting the line NUMBER, not merely that one exists. A citation that resolves to the wrong line is
+    // worse than none: it sends the reader somewhere confidently. `charge` is declared on line 2 of the fixture
+    // (line 1 is the module comment).
+    const r = rows("charge")[0];
+    const src = readFileSync(join(REPO, r.file), "utf-8").split("\n");
+    expect(src[r.line - 1]).toContain("export function charge");
+  });
+
+  test("a truncated answer DECLARES the cut and names the narrowing flag", () => {
+    // `--locate getRealm` on keycloak has 206 definitions, shows 25, and the wanted one ranks 167th. Printing
+    // "25 definition(s)" for that is silently partial and reads as complete — the agent's only recourse is to
+    // guess another name, which is what the transcripts show.
+    // The fixture is small, so this asserts the HONEST side: when everything is shown, no cut is claimed.
+    // The truncated side is exercised directly against the core below, where a limit can be forced — a
+    // fixture big enough to overflow 25 would be slower and would test the same branch.
+    expect(run("charge")).not.toContain("NOT all of them");
+    // …and the TRUNCATED side, forced with limit=1 against a name that has two definitions. Asserting only the
+    // honest side left this case passing with `total` deliberately clamped to the limit — i.e. with the whole
+    // point of the field removed. Caught in the falsification run; the honest side alone is not a test.
+    const g: any[] = (loadAddon() as any).locateNames(REPO, "orderFlow", 1, undefined) ?? [];
+    expect(g[0].rows.length).toBe(1);
+    expect(g[0].total).toBeGreaterThan(1);
+  });
+
+  test("--in narrows the corpus, and an empty result says where it looked", () => {
+    const out = spawnSync("bun", [CLI, "--repo", REPO, "--locate", "charge", "--in", "src/orderFlow"],
+      { encoding: "utf-8", timeout: 300_000 });
+    const text = `${out.stdout}${out.stderr}`;
+    expect(text).toContain("No definition of 'charge' found");
+    expect(text).toContain("under 'src/orderFlow'");   // not a bare "not found" — WHERE it looked
+  });
+});
+
 describe("a BATCH of names is one call, and names its misses", () => {
   // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). Anchor hunting dominated the Seam arm, and the call
   // count understated it: 12, 16 and 8 Bash calls carried 19, 23 and 10 `--locate` INVOCATIONS, because agents
@@ -73,8 +116,8 @@ describe("a BATCH of names is one call, and names its misses", () => {
   // reached through a spelling nobody had tested.
   test("comma-separated names each get their own answer", () => {
     const out = run("charge,refund");
-    expect(out).toContain("charge.ts#charge");
-    expect(out).toContain("refund.ts#refund");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
+    expect(out).toMatch(/refund\.ts:\d+#refund/);
     // NOT the old false negative
     expect(out).not.toContain("No definition of 'charge,refund'");
   });
@@ -84,7 +127,7 @@ describe("a BATCH of names is one call, and names its misses", () => {
     // cannot say it — hence the grouped result. A batch that quietly returns only the hits would let a caller
     // believe a symbol exists somewhere in the noise.
     const out = run("charge,definitelyNotAnythingHere");
-    expect(out).toContain("charge.ts#charge");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
     expect(out).toMatch(/definitelyNotAnythingHere — no definition found/);
     expect(out).toContain("1 resolved, 1 not found");
   });
@@ -92,14 +135,14 @@ describe("a BATCH of names is one call, and names its misses", () => {
   test("whitespace around names is tolerated", () => {
     // Agents write `--locate "A, B"`. Failing on the space would reproduce the false negative in a new spelling.
     const out = run("charge, refund");
-    expect(out).toContain("charge.ts#charge");
-    expect(out).toContain("refund.ts#refund");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
+    expect(out).toMatch(/refund\.ts:\d+#refund/);
   });
 
   test("a single name is unchanged — the batched path must not capture it", () => {
     const out = run("charge");
     expect(out).not.toContain("name(s)");
-    expect(out).toContain("charge.ts#charge");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
   });
 });
 
@@ -140,6 +183,6 @@ describe("a MODULE match says so, and says whether there is a way in", () => {
     const out = run("charge");
     expect(out).not.toContain("is a MODULE");
     expect(out).not.toContain("NO ENTRY POINT");
-    expect(out).toContain("charge.ts#charge");
+    expect(out).toMatch(/charge\.ts:\d+#charge/);
   });
 });
