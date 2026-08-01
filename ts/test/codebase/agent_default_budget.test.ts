@@ -65,6 +65,52 @@ describe("the agent render's default token budget", () => {
   });
 });
 
+describe("the agent map fits the TRANSPORT, not just the token budget", () => {
+  // MEASURED (bench/grep-vs-seam, kc7). The token budget cannot bound bytes: the spine, entry surface,
+  // mechanism and `## Persists / reads` are exempt from cropping, so a large repo satisfies its budget in tokens
+  // and overruns it in bytes. On keycloak the 8000 default rendered 29,774 B — over the ~29.4 KB the harness
+  // will carry inline — so every flow grow cost a forced extra read of the spill file.
+  //
+  // TWO CHECKS PRECEDED THIS, and both killed the fix that was originally proposed (per-CENTER budget shares):
+  //   1. map size is BUDGET-driven, not center-driven — 1, 2 and 3 centers all render ~29.5-29.8 KB, so there
+  //      is nothing to share per center;
+  //   2. coverage survives cropping — at budget 5000 the map still spans both sides of the cross-language
+  //      boundary (39 `.java` / 43 `.ts`, against 47/48 at 8000).
+  // With the byte bound the same map is 26.3 KB with coverage UNCHANGED at 47/48.
+  //
+  // An earlier attempt at this bound did not BIND, because the exempt sections alone exceeded it
+  // (`## Persists / reads` was 7,513 B). It is capped now, which is what makes this enforceable.
+  const REPO = join(import.meta.dir, "..", "fixtures", "route-repo");
+  const agentMap = (extra: string[] = []): string => {
+    const r = spawnSync("bun", [join(import.meta.dir, "..", "..", "src", "cli", "decompose.ts"),
+      "--repo", REPO, "--scan", "--auto", "--intent", "how is a payment persisted",
+      "--anchor-file", "backend/persist.ts", "--symbol", "persistPayment", "--data-coupling", "floor",
+      "--snippets", "--format", "agent", ...extra], { encoding: "utf-8", timeout: 300_000 });
+    return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  };
+
+  test("a huge token budget cannot push the render past the transport ceiling", () => {
+    // The bound is the TRANSPORT's, so an explicit budget can ask for less but never for more than will fit.
+    // Without this, `--token-budget 100000` renders whatever the model holds and spills.
+    expect(agentMap(["--token-budget", "100000"]).length).toBeLessThanOrEqual(28_000);
+  });
+
+  test("the ceiling is asserted at its single source", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "..", "src", "codebase", "llm_context.ts"), "utf-8");
+    const m = src.match(/const AGENT_INLINE_CEILING = ([\d_]+);/);
+    expect(m, "AGENT_INLINE_CEILING is gone — the transport bound has stopped being enforced").toBeTruthy();
+    const v = Number(m![1].replace(/_/g, ""));
+    // Under the largest result ever observed delivered inline (29,389 B); 30,308 B is an observed spill.
+    expect(v).toBeLessThan(29_389);
+    expect(v).toBeGreaterThan(10_000);   // not so small it guts the map
+  });
+
+  test("both bounds are consulted, not just the token one", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "..", "src", "codebase", "llm_context.ts"), "utf-8");
+    expect(src).toMatch(/tok\(out\) <= budget && bytes\(out\) <= AGENT_INLINE_CEILING/);
+  });
+});
+
 describe("the degrade ladder yields SNIPPETS last", () => {
   // THE HOLE THIS CLOSES (measured, keycloak, 2026-08-01). The ladder dropped snippets BEFORE cropping the
   // mechanism, so there was a band where "everything cropped, snippets on" overran while "everything cropped,

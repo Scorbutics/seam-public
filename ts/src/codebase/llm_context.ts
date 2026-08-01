@@ -36,6 +36,19 @@ export { renderLlmContext } from "./render/region_views.js";
 // the spine, the collapsed hubs, the decision-point frontier, the honest gaps — is EXEMPT from budget cropping;
 // only the off-path/supporting region lines (then hub sample-consumer detail) degrade, and WHAT was cropped is
 // stated (I3). Reuses the same where/rolesOf/_WAVE_VERB vocabulary as the other views (one render language).
+/// The TRANSPORT's hard byte bound for one agent map — distinct from the caller's token budget, which is a
+/// semantic ask ("about this much content") and cannot stand in for it: the spine, entry surface, mechanism and
+/// `## Persists / reads` are exempt from cropping, so a large repo overruns its budget in BYTES while meeting it
+/// in tokens. Measured (bench/grep-vs-seam): 30,308 B is an observed SPILL, largest result ever delivered inline
+/// 29,389 B, so the map must land under that or the agent pays a forced extra read of the spill file.
+///
+/// An earlier attempt at this did NOT bind, because the exempt sections alone exceeded it — `## Persists / reads`
+/// was 7,513 B on keycloak. It is capped now, so the ladder can actually reach a fitting rung. Verified by the
+/// two checks that preceded this: map size is budget-driven, NOT center-driven (1, 2 and 3 centers all render
+/// ~29.5-29.8 KB), and coverage survives cropping (at budget 5000 the map still spans both sides of the
+/// cross-language boundary, 39 `.java` / 43 `.ts` against 47/48 at 8000).
+const AGENT_INLINE_CEILING = 28_000;
+
 export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
@@ -999,8 +1012,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     [true, true, true, true, MECH_FULL],
     [true, true, true, true, EXEMPT_N],       // crop the mechanism, KEEP the code — the rung that was missing
     [true, true, true, false, MECH_FULL], [true, true, true, false, EXEMPT_N]];
+  // BOTH BOUNDS. `budget` is what the caller asked for; AGENT_INLINE_CEILING is what the transport will carry.
+  // A render satisfies both or drops a rung — see the note on the constant for why the token budget alone
+  // cannot do this job, and why this only became enforceable once the exempt sections were capped.
+  const bytes = (lines: string[]) => lines.join("\n").length;
   let out: string[] = [], fitted = false;
-  for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) { fitted = true; break; } }   // first fitting crop level, else the most-cropped
+  for (const step of steps) {
+    out = assemble(...step);
+    if (tok(out) <= budget && bytes(out) <= AGENT_INLINE_CEILING) { fitted = true; break; }
+  }
   // NOTHING fits: the sections that are EXEMPT from cropping already exceed the budget on their own. At that
   // point dropping the caller's EXPLICITLY requested snippets bought no fit — the render overruns either way and
   // the mechanism cap is EXEMPT_N in both — so withholding them is pure loss, not a saving. Give the caller what
