@@ -97,7 +97,7 @@ Use a scratch dir for intermediates: `OUT=$(mktemp -d)`. **This applies to the D
 
 > ### Do NOT redirect a codebase query to a file. Read it from stdout.
 >
-> Every `--query`/grow answer is TOKEN-BUDGETED and self-contained: `--format agent` defaults to ~12000 tokens
+> Every `--query`/grow answer is TOKEN-BUDGETED and self-contained: `--format agent` defaults to ~8000 tokens
 > (~16KB) and `--token-budget N` shrinks it. It is sized to be read in one go — you do not need to spool it,
 > page it, `head`/`tail` it, or `wc -l` it first.
 >

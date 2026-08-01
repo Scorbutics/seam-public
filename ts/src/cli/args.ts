@@ -66,7 +66,7 @@ export function parseArgs(argv: string[]): Args {
       case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
       case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
       case "--format": a.format = next(); a.formatExplicit = true; break;   // codebase: llm-context (DEFAULT — the full region) | agent (token-budgeted map) | concern | json (raw model) | none (the one-line summary). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
-      case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default 12000 — see llm_context.ts on why cropping costs more than it saves)
+      case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default 8000 — sized to the harness inline tool-result limit; see llm_context.ts)
       case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout
       case "--classifier": a.classifier = next(); break;
       case "--cluster": a.cluster = next(); break;

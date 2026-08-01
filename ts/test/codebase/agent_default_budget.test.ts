@@ -1,4 +1,4 @@
-// `--format agent`'s DEFAULT TOKEN BUDGET IS 12000 — cropping below it costs more than it saves.
+// `--format agent`'s DEFAULT TOKEN BUDGET IS 8000 — sized to the harness's INLINE TOOL-RESULT LIMIT.
 //
 // THE MEASUREMENT (bench/grep-vs-seam, flow-r1, 2026-08-01). The render crops and advises "raise
 // --token-budget for the rest". The agent complied — three times — re-running the IDENTICAL grow at 9000,
@@ -10,7 +10,17 @@
 // intent-rank of 1207 seams. `--token-budget` touches none of them — only the last and cheapest stage, the
 // render. Each retry re-derived a byte-identical model in order to crop it differently.
 //
-// Effect on the benchmark anchor, measured: 18,299 bytes → 47,398, and "raise --token-budget" notices 8 → 5.
+// It was raised 4000 → 12000 for that reason, and then lowered to 8000 for a second, independent one: 12000
+// puts the answer OVER the harness's inline tool-result ceiling, so it is spilled to a file and the agent
+// spends an extra call reading it back — once per grow, in all three keycloak runs. Measured across every
+// stored transcript: largest Bash result delivered inline 28.7 KB, smallest spilled 37.9 KB, so the ceiling is
+// ~32 KB. Rendered size by budget (cal.com / keycloak): 8000 → 22/30 KB inline; 10000 → 24/37 KB, keycloak
+// spills; 11800 → 45 KB, cal.com spills.
+//
+// AND THE BUDGET DOES NOT BOUND THE BYTES. The spine, entry surface, mechanism and `## Persists / reads` are
+// exempt from the degrade ladder by design, so a large repo overruns its own budget — keycloak is 30 KB at a
+// nominal 8000 (~32 KB). 8000 is measured safe on the two repos in this suite; it is a heuristic, not a
+// guarantee, and a bigger repo will need it re-checked.
 //
 // ── WHAT THIS FILE IS, AND WHAT IT IS NOT ────────────────────────────────────────────────────────────────────
 // This is a CONSTANT guard, not a behavioural test, and saying so is the point.
@@ -37,12 +47,12 @@ import { join } from "node:path";
 const SRC = readFileSync(join(import.meta.dir, "..", "..", "src", "codebase", "llm_context.ts"), "utf-8");
 
 describe("the agent render's default token budget", () => {
-  test("is 12000 at its single source", () => {
+  test("is 8000 at its single source", () => {
     const m = SRC.match(/const budget = Math\.max\(\s*(\d+)\s*,\s*opts\.tokenBudget \?\? (\d+)\s*\)/);
     // Fail LOUDLY if the expression moved rather than silently matching nothing — a guard that stops finding
     // its target is a guard that stopped guarding, and it would report success forever.
     expect(m, "the budget expression in llm_context.ts no longer matches — this guard has stopped testing anything").toBeTruthy();
-    expect(Number(m![2])).toBe(12000);
+    expect(Number(m![2])).toBe(8000);
     expect(Number(m![1])).toBe(300);      // the floor: a tiny budget degrades, it never renders nothing
   });
 

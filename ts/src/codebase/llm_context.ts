@@ -56,9 +56,36 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // a second map. That is output tokens plus a full extra round trip, against input tokens that are cheaper and
   // that it was going to read anyway. Better slightly too much than a second call.
   //
-  // Not unbounded: the ladder still degrades, the caps are still declared, and 12000 is where the observed
-  // agents stopped asking for more (9000-12000 across the three retries). This is the number they chose.
-  const budget = Math.max(300, opts.tokenBudget ?? 12000);
+  // WHY 8000 AND NOT 12000 — a TRANSPORT limit, measured, not a content judgement.
+  //
+  // 12000 (set earlier today to stop the retry loop) puts the answer OVER the harness's inline tool-result
+  // ceiling, so it is written to a spill file and the agent must spend an extra call reading it back. Measured
+  // across every stored benchmark transcript:
+  //
+  //     largest Bash result delivered INLINE   28.7 KB
+  //     smallest Bash result SPILLED           37.9 KB      -> the ceiling is ~32 KB
+  //     "<persisted-output> Output too large (44.5KB). Full output saved to: …/tool-results/….txt"
+  //
+  // and it cost one extra Read per grow in ALL THREE keycloak runs.
+  //
+  // Rendered size at each budget (cal.com / keycloak):
+  //     8000  ->  22 KB / 30 KB     (inline)
+  //     9000  ->  23 KB / 32 KB     (keycloak at the edge)
+  //    10000  ->  24 KB / 37 KB     (keycloak SPILLS)
+  //    11500  ->  25 KB /  —        (cal.com still inline; a ladder rung fires just above)
+  //    11800  ->  45 KB /  —        (cal.com SPILLS)
+  //
+  // THE BUDGET DOES NOT BOUND THE BYTES, and that is the important caveat. The spine, the entry surface, the
+  // mechanism and `## Persists / reads` are all EXEMPT from the degrade ladder — deliberately, because a caller
+  // must be able to trust them — so a large repo overruns its own budget. keycloak is already 30 KB at a budget
+  // whose nominal size is 8000 tokens (~32 KB) and 37 KB at 10000. 8000 is the value measured safe on the two
+  // repos in this suite; it is a heuristic, not a guarantee, and a bigger repo will need this re-checked.
+  //
+  // THE TRADE THIS MAKES, stated because it is not free: a spill costs ONE extra call, always. A budget too
+  // small costs a RETRY — one call plus a full ~20s re-derivation — sometimes. 4000 provoked three retries in
+  // one run; 12000 provoked none but always spilled. 8000 sits between and which side it lands on is an
+  // empirical question the benchmark answers, not one this comment can.
+  const budget = Math.max(300, opts.tokenBudget ?? 8000);
   const tok = (lines: string[]) => Math.ceil(lines.join("\n").length / 4);
 
   // id → label + the seam each node lives in (for reach phrases that stop at the seam boundary). Plus id → file /
