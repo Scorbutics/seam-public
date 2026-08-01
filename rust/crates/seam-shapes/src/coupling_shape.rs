@@ -51,6 +51,9 @@ pub struct CouplingSet {
     pub total: usize,
     pub no_structure: bool,
     pub reason: Option<String>, // "none" (no key at all) | "opaque" (keys, but no counterpart)
+    /// Set when the SYMBOL's own span held no key and the answer was widened to its MODULE. Carries the symbol
+    /// that was asked for, so the render can say what it did instead of silently answering a different question.
+    pub widened_from: Option<String>,
 }
 
 /// The anchor's data boundary. `symbol` scopes the key scan to one span; `None` = the whole file.
@@ -64,6 +67,7 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
         total,
         no_structure: reason.is_some(),
         reason: reason.map(|r| r.to_string()),
+        widened_from: None,
     };
     let Ok(bytes) = std::fs::read(format!("{repo}/{anchor_file}")) else { return base(Vec::new(), 0, Some("none")) };
     let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -87,6 +91,34 @@ pub fn project_coupling(repo: &str, anchor_file: &str, symbol: Option<&str>) -> 
         }
     }
     if own.is_empty() {
+        // WIDEN TO THE MODULE RATHER THAN ASSERT AN EMPTY BOUNDARY.
+        //
+        // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-01). A symbol span cannot see a key declared at CLASS
+        // level, and in JAX-RS — the whole TS↔Java hop this case exists for — that is where the routes live:
+        //
+        //     --center RealmAdminResource.java#updateRealm   shared keys: 0
+        //     --center RealmAdminResource.java#getRealm      shared keys: 0
+        //     --center RealmAdminResource.java               shared keys: 40, counterpart sites: 57
+        //
+        // `@Path("clients")` and its siblings sit at lines 168-220; `updateRealm` starts at 474. So the shape
+        // told the caller "it has no cross-stack coupling" about a file with forty shared keys — a confident
+        // wrong negative, the one failure this engine refuses everywhere else.
+        //
+        // The flywheel had ALREADY learned those routes (the four files carrying keys on keycloak are exactly
+        // realms.ts, RealmAdminResource.java, UIRealmResource.java and AdminRoot.java). The moat was warm and
+        // addressed by a center the agent does not pick: across a whole benchmark batch, coupling was invoked on
+        // anchors returning 0 keys in every run but one.
+        //
+        // Widening is DECLARED, never silent (see the render): answering a different question without saying so
+        // would trade one wrong answer for another.
+        if let Some(sym) = symbol {
+            let mut wide = project_coupling(repo, anchor_file, None);
+            if !wide.keys.is_empty() {
+                wide.anchor_symbol = anchor_symbol.clone();
+                wide.widened_from = Some(sym.to_string());
+                return wide;
+            }
+        }
         return base(Vec::new(), 0, Some("none"));
     }
     own.sort_by(|a, b| crate::collate::locale_compare(&format!("{}{}", a.0, a.1), &format!("{}{}", b.0, b.1)));

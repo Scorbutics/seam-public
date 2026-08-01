@@ -2479,6 +2479,9 @@ pub struct CouplingKeyDto {
 /// Wire form of a `seam_shapes::CouplingSet` (the anchor's whole DATA BOUNDARY).
 #[napi(object)]
 pub struct CouplingSetDto {
+    /// Set when the symbol's own span held no key and the answer was widened to its module — see
+    /// `seam_shapes::CouplingSet::widened_from`.
+    pub widened_from: Option<String>,
     pub shape: String,
     pub anchor_symbol: String,
     pub anchor_file: String,
@@ -2499,6 +2502,7 @@ pub fn project_coupling(repo: String, anchor_file: String, symbol: Option<String
 /// twice is how the two would drift into reporting the same shape differently.
 fn coupling_dto(c: seam_shapes::CouplingSet) -> CouplingSetDto {
     CouplingSetDto {
+        widened_from: c.widened_from,
         shape: c.shape,
         anchor_symbol: c.anchor_symbol,
         anchor_file: c.anchor_file,

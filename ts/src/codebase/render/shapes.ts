@@ -258,6 +258,15 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
   const out: string[] = [];
   out.push(`# Coupling of ${model.anchor?.symbol ?? "?"} (cross-stack data boundary)`,
     `anchor: ${model.anchor?.symbol ?? "?"} | shape: coupling | shared keys: ${keys.length} | counterpart sites: ${model.total ?? 0}`, "");
+  // WIDENED — declared, never silent. A symbol span cannot see a key declared at CLASS level, and in JAX-RS that
+  // is exactly where the routes live: `--center RealmAdminResource.java#updateRealm` found 0 keys while the FILE
+  // has 40. Answering the module's question is right; not saying so would be answering a different question than
+  // the one asked.
+  if (model.widenedFrom) out.push(
+    `> WIDENED TO THE MODULE: '${model.widenedFrom}' has no shared key inside its own span, but this FILE does.`,
+    `> Keys declared at class/file level (a JAX-RS \`@Path\`, a shared client, a table constant) are outside any`,
+    `> one method, so the boundary below belongs to the module — check which entries are reachable from`,
+    `> '${model.widenedFrom}' before treating them as its own.`, "");
   if (model.noStructure) {
     out.push(model.reason === "none"
       ? `## No shared key\n${model.anchor?.symbol ?? "?"} touches no db-table / http-route / event boundary — it has no cross-stack coupling. Its dependencies are plain code edges (use --query dependencies).`

@@ -97,7 +97,7 @@ const rustWritersToModel = (r: any): any => ({
   ...nz(r),
 });
 export const rustCouplingToModel = (r: any): any => ({
-  shape: "coupling", anchor: anchorOf(r), keys: r.keys, total: r.total, ...nz(r),
+  shape: "coupling", anchor: anchorOf(r), keys: r.keys, total: r.total, widenedFrom: r.widenedFrom, ...nz(r),
 });
 
 export const rustSetToModel = (r: any): any => ({
