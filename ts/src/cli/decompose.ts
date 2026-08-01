@@ -53,8 +53,42 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
   // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
   // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
-  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a) }); },
+  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a), anchorAccess: anchorAccessOf(a) }); },
 };
+
+/// THE ANCHOR'S OWN DATA ACCESS, for the agent map — the lines INSIDE the anchor that touch a shared key.
+///
+/// MEASURED (bench/grep-vs-seam, cal-booking-flow, 2026-08-01). Asked "where does a booking get created and
+/// where does it hit the database", `--format agent` anchored on `saveBooking` — the function whose own body is
+/// `await tx.booking.create(...)` at createBooking.ts:187 — produced 15.7 kB containing ZERO occurrences of
+/// `tx.booking.create` and zero `db-write ──▶ booking`. Its `## Mechanism` section, whose heading promises
+/// "what a step persists/reads", listed six steps: `withReporting`, `redactSensitiveData`, `createErrorHandler`,
+/// `isPromise`, `isPrismaObjOrUndefined`, `isPrismaObj` — Sentry wrappers and type guards, and no sink.
+///
+/// THREE causes, and this closes the two that are ours to close:
+///   1. An ORM write is a method call on a RUNTIME object (`tx.booking.create`), not a resolved edge to a named
+///      unit, so it can never become a Mechanism step. The call graph is the wrong instrument for it — but the
+///      COUPLING floor already grounds it as a key hit, and has all along.
+///   2. `booking` is folded away as a HUB key ("shared by too many unrelated sites to imply a relationship").
+///      That rule is right for COUNTERPARTS and wrong for the ANCHOR: its own write is not a relationship claim,
+///      it is a fact about the code the caller is pointing at. This path is hub-exempt by construction.
+/// (The third — that a hub-key crossing can outrank a real call edge for the SPINE — is not addressed here.)
+///
+/// Reuses `projectCoupling`'s `own_sites` unchanged rather than re-deriving: same helper, same 1-based lines,
+/// same `tx.`-receiver handling, already regression-tested (coupling_own_sites.test.ts). A second derivation is
+/// how the two renders would come to disagree about where the anchor writes.
+function anchorAccessOf(a: Args): { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[] {
+  if (!a.repo || !a.anchorFile) return [];
+  try {
+    const { loadAddon } = require("../codebase/rust_core.js");
+    const cp: any = (loadAddon() as any).projectCoupling(a.repo, a.anchorFile, a.symbol ?? undefined);
+    return (cp?.keys ?? []).flatMap((k: any) => (k.ownSites ?? []).map((s: any) => ({
+      kind: k.kind, value: k.value, role: s.role, file: s.file, line: s.line, columns: s.columns ?? [],
+    })));
+  } catch {
+    return [];                                   // a render must never fail because an optional section could not build
+  }
+}
 
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
 // consumers/dependencies additionally need the `scan` module (a footprint build), the rest just `a`.

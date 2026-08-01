@@ -36,7 +36,7 @@ export { renderLlmContext } from "./render/region_views.js";
 // the spine, the collapsed hubs, the decision-point frontier, the honest gaps — is EXEMPT from budget cropping;
 // only the off-path/supporting region lines (then hub sample-consumer detail) degrade, and WHAT was cropped is
 // stated (I3). Reuses the same where/rolesOf/_WAVE_VERB vocabulary as the other views (one render language).
-export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader } = {}): string {
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -542,6 +542,33 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return ["", head,
       ...culm.slice(0, 6).map((s) => `  ${where(s)} — ${reachSeam(s)}`), ...(culm.length > 6 ? [`  (+${culm.length - 6} more grounded store(s))`] : []), ...note];
   };
+  // THE ANCHOR'S OWN DATA ACCESS — the lines INSIDE the anchor that read or write a shared key.
+  //
+  // Placed directly under the header, above the spine, and EXEMPT from the degrade ladder: it is a handful of
+  // lines and it is usually the literal answer to "where does this touch the database". See `anchorAccessOf`
+  // (cli/decompose.ts) for the measurement — 15.7 kB of agent map, anchored on the very function that writes the
+  // `booking` table, containing the write zero times.
+  //
+  // WHY IT CANNOT COME FROM THE GRAPH: `await tx.booking.create(...)` is a method call on a runtime object, not a
+  // resolved edge to a named unit, so no call-order walk will ever emit it as a step. And `booking` is a HUB key,
+  // so every counterpart section folds it away — correctly, since a table shared by 175 sites implies no
+  // relationship. Neither rule should hide the ANCHOR'S OWN access, which asserts nothing about a relationship:
+  // it is a fact about the code the caller pointed at. This section is hub-exempt by construction.
+  const anchorAccessSection = (): string[] => {
+    const acc = opts.anchorAccess ?? [];
+    if (!acc.length) return [];                          // suppressed when empty — no heading that says nothing
+    const seen = new Set<string>();
+    const rows = acc.filter((a) => { const k = `${a.file}:${a.line}:${a.role}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    return ["", "## Persists / reads (the ANCHOR'S OWN data access — the lines inside it that touch a shared key)",
+      ...rows.map((a) => {
+        const cols = a.columns?.length ? `.{${a.columns.join(",")}}` : "";
+        return `  ● ${a.role} ${a.kind} "${a.value}"${cols}  (${at(a.file, a.line)})`
+          + (opts.snippet ? (opts.snippet(a.file, a.line, "        ") ?? []).map((l) => `\n${l}`).join("") : "");
+      }),
+      `  (these are the anchor's OWN accesses, not counterparts — for the other side of each key run`,
+      `   \`--query coupling --center ${rows[0].file}\`.)`];
+  };
   const spineSection = (): string[] => {
     if (!hasSpine) {
       if (!opts.intent) return [];   // no intent → no flow question → stay silent (region-by-shell speaks for itself)
@@ -890,7 +917,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // `_snipOn` carries the ladder's snippet decision to `seamLine`, which every region/entry/sink line goes
     // through. Set here rather than threaded through nine section closures: the flag is a property of the RUNG
     // being assembled, and each rung reassembles the whole render from scratch.
-    ((_snipOn = snippets && !!opts.snippet), [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()]);
+    ((_snipOn = snippets && !!opts.snippet), [...header(), ...anchorAccessSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()]);
   // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
   // intent-relevance ranking above decides WHICH steps survive.
   const MECH_FULL = pipeline.length;
