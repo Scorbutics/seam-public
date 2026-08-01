@@ -1445,9 +1445,28 @@ The cross-stack section resolves `/whoami`, `/info`, `/attack-detection`, `/sess
 with the Java `@Path("{realm}")`. So the moat works on specific routes and misses the one this case is named
 for, because the client-side route literal degenerates to `/*`.
 
-That is a precise, mechanical defect with a clear next step, and it is a better target than anything on the
-cost list: the route composer needs to compose `realms.ts`'s base path with the member path, so `/*` becomes
-`/admin/realms/*`, which CAN pair with the Java side.
+That is a precise, mechanical defect — and the fix I proposed for it (compose `realms.ts`'s base path with the
+member path) is IMPOSSIBLE, which the pre-build check established before anything was written:
+
+    export class Realms extends Resource { … }        // no settings passed
+    constructor({ …, path = "/" })                    // agent.ts:60 — the default base path IS "/"
+    path: "/{realm}"                                  // realms.ts:45
+
+**There is no `/admin/realms` in that file to compose with.** `Realms` passes no settings, so its base path is
+literally `"/"`, and the real prefix is supplied at RUNTIME from `client.baseUrl`. The route is not degenerate
+because the composer is weak; it is degenerate because the information is not in the file. Sixth lever killed
+by its own pre-build check today.
+
+**What WOULD work is different, and weaker.** Fourteen of the twenty sibling files in that same directory DO
+declare the literal (`cache.ts:24  path: "/admin/realms/{realm}"`, `workflows.ts:8`, `identityProviders.ts:182`
+…). A composer could infer the package's prefix from its siblings. That is INFERENCE across files, not
+resolution within one — a different class of claim from everything the floor currently makes, and this project
+has repeatedly punished plausible-but-unverified inference. It would need to be labelled SUGGESTED, not
+resolved, and it is not obviously worth it for one route pattern.
+
+The honest closing position on the moat: it resolves cross-stack hops wherever the route literal survives into
+the client file, which is 14 of 20 files here — and misses this one because keycloak's `Realms` resource
+happens to inherit its prefix at runtime.
 
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
