@@ -1087,6 +1087,43 @@ This is the same shape as the `--format json` defect fixed earlier — *"ten of 
 query and re-piped it through a different formatter"* — and it reappeared through a different door. A render
 note that costs 20s to act on should say so.
 
+### Re-run after the dispatch-regex memo + the 12000 default (2026-08-01, n=3) — Seam wins wall clock
+
+| | ARM GREP | ARM SEAM |
+|---|---|---|
+| tool calls, median | 30 (29–36) | **10 (8–11)** |
+| paired | 29 / 30 / 36 | **8 / 10 / 11** |
+| wall clock, median | 141s | **131s** — faster in 3 of 3 pairs |
+| engine (non-API) | 1s | **32s** (was 80s) |
+| turns | 33 | **13** (was 18) |
+
+**First clean batch in which Seam wins wall clock.** It has lost that axis in every prior run since run 1.
+
+The two changes did exactly what they were built to do, and the mechanism counts say which did what:
+
+| | flow-grow calls | Seam calls excl. `--locate` | `ls`/`find` | write line from Seam / from the file |
+|---|---|---|---|---|
+| flow-r1/2/3 | 4, 2, 3 | 10, 7, 7 | 0, 3, 3 | 1,2,3 / 0,0,0 |
+| **perf-r1/2/3** | **1, 1, 1** | **2, 4, 4** | 0, 0, 3 | **1,1,1 / 0,0,0** |
+
+The 12000 default killed the retry loop outright: **one grow per run, in all three**, where before the agent
+re-ran the identical grow up to four times chasing a bigger crop. That alone is most of the 80s → 32s engine
+drop; the regex memo (decompose 10.9s → 3.9s) is the rest.
+
+`perf-r1` hit the target exactly — **2 Seam calls excluding `--locate`**, one grow and one shape, for a
+multi-hop question that took the grep arm 29 calls. r2 and r3 used 4.
+
+**What is left is anchor hunting, and it is now the whole story.** `--locate` ran 4, 4 and 3 times per run —
+more than the analysis calls. The agent is guessing identifiers (`handleNewBooking.ts`, `BookingHandler`,
+`createBooking`, `bookingCreate`, …) because it does not know what the symbol is called. Cleaning up `--locate`'s
+output earlier made each guess cheaper to read and did not reduce the number of guesses; that remains true, and
+it is the next real lever rather than another render fix.
+
+**The control, as always, first.** ARM GREP's median has now been 20, 25, 14, 35, 30 across five configurations
+with no change to its arm. Seam's: 20, 14, 11, 13, 14, 10. The treatment arm is the stable one and its spread is
+now 3 against the control's 7 — that asymmetry remains the most defensible thing here, and the wall-clock win is
+a paired result (3 of 3), not a median comparison.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
