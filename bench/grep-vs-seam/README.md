@@ -949,6 +949,92 @@ benchmark's control has demonstrated that, and the reason `aggregate.ts` refuses
 3 runs. The `--locate` work is not wasted — it removed a real false claim about what the code is, and it caught
 the top-level-directory bug — but it was aimed at the wrong half of the anchor problem.
 
+### Seam-as-grep: the agent hand-walks the graph, and it is RIGHT to (2026-08-01)
+
+Shape calls per run, excluding `--locate`: **4, 3, 4, 3, 6, 3** — never the 1–2 a multi-hop flow question should
+cost. And **11 of those 23 calls are `--query consumers`, each on a different center**:
+
+    consumers @RegularBookingService#handler
+    consumers @RegularBookingService#createBooking
+    consumers @createBooking.ts#saveBooking
+    consumers @createBooking.ts#createBooking
+    consumers @RegularBookingService#RegularBookingService
+
+That is a hand-rolled breadth-first walk, one symbol per call — the grep loop with `--query consumers` as the
+verb. `consumers`/`dependencies`/`contract`/`coupling`/`brief` are ALL per-symbol shapes, so answering an
+N-hop question with them costs N calls by construction.
+
+**The skill fix above made this worse, and the "mechanism engaged" win is the same event seen from the other
+side.** Flow-grow vs per-symbol shape calls, by configuration:
+
+| | flow-grow | per-symbol shapes |
+|---|---|---|
+| own-r1/2/3 (before the skill fix) | **1, 1, 1** | 3, 2, 0 |
+| route-r1/2/3 (after) | 0, 0, 0 | 4, 3, 4 |
+| fix3-r1/2/3 | 1, 0, 0 | 2, 6, 3 |
+
+Adding three shapes to §D and writing "`--query brief` … START HERE when unsure" moved the agent OFF the flow
+path (3 of 3 runs → 1 of 6). The `brief` count rising from 0 to 3–4 per run was reported above as the routing
+fix working; it is also this regression.
+
+### …but the routing fix that follows from that is WRONG, and the check took 90 seconds
+
+The obvious next step was to route "how does X work end to end" to the flow grow (`--scan --auto --intent`),
+one call for the whole path. Before building it, the grow was run on this exact task. **It cannot answer the
+question — from either center.**
+
+Anchored on `RegularBookingService#createBooking` (34s, 18KB): the spine is TWO steps, and step 2 is
+`prisma.webhookScheduledTriggers.create` — a webhook side-effect on a DIFFERENT table, reached by a shared-key
+crossing that outranked the real call edge. The actual path (`handler` → `createBooking` → `saveBooking` →
+`tx.booking.create`) is not the spine.
+
+Anchored on `saveBooking` — **the function whose own body contains the write at `createBooking.ts:187`** (59s,
+15.7KB):
+
+    tx.booking.create in the output:            0
+    `db-write ──▶ booking` in the output:       0
+
+and the Mechanism section, whose heading promises *"the anchor's downstream operations … `──▶ sink` = what a
+step persists/reads"*, lists in full:
+
+    1. withReporting (sentryWrapper.ts:236)      4. isPromise (sentryWrapper.ts:68)
+    2. redactSensitiveData (…:78)                5. isPrismaObjOrUndefined (isPrismaObj.ts:7)
+    3. createErrorHandler (sentryWrapper.ts:75)  6. isPrismaObj (isPrismaObj.ts:3)
+
+Six steps of error-reporting and type-guard plumbing, and no sink. **Three compounding causes, all confirmed
+in the output:**
+
+1. **An ORM write is not a call edge.** `tx.booking.create(...)` is a method call on a runtime object, not a
+   resolved edge to a named unit, so it can never become a Mechanism step.
+2. **`booking` is folded as a HUB key.** The render says so itself: `(+175 co-access(es) of ubiquitous key(s)
+   folded: app_RoutingForms_Form, booking, credential, … shared by too many unrelated sites to imply a
+   relationship)`. That rule is defensible for COUNTERPARTS and is being applied to the ANCHOR, whose own write
+   is not a relationship claim at all.
+3. **The anchor's own key access is not rendered** — the identical defect fixed in `renderCoupling` today via
+   `own_sites`, still open in `--format agent`.
+
+**So the agent was not being lazy or grep-trained. The one-call answer does not contain the answer, and
+hand-walking with `consumers` was the correct fallback.** The routing change would have shipped, measured flat,
+and the flatness would have been blamed on agent behaviour — the third time this pre-build check has killed a
+plausible lever (after the DI/interface step and the coupling routing), and the first time it also saved a
+re-run. NOT BUILT.
+
+**The ranked fix list this produces**, none of it started:
+1. Port `own_sites` into the flow/agent render, and exempt the ANCHOR from hub-key folding. Same defect, same
+   shape of fix, already proven on `coupling`.
+2. Make an ORM write a first-class mechanism step, so "what does this persist" has an answer that is not a
+   call edge.
+3. Only then the routing change — it is correct in principle and worthless until 1 and 2 land.
+
+### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
+
+The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
+two hops down", and the grow gives it a 52-to-111-seam region with 858–1096 shared-key crossings and 55
+blindspots. A `--direction up|down|both` and a `--hop-limit N` would let one grow call serve the walk the agent
+is currently doing by hand. **Not designed yet, and deliberately not built from three runs of one case**: the
+parameters should be shaped by what agents actually ask for across cases, and the only case measured on this
+harness so far is the one the suite labels grep-favourable.
+
 Also found, and it is apparatus rather than result: `own-r3.B` was charged 2 calls for `TaskCreate`/`TaskUpdate`,
 session-inherited tools that are not agent work. `DENY_B`/`DENY_A` list `Agent Task ScheduleWakeup ToolSearch`
 but not the `Task*` family, so r3's 22 is really 20. It does not change the conclusion — nothing does, when the
