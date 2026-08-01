@@ -1026,6 +1026,67 @@ re-run. NOT BUILT.
    call edge.
 3. Only then the routing change — it is correct in principle and worthless until 1 and 2 land.
 
+### Re-run after `## Persists / reads` + the PATH-vs-SYMBOL routing (2026-08-01, n=3)
+
+Two changes, sequenced deliberately: the agent map now carries the anchor's own DB access (9dc3fe8), and only
+THEN was a path question routed to the flow grow (f9dd0ac).
+
+**The Seam-as-grep pattern is broken.** Per run, across configurations:
+
+| | flow-grow calls | `--query consumers` | repo file Reads | write line reached the agent FROM SEAM |
+|---|---|---|---|---|
+| route-r1/2/3 | 0, 0, 0 | 4 total | 0, 0, 2 | 1, 1, 2 |
+| fix3-r1/2/3 | 1, 0, 0 | 7 total | 0, 0, 0 | — |
+| **flow-r1/2/3** | **4, 2, 3** | **1 total** | **0, 0, 0** | **1, 2, 3 (from the file: 0)** |
+
+`--query consumers` hand-walking went from 11 calls across six runs to **one** across three. The agent opened
+**no repo file at all** in any run. The write line came from Seam every time.
+
+| | ARM GREP | ARM SEAM |
+|---|---|---|
+| tool calls, median | 35 (32–36) | **14 (13–16)** |
+| paired, per run | 32 / 35 / 36 | **16 / 13 / 14** |
+| spread | 4 | **3 — the tightest measured** |
+
+**Read the control before celebrating.** ARM GREP's median has now been 20, 25, 14 and **35** across four
+configurations with NO change to its arm — a 21-call swing this round alone. Seam's has been 20, 14, 11, 13,
+14. The stable arm is the treatment; the control is what moves. That asymmetry is itself the most defensible
+thing in this table, and it is NOT the same claim as "Seam uses fewer calls".
+
+### …and the routing fix TRIPLED engine time. New defect, same run.
+
+| | API/turn | turns | **engine (non-API)** | wall |
+|---|---|---|---|---|
+| fix3 SEAM | 4.7s | 17 | **29s** | 109s |
+| flow SEAM | 7.4s | 18 | **80s** | 211s |
+
+API/turn rose for both arms (GREP 3.3s → 4.7s), so the environment was slower and most of the wall-clock jump
+is not ours. **The 29s → 80s engine time is entirely ours**: a grow costs ~20–30s where a shape costs 1–7s, and
+the agent now runs 2–4 grows per run.
+
+Why 2–4 and not 1 — `flow-r1`'s four grows, in order:
+
+    seam --scan --auto --center RegularBookingService.ts#createBooking --intent "…" --skeleton --format agent
+    seam … --format agent --token-budget 9000  | sed -n …
+    seam … --format agent --token-budget 12000 > …
+    seam … --format agent --token-budget 11000
+
+**The same grow, four times, varying only `--token-budget`.** The render crops and says *"raise --token-budget
+for the rest"*, the agent complies, and each compliance re-pays the entire grow: measured 29.6s cold then
+19.9s, 19.6s warm. That is ~80s — the whole regression — spent re-deriving an identical model to re-render it
+at a different crop.
+
+The budget is a RENDER-time parameter and the grow that precedes it is deterministic, so this is pure waste. Two
+candidate fixes, neither built:
+1. **Cache the grown model per (repo, center, intent, max-steps)** so a re-render at another budget is ~0s. The
+   footprint cache already exists and already saves the cold→warm 10s; it does not save the other 20s.
+2. **Raise the default budget for `--format agent`**, so the first answer is complete enough not to provoke the
+   retry. A product decision (bigger default outputs), not a pure win.
+
+This is the same shape as the `--format json` defect fixed earlier — *"ten of sixteen calls re-ran the IDENTICAL
+query and re-piped it through a different formatter"* — and it reappeared through a different door. A render
+note that costs 20s to act on should say so.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
