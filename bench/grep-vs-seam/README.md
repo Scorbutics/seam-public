@@ -1527,3 +1527,81 @@ No claim here that fixing it lowers tool calls. Runs 2 and 4 both predicted rich
 both were wrong; the standing finding is that **richer output does not buy fewer calls**. What is defensible is
 narrower: the anchor's own write line is currently underivable from any Seam shape, and the agent is not being
 stubborn when it goes and gets it. Whether closing that changes the count is a measurement, not a prediction.
+
+---
+
+## Where the wall clock ACTUALLY goes (kc8, three runs, measured 2026-08-02)
+
+Two engine optimisations were queued as "the wall-clock plan" — skip the floor pre-grow when the flywheel has
+nothing to learn (~6-7s/grow), and cache the post-grow pipeline (~6s). **Both are dead, and the pre-build check
+killed them before either was written.** The evidence that killed them also redirects the work, so it is
+recorded here rather than in a commit message.
+
+### 1. The floor pre-grow is never reached by the benchmark
+
+It is gated behind `--data-coupling llm`. Across **878 `decompose.ts` invocations in the stored transcripts,
+`--data-coupling llm` appears exactly once — in a `.shown` prompt artefact, not in an agent call.** The 595-file
+discovery scope and the `rules 0 -> 0` flywheel census that motivated the fix came from a hand-run profile on a
+path the agent does not take. Seventh lever killed this way.
+
+### 2. Engine time is 10-12% of the arm's wall clock
+
+Splitting each transcript at its own timestamps, into time inside a tool call vs time waiting on the model:
+
+| run | span | tool (engine) | model | tool calls |
+|---|---|---|---|---|
+| kc8-r1.A | 96.1s | 1.4s (1.5%) | 94.7s | 25 |
+| kc8-r1.B | 200.9s | 20.4s (10.2%) | 180.4s | 30 |
+| kc8-r2.A | 87.5s | 1.2s (1.4%) | 86.2s | 18 |
+| kc8-r2.B | 183.9s | 22.6s (12.3%) | 161.3s | 35 |
+| kc8-r3.A | 102.7s | 1.5s (1.5%) | 101.2s | 24 |
+| kc8-r3.B | 199.0s | 62.7s (31.5%) | 136.2s | 21 |
+
+**Driving engine time to ZERO would leave arm B at ~175s against grep's ~101s.** Everything the engine does is
+inside that 10-12%. Independently confirmed by direct profiling: on a WARM keycloak (floor shard loaded), a grow
+on a NOVEL intent — the benchmark's actual case, since no intent repeats — costs **3.2-3.5s end to end**, with no
+single phase over 0.3s. The 27.9s figure that made the engine look expensive was a COLD run: rebuilding the core
+changes `core_stamp`, which invalidates the floor shard, so the first run after any `cargo build` re-derives it.
+Profiling right after a rebuild measures the build, not the tool.
+
+### 3. So the cost is context x turns — and the turn count dominates
+
+Per-turn context, first assistant turn to last:
+
+| | first turn | last turn | model turns | cache_read |
+|---|---|---|---|---|
+| kc8-r1.A | 34.8k | 55.7k | 36 | 1.44M |
+| kc8-r1.B | 48.3k | 96.6k | 52 | 3.88M |
+
+B pays **+13.5k tokens on turn one, before doing anything** — that is `SKILL.md` (37,382 B ~ 9.3k tokens), which
+`run-arms.sh` injects INLINE into the prompt and is therefore resident on all ~52 turns (~480k tokens, ~12% of
+B's context). And B takes **52 model turns to A's 36**.
+
+Calibrating from the table above, ~0.047 s of model time per 1k tokens of context:
+
+| lever | saving | worth |
+|---|---|---|
+| **turns 52 -> 36** | 16 turns x ~3.5s | **~56s** |
+| engine to zero | 20-22s serial | ~21s |
+| the turn-2/3 map (see below) | ~195k tokens | ~9s |
+| SKILL.md 37 KB -> ~22 KB | ~190k tokens | ~9s |
+
+### 4. One tool result is ~43% of all tool-result context cost
+
+A byte delivered at turn 3 of 30 is re-read 27 times; one delivered at turn 29 is read once. Weighting each
+result by the turns that follow it (`byte-turns`):
+
+| run | total | the agent map | share |
+|---|---|---|---|
+| kc8-r1.B | 1.88M byte-turns | 27.3 KB at turn 3/30 | **41.7%** |
+| kc8-r2.B | 2.14M byte-turns | 27.3 KB at turn 2/35 | **44.4%** |
+| kc8-r3.B | 1.23M byte-turns | 26.9 KB at turn 3/21 | **42.7%** |
+
+In all three runs the single largest cost is **one agent map, delivered early**. This is the number the
+sibling-prefix wiring made worse: that map is now **34,657 B**, which both raises its byte-turn share and pushes
+it over the ~28 KB transport ceiling, costing a forced extra read.
+
+**The conclusion is that wall clock and call count are the SAME problem.** Turns are ~4x the next lever, and a
+turn is a tool call plus the reasoning around it. There is no separate "make the engine faster" project worth
+running: the engine is already 3.3s warm and 11% of the arm. What is worth running is fewer, earlier-complete
+answers — and keeping the early ones SMALL, because their bytes are multiplied by every turn that follows.
