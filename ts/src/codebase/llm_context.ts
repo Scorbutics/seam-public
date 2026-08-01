@@ -965,12 +965,29 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
   // intent-relevance ranking above decides WHICH steps survive.
   const MECH_FULL = pipeline.length;
-  // The SNIPPET rung sits between "everything else is already cropped" and "crop the mechanism": opt-in source
-  // text is worth less than a step that would otherwise disappear, so it yields FIRST and the step count is the
-  // last thing to go — the same priority that put the mechanism last among the sections.
+  // SNIPPETS YIELD LAST, and the measurement inverted the assumption that used to be written here.
+  //
+  // The old order dropped snippets BEFORE cropping the mechanism, on the reasoning that "opt-in source text is
+  // worth less than a step that would otherwise disappear". Measured on keycloak (bench/grep-vs-seam, kc4), the
+  // trade runs the other way: of 27 repo files the agent opened across three runs, TWENTY were files Seam had
+  // already CITED and whose code it had not shown. A cited step with no code costs a whole extra tool call and
+  // round trip; a cropped step costs nothing, because the crop is declared and the caller can ask for it.
+  //
+  // It also produced a NON-MONOTONIC hole, which is how this was found. Snippet lines on one keycloak anchor:
+  //
+  //     budget  4000 ->  30      (nothing fits; the !fitted fallback below RESTORES snippets)
+  //     budget  8000 ->   0      <- the shipped default landed exactly here
+  //     budget 12000 -> 125      (fits with snippets at an early rung)
+  //
+  // i.e. a SMALLER budget returned more code than a larger one, because 8000 is the band where "everything
+  // cropped, snippets on" overruns but "everything cropped, snippets off" fits. The rung that was missing is the
+  // one that crops the MECHANISM while keeping snippets; with it, the ladder degrades monotonically and the
+  // snippet-off rung becomes the genuine last resort it was always described as.
   const steps: [boolean, boolean, boolean, boolean, number][] = [
     [false, false, false, true, MECH_FULL], [true, false, false, true, MECH_FULL], [true, true, false, true, MECH_FULL],
-    [true, true, true, true, MECH_FULL], [true, true, true, false, MECH_FULL], [true, true, true, false, EXEMPT_N]];
+    [true, true, true, true, MECH_FULL],
+    [true, true, true, true, EXEMPT_N],       // crop the mechanism, KEEP the code — the rung that was missing
+    [true, true, true, false, MECH_FULL], [true, true, true, false, EXEMPT_N]];
   let out: string[] = [], fitted = false;
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) { fitted = true; break; } }   // first fitting crop level, else the most-cropped
   // NOTHING fits: the sections that are EXEMPT from cropping already exceed the budget on their own. At that
