@@ -41,7 +41,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
-  const budget = Math.max(300, opts.tokenBudget ?? 4000);
+  // DEFAULT BUDGET 12000, raised from 4000 (2026-08-01) — because CROPPING COSTS MORE THAN IT SAVES here.
+  //
+  // MEASURED (bench/grep-vs-seam, flow-r1). The render crops and advises "raise --token-budget for the rest".
+  // The agent complied, three times, re-running the IDENTICAL grow at 9000, 12000 and 11000. Each re-run cost
+  // ~19s — and profiling showed the grow itself was a cache HIT every time (`grow-v1`, "skip wave"): the 19s is
+  // the post-grow pipeline (footprint-scoped coupling replay over 595 files, decompose of 1817 symbols, and the
+  // embedding intent-rank of 1207 seams), NONE of which the budget affects. `--token-budget` changes only the
+  // last and cheapest stage, so a re-run for a bigger budget re-pays ~19s of work whose result is identical.
+  // Four grows, ~80s, for one answer.
+  //
+  // The economics also favour the larger default independently of that waste: a crop trades OUR input tokens for
+  // the agent's THINKING — it must read the truncated map, decide what is missing, emit a new command, and read
+  // a second map. That is output tokens plus a full extra round trip, against input tokens that are cheaper and
+  // that it was going to read anyway. Better slightly too much than a second call.
+  //
+  // Not unbounded: the ladder still degrades, the caps are still declared, and 12000 is where the observed
+  // agents stopped asking for more (9000-12000 across the three retries). This is the number they chose.
+  const budget = Math.max(300, opts.tokenBudget ?? 12000);
   const tok = (lines: string[]) => Math.ceil(lines.join("\n").length / 4);
 
   // id → label + the seam each node lives in (for reach phrases that stop at the seam boundary). Plus id → file /
