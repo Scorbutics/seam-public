@@ -1296,6 +1296,39 @@ locate) and this one did not, and the difference is that those two removed a cal
 (a spill read, a serialised lookup) while this one removed a REASON to make one. Removing reasons has now failed
 to move this benchmark three times — run 2, run 4, and here.
 
+### kc6 — the forced-call theory holds up worse than it looked; the spill axis is exhausted
+
+Shape renders were bounded to the transport (dependencies 36.5 → 26.0 KB, brief/refactor 59.6 → 26.1 KB, cuts
+declared). Result:
+
+| | GREP | SEAM (kc5 → kc6) |
+|---|---|---|
+| tool calls, median | 22 (20–31) | 20 → **22** (20–24) |
+| spills per run | — | 1,2,1 → **1,1,1** |
+
+**Spills fell from 4 to 3 across three runs and the call count did not improve.** The remaining spill is the
+FLOW GROW itself at 30.3 KB, in every run.
+
+**Two things this corrected.** First, the ceiling: "~32 KB" was inferred from a bracket (largest inline 28.7 KB,
+smallest spilled 37.9 KB). 30,308 B is now a directly OBSERVED spill, so the real limit is under 30 KB and every
+earlier size decision was made against a number that was too generous.
+
+Second, and self-inflicted: `## Persists / reads` — the section added earlier today, and deliberately EXEMPT
+from the degrade ladder — was the LARGEST section in the keycloak map at 7,513 B. Exempt from cropping is not
+exempt from having a size. Capped at 6 sites with the total stated; the map is 31.6 → 29.7 KB.
+
+**And that is where this axis stops.** 29.7 KB still sits between the largest observed inline (29.4 KB) and the
+observed spill (30.3 KB), i.e. tuning constants against a threshold that can only be bracketed. The structural
+cause is that the EXEMPT sections alone exceed the transport on a large repo — a byte bound added to the ladder
+made no difference for exactly that reason, and was reverted rather than shipped as a bound that cannot bind.
+
+**The forced-call theory, restated honestly.** It was proposed on two wins (the earlier spill fix, locate
+batching) and predicted this one. It did not deliver: calls went 20 → 22, inside the spread. So the rule is
+weaker than stated — removing a forced call is NECESSARY but not sufficient, and a fix worth ~1 call in 20
+cannot be seen at n=3 regardless of which category it belongs to. The remaining lever with a large enough
+predicted effect to be measurable is locate RANKING (4–9 lookups → 1–2); everything else on this case is now
+below the noise floor.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,

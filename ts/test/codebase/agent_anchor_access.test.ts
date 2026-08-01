@@ -90,6 +90,31 @@ describe("the anchor's own accesses are in the agent map", () => {
   });
 });
 
+describe("the section is bounded — exempt from cropping is not exempt from having a size", () => {
+  test("a wide anchor is capped, and the cap is STATED with the true total", () => {
+    // Measured on keycloak: this section rendered 7,513 B — the LARGEST in the agent map, and a material part
+    // of why that render spilled the tool-result ceiling. It is exempt from the degrade ladder (correctly: it is
+    // usually the literal answer) and was also unbounded, which is the worst pair. "A handful of lines" was the
+    // assumption when it was written; the measurement disagreed.
+    const { renderAgent } = require("../../src/codebase/llm_context.js");
+    const access = Array.from({ length: 20 }, (_, i) => ({
+      kind: "db-table", value: `t${i}`, role: i % 2 ? "reads" : "writes", file: "src/a.ts", line: i + 1, columns: [],
+    }));
+    const out = renderAgent({ mode: "codebase", anchor: "n0", clusters: [{ seams: [{ id: "s0", title: "s", role: "core",
+      hunks: [{ id: "n0", file: "src/a.ts", symbol: "a", start: 1, kind: "function", label: "a" }] }] }] },
+      { intent: "x", anchorAccess: access });
+    const sec = out.slice(out.indexOf("## Persists / reads"));
+    expect((sec.match(/^  ● /gm) ?? []).length).toBeLessThan(20);   // capped
+    expect(sec).toMatch(/showing \d+ of 20 access site\(s\)/);      // …and it says so, with the TRUE total
+    expect(sec).toContain("--query coupling");                       // …and where to get the rest
+  });
+
+  test("a narrow anchor gets no cap notice", () => {
+    // The negative control: a notice that always fires is decoration.
+    expect(out).not.toMatch(/showing \d+ of \d+ access site/);
+  });
+});
+
 describe("suppressed when there is nothing to say", () => {
   test("an anchor with no key access grows no empty heading", () => {
     // The negative control. A heading that always fires is decoration; this one has to be absent when the anchor

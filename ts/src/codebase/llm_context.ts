@@ -604,8 +604,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const seen = new Set<string>();
     const rows = acc.filter((a) => { const k = `${a.file}:${a.line}:${a.role}`; if (seen.has(k)) return false; seen.add(k); return true; })
       .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    // CAPPED, and the cap is stated. This section is EXEMPT from the degrade ladder — correctly, it is usually
+    // the literal answer — and it was also UNBOUNDED, which is the worst pair. "A handful of lines" was the
+    // assumption when it was written; measured on keycloak it is 7,513 B, the largest section in the map and a
+    // material part of why that render spills the tool-result ceiling. Exempt from cropping must not mean
+    // exempt from having a size.
+    const ACCESS_CAP = 6;
+    const shown = rows.slice(0, ACCESS_CAP);
     return ["", "## Persists / reads (the ANCHOR'S OWN data access — the lines inside it that touch a shared key)",
-      ...rows.map((a) => {
+      ...(rows.length > ACCESS_CAP
+        ? [`  (showing ${ACCESS_CAP} of ${rows.length} access site(s), nearest the top of the anchor first —`
+          + ` \`--query coupling --center ${rows[0].file}\` lists them all.)`]
+        : []),
+      ...shown.map((a) => {
         const cols = a.columns?.length ? `.{${a.columns.join(",")}}` : "";
         return `  ● ${a.role} ${a.kind} "${a.value}"${cols}  (${at(a.file, a.line)})`
           + (opts.snippet ? (opts.snippet(a.file, a.line, "        ") ?? []).map((l) => `\n${l}`).join("") : "");
