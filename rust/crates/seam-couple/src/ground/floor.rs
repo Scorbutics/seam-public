@@ -115,7 +115,34 @@ pub fn floor_contributions(repo: &str) -> Vec<(String, FloorContribution)> {
                 return None; // oversized (minified/generated) — memory-safe skip
             }
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            Some((rel.clone(), scan_floor_file(rel, &text)))
+            let mut c = scan_floor_file(rel, &text);
+            // SIBLING-PREFIX ROUTE INFERENCE — applied HERE, and only here.
+            //
+            // The per-file scan (`scan_file_keys` / `scan_floor_file`) is deliberately repo-free: pure in
+            // (file, text), which is what makes it cacheable per file and is relied on by a dozen callers.
+            // Sibling inference needs directory access, so it runs as a post-pass at the ONE place that has
+            // `repo` AND builds the repo-wide index — so the composed key lands on BOTH sides of a crossing.
+            // Composing it anywhere else would emit a key on one side only: it would look resolved and pair
+            // with nothing, which is worse than not emitting it at all.
+            //
+            // WHY (bench/grep-vs-seam, keycloak): `keycloak-admin-client/.../realms.ts` declares
+            // `path: "/{realm}"` -> the bare wildcard `/*`, which cannot pair with the Java `@Path("{realm}")`
+            // under `/admin/realms`. The prefix is NOT in that file (`Realms extends Resource` passes no
+            // settings, so its base path is "/" and the real prefix arrives at runtime from `client.baseUrl`),
+            // but 14 of the 20 SIBLINGS declare the literal. So the TS->Java hop the cross-language case is
+            // named for never formed a crossing, and the agent fetched the Java routers one `--query contract`
+            // at a time — 13 such calls across six runs.
+            //
+            // SUGGESTED, NOT RESOLVED: the composed hit is labelled, and the ORIGINAL bare key is KEPT, so
+            // nothing that resolves today stops resolving. The gates live in the adapter (>=3 agreeing
+            // siblings and a majority; >=2 literal prefix segments; only bare-wildcard-led routes compose).
+            let inferred: Vec<KeyHit> = c.keys.iter()
+                .filter(|k| k.kind == "http-route")
+                .filter_map(|k| crate::adapters::http_route::compose_with_sibling_prefix(repo, rel, &k.value)
+                    .map(|v| KeyHit { value: v, label: Some("suggested-sibling-prefix".into()), ..k.clone() }))
+                .collect();
+            c.keys.extend(inferred);
+            Some((rel.clone(), c))
         })
         .collect()
 }

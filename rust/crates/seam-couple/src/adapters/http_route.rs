@@ -191,8 +191,7 @@ fn sibling_route_prefix(repo: &str, file: &str) -> Option<String> {
 /// pipeline and revisiting its cache keys. Emitting the composed key on only ONE side would be worse than not
 /// emitting it: it would pair with nothing and add a key that looks resolved and links nothing. The gates and
 /// their tests are here so the wiring lands on verified behaviour rather than being written alongside it.
-#[allow(dead_code)]
-fn compose_with_sibling_prefix(repo: &str, file: &str, value: &str) -> Option<String> {
+pub fn compose_with_sibling_prefix(repo: &str, file: &str, value: &str) -> Option<String> {
     // GATE 3: only routes that lead with a wildcard — one that already has literal segments needs no help.
     if !value.starts_with("/*") {
         return None;
