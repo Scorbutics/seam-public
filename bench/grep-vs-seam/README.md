@@ -1262,6 +1262,40 @@ turns, i.e. the agent thinking, not Seam waiting.
 at 27 for two batches while calls fell — so the remaining cost is per-turn model work on a cross-language trace,
 not tool count. Spills persist (2, 2, 1) from large *shape* outputs, which the 8000 budget does not govern.
 
+### kc5 — the snippet-ladder fix: right diagnosis, and the prediction FAILED at n=3
+
+The ladder hole was real and is fixed (snippet lines at the 8000 default: 0 → 60; `snippet-coverage` on that
+anchor: agent 0% → 16%, gate from "1 shape citing locations with no code" to 0). The benchmark did not follow.
+
+| | GREP | SEAM |
+|---|---|---|
+| tool calls, median | 25 (20–31) | **20 (18–27)** |
+| wall clock, median | 107s | 170s (142–326s) |
+
+Repo reads, and the bins, kc4 → kc5:
+
+| | reads | CONTENT | RECALL | TRUST |
+|---|---|---|---|---|
+| kc4-r1/2/3 | 9, 9, 9 | 6, 7, 7 | 2, 1, 0 | 1, 1, 2 |
+| **kc5-r1/2/3** | **2, 10, 11** | **2, 5, 8** | 0, 1, 2 | 0, 4, 1 |
+
+**I predicted reads would fall from 9/9/9 to ~3. They went to 2, 10, 11.** One run did what the theory said;
+two went the other way. CONTENT fell in two of three (6→2, 7→5) and rose in the third (7→8), and the spread
+across runs (2 to 11) is now larger than the effect being claimed.
+
+**What this does and does not license.** The ladder fix is defensible on its own terms — it is a real
+non-monotonicity, the default was in the hole, and the coverage gate moved. None of that is in question. What
+is NOT established is that it reduces reads: at n=3 with a 2–11 spread, the honest report is no detectable
+effect, and the mechanism table cannot rescue a prediction the counts refuse.
+
+Note also TRUST rising to 4 in kc5-r2 — the code WAS shown and the agent opened the file anyway. That is the
+run-2/run-4 finding again (`richer output does not buy fewer calls`), and it caps what any renderer fix can win.
+
+**The lesson is the ordering one, again.** Three fixes today were predicted to cut calls; two did (spill,
+locate) and this one did not, and the difference is that those two removed a call the agent was FORCED to make
+(a spill read, a serialised lookup) while this one removed a REASON to make one. Removing reasons has now failed
+to move this benchmark three times — run 2, run 4, and here.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
