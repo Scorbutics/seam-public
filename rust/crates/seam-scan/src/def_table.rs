@@ -376,8 +376,48 @@ fn scan_defs_file(rel: &str, text: &str) -> (Vec<Def>, Def) {
     (defs, module_def(rel, text))
 }
 
-// In-memory whole-repo memo (the disk shard cache is a later perf layer; output-identical without it).
+// In-memory whole-repo memo, backed by a DISK shard (`def-table-v1`).
+//
+// MEASURED (2026-08-01, keycloak). `--locate` enumerates the WHOLE repo — deliberately uncapped, because the
+// old 4000-def cap produced false negatives — and this memo was process-local, so every CLI invocation re-did
+// the full scan. On keycloak that is 7.2s a call, and a benchmark agent issued 10-12 of them per run: 80-96s of
+// a 104-218s engine budget, in a case Seam lost to grep 34 calls to 22.
+//
+// WHY KEYCLOAK AND NOT cal.com — it is the LANGUAGE MIX, not the repo size:
+//     java  600 files: 475ms (0.79 ms/file)   <- tree-sitter parse
+//     ts    600 files:  60ms (0.10 ms/file)   <- the regex extractor (has_validated_regex_defs)
+//     keycloak 8141 java / 1067 ts -> 7171ms      cal.com 0 java / 7405 ts -> 769ms
+// The 8x per-file gap explains the 9x repo-level gap; the def COUNT (4.6x) does not.
+//
+// `def_table` was the ONLY index of eleven without a disk shard — callsite-index, interface-index,
+// floor-indices, complement-units, grow-v1 and the rest all have one, and the comment that used to sit here
+// called the disk layer "a later perf layer". Measured round trip: 37.6 MB, ~173ms to read+parse, against
+// 7171ms to recompute.
+//
+// ONE BLOB PER `module_defs`, NOT PER LIMIT. `enumerate_files` returns the instant it reaches `limit`, in file
+// order, so a capped result is exactly a PREFIX of the uncapped one — the cache holds the uncapped enumeration
+// and slices. Keying by limit instead would store several near-duplicate 37 MB blobs for the same content.
 static MEM: Lazy<Mutex<HashMap<String, Vec<Def>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// The uncapped whole-repo enumeration for `module_defs`, memoised in-process and on disk. Invalidation is the
+/// shared content epoch every other index uses, so an edit anywhere in the repo drops it.
+fn enumerate_all(repo: &str, module_defs: bool) -> Vec<Def> {
+    let mem_key = format!("{repo}|ALL|{module_defs}");
+    if let Some(hit) = MEM.lock().unwrap().get(&mem_key) {
+        return hit.clone();
+    }
+    let epoch = seam_cache::epoch_of(repo);
+    let out: Vec<Def> = seam_cache::cached(
+        repo,
+        "def-table-v1",
+        &format!("all-{module_defs}"),
+        &format!("{module_defs}"),
+        &epoch,
+        || enumerate_files(repo, &candidate_source_files(repo), usize::MAX, module_defs),
+    );
+    MEM.lock().unwrap().insert(mem_key, out.clone());
+    out
+}
 
 /// Whole-repo / scoped def enumeration. `files` (repo-relative) scopes it to those files; else the whole repo
 /// (memoized). `module_defs` appends the file-level def after each file's real ones. Port of `enumerate_defs`.
@@ -385,13 +425,10 @@ pub fn enumerate_defs(repo: &str, limit: usize, files: Option<&[String]>, module
     let rels: Vec<String> = match files {
         Some(fs) if !fs.is_empty() => fs.iter().map(|f| normpath(f)).collect(),
         _ => {
-            let key = format!("{repo}|{limit}|{module_defs}");
-            if let Some(hit) = MEM.lock().unwrap().get(&key) {
-                return hit.clone();
-            }
-            let out = enumerate_files(repo, &candidate_source_files(repo), limit, module_defs);
-            MEM.lock().unwrap().insert(key, out.clone());
-            return out;
+            // A PREFIX of the uncapped enumeration — see `enumerate_all`. `enumerate_files` stops at `limit` in
+            // file order, so slicing reproduces it exactly rather than approximating it.
+            let full = enumerate_all(repo, module_defs);
+            return if full.len() > limit { full[..limit].to_vec() } else { full };
         }
     };
     enumerate_files(repo, &rels, limit, module_defs)

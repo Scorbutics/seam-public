@@ -13,6 +13,7 @@ seam-resolve = { path = "../seam-resolve" }
 seam-couple = { path = "../seam-couple" }
 seam-fs = { path = "../seam-fs" }
 seam-embed = { path = "../seam-embed" }
+seam-cache = { path = "../seam-cache" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
