@@ -1413,14 +1413,41 @@ by symbol**, which `cases.json` declares up front.
       GREP  no / no / no
       SEAM  no / no / no
 
-**Zero of six answers said it.** Seam's own blindspot machinery — the thing that makes an honest negative its
-differentiator — did not reach the answer in any run. Both arms present a complete-looking chain across a hop
-neither could verify.
+**Zero of six answers said it** (kc7; kc8 was 2 of 3 for SEAM, 0 of 3 for GREP).
 
-This is worth more than the call-count work of the whole session. A tool whose distinctive claim is declared
-blindspots, on the case built to showcase them, produced none. Whether that is the engine not surfacing them,
-the render dropping them, or the agent discarding them on the way to the answer block is not yet known, and is
-the next thing to find out.
+### …and the diagnosis CORRECTS that framing — twice
+
+Chasing "engine, render, or agent", the blindspot section turned out to be present in EVERY map, and to contain
+DI ambiguity, key fanout and unresolved imports — never the REST hop. The obvious reading is an engine gap.
+It is not, and the correction runs in Seam's favour, which is why it needs stating carefully:
+
+**Seam does not declare the hop a blindspot because it RESOLVES it — by KEY, not by symbol.** The map's
+`## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)` section names real
+TS→Java crossings with their route:
+
+    UIRealmResource.getInfo (rest/admin-ui-ext/…:81) — via HTTP route from ui-ext/info
+    AdminConsole.whoAmIPreFlight (services/…/AdminConsole.java:186) — via HTTP route from /whoami
+
+`cases.json` says the hop is "exactly what neither tool can resolve BY SYMBOL". True — and Seam resolves it by
+http-route key, which is the moat doing precisely its job. So Seam has no gap to declare here; the earlier
+"both arms fail on honesty" was wrong about Seam.
+
+**GREP is the arm that fails the honesty axis.** It cannot resolve the hop by any means, asserts the chain
+anyway, and says so in 0 of 6 runs.
+
+**BUT the specific hop the question asks about is still NOT linked.** Searching the map for the endpoint that
+`realms.ts#update` actually calls:
+
+    RealmAdminResource / RealmsAdminResource in the agent map:   0 occurrences
+
+The cross-stack section resolves `/whoami`, `/info`, `/attack-detection`, `/sessions` — and not
+`PUT /admin/realms/{realm}`. The TS side reads `http-route "/*"` (realms.ts:45), a wildcard too generic to pair
+with the Java `@Path("{realm}")`. So the moat works on specific routes and misses the one this case is named
+for, because the client-side route literal degenerates to `/*`.
+
+That is a precise, mechanical defect with a clear next step, and it is a better target than anything on the
+cost list: the route composer needs to compose `realms.ts`'s base path with the member path, so `/*` becomes
+`/admin/realms/*`, which CAN pair with the Java side.
 
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
