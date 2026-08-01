@@ -1124,6 +1124,77 @@ with no change to its arm. Seam's: 20, 14, 11, 13, 14, 10. The treatment arm is 
 now 3 against the control's 7 — that asymmetry remains the most defensible thing here, and the wall-clock win is
 a paired result (3 of 3), not a median comparison.
 
+## keycloak-cross-language, on the clean harness at last (2026-08-01, n=3) — SEAM LOSES, badly
+
+The case the moat exists for, and the case this harness had NEVER run: 26 result sets before today, 24 cal.com
+and 2 private-app, zero keycloak. Task string verbatim from `cases.json`. Pre-flight verified (`--locate RealmModel`
+resolves in 8.1s). Bias control CLEAN on all three pairs. Flywheel NOT warmed — deliberately, so this stays
+comparable to every other measurement in this file, all of which are of the deterministic floor.
+
+| | ARM GREP | ARM SEAM |
+|---|---|---|
+| tool calls, median | **22 (20–23)** | 34 (26–42) |
+| paired | 23 / 20 / 22 | 42 / 26 / 34 |
+| wall clock, median | **106s** | 278s |
+| engine (non-API) | ~0s | **218s / 130s / 104s** |
+| turns | 23 | 41 |
+| spread | **3** | 16 |
+
+A complete inversion of the cal.com result, on the case where the design predicted the opposite. **The
+cross-language theory — stated in `cases.json`, believed since run 1, and the stated reason for this case's
+existence — does not survive its own measurement.**
+
+### Why, and it is not that coupling failed
+
+Coupling ran (1–2 calls per run) and the routing held: **exactly one flow-grow per run**, as on cal.com. The
+budget is going somewhere else entirely:
+
+| | flow-grow | shapes | **`--locate`** | repo file Reads |
+|---|---|---|---|---|
+| kc-r1 | 1 | 7 | **10** | 17 |
+| kc-r2 | 1 | 2 | **12** | 11 |
+| kc-r3 | 1 | 4 | **11** | 14 |
+
+**31 of the 33 `--locate` calls HIT.** The agent is not failing to find things and falling back — it is using
+`--locate` as a *navigation primitive*, walking the flow one name at a time. kc-r2's sequence, in order:
+
+    RealmRepresentation → realms → realms.ts → RealmAdminResource → RealmsAdminResource → agent.ts
+    → RealmsAdminResource.java → RealmAdminResource.java → RealmSettingsTabs → updateRealm
+    → UIRealmResourceProvider → toRepresentation
+
+That is the TS→Java hop being crossed by hand, which is precisely what `cases.json` declares up front as the
+thing "neither tool can resolve by symbol". Seam does not bridge it either, so the agent bridges it itself — and
+pays Seam prices to do it.
+
+### And `--locate` costs 10x more here than on cal.com
+
+    keycloak:  --locate RealmAdminResource  6842 ms
+               --locate updateRealm         7274 ms
+               --locate realms.ts           7316 ms
+    cal.com:   --locate <anything>          ~800 ms
+
+At ~8s a call, 10–12 calls is **80–96s of engine time per run** — most of the 104–218s. The grep arm's
+equivalent step is `rg`, at ~0.1s.
+
+So the loss decomposes cleanly: the agent needs ~11 name lookups to cross a boundary Seam cannot resolve for it,
+and each lookup costs 8s instead of 0.1s. Nothing about coupling, ranking or rendering is implicated.
+
+### What this changes
+
+1. **Anchor hunting is not "the next lever", it is THE lever.** It was already the largest remaining block on
+   cal.com (`--locate` 4,4,3 against 2–4 analysis calls). Here it is 10–12 against 2–7, on the case the product
+   is supposedly best at. Every render fix in this file addressed the wrong half.
+2. **`--locate`'s per-call cost is a defect in its own right** and has never been profiled. 8s to answer "where
+   is this name" on a warm repo is not a lookup, it is a scan.
+3. **The moat claim needs restating.** Cross-stack coupling finds counterparts that share a KEY. It does not
+   help an agent that does not yet know either side's NAME, which is the actual work in a cross-language trace.
+   Those are different problems and this case has been quoted as evidence for the first while measuring the
+   second.
+
+NOT claimed: that the flywheel would not change this. It has never been warmed on this repo (`key-adapters.json`
+is at 97 files / 7 learned signatures / 0 rules) and the README's own run-3 protocol says to warm it. That is a
+separate measurement and it is still owed.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
