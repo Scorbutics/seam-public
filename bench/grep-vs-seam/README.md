@@ -1195,6 +1195,37 @@ NOT claimed: that the flywheel would not change this. It has never been warmed o
 is at 97 files / 7 learned signatures / 0 rules) and the README's own run-3 protocol says to warm it. That is a
 separate measurement and it is still owed.
 
+### keycloak re-run after the def-table shard (2026-08-01, n=3) — the fix worked; the verdict did not change
+
+| | ARM GREP | ARM SEAM (before → after) |
+|---|---|---|
+| tool calls, median | 23 (20–25) | 34 → **30** (22–42) |
+| **engine (non-API), mean** | ~1s | **150s → 56s** |
+| API time, mean | 101s | 169s → **181s** |
+| wall clock, mean | 102s | 321s → **239s** |
+| wall clock, median | 102s | 278s → 270s |
+| turns, mean | 24 | 41 → 37 |
+
+**The prediction recorded before the run was right on both stated counts.** Engine time fell 150s → 56s (I said
+80–96s would come off; 94s did), and the call count did not move — 34 → 30, inside the spread. The `--locate`
+count did not fall either: 10,12,11 → 12,16,8, up in one run. It is a NAVIGATION problem, not a latency one, and
+making each lookup 12x cheaper does not make the agent need fewer of them.
+
+**Where the wall-clock win went.** Mean wall fell 83s, which is the 94s of engine minus 12s of extra API. The
+MEDIAN moved only 278s → 270s, because medians of three noisy runs are not additive and the earlier batch's
+418s outlier had inflated its mean. Report both; the components are means and only the mean reconciles.
+
+**Seam still loses this case decisively** — 30 calls vs 23, 239s vs 102s — and the perf work never addressed the
+reason. The remaining gap is 181s of API across 37 turns against 101s across 24: the agent is doing more
+thinking and more turns because it is hand-walking a boundary Seam does not bridge. That is unchanged and was
+always going to be.
+
+**What is now established, across two batches:** the cross-language case is lost on TURNS and NAME LOOKUPS, not
+on engine speed. The engine is no longer the bottleneck here (56s of a 239s run), so further latency work on
+this case is misdirected. Either Seam resolves the TS→Java REST hop — which `cases.json` declares up front that
+it cannot, and which is the honest blindspot the case exists to surface — or the agent keeps crossing it by
+hand, and 11–16 `--locate` calls is what that costs.
+
 ### Noted for later, from the same observation: `--direction` and `--hop-limit` on the flow
 
 The agent's hand-walk is directional and shallow — it wants "callers of this, one hop up" or "what this reaches,
