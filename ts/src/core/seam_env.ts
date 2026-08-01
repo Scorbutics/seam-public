@@ -149,6 +149,15 @@ export const SEAM_FLAGS: readonly FlagDoc[] = [
     effect: "`=1` runs the coupling floor with NO framework adapters, isolating what the generic floor finds " +
             "on its own. Also feeds floor_env_tag(), so it is part of the floor cache KEY.",
     readAt: "rust/crates/seam-couple/src/adapters/mod.rs" },
+  { name: "SEAM_NO_SIBLING_PREFIX", cls: "seam", dflt: "off — sibling-prefix route inference is applied",
+    effect: "`=1` drops the composed http-route keys the sibling-prefix inference adds, isolating what that " +
+            "inference alone contributes. It EARNED its place immediately: the first measurement made without " +
+            "it (`883e8a8`, \"Java routers cited: 0 -> 26\" on `--query coupling`) does not reproduce — the two " +
+            "arms are byte-identical there, because `project_coupling` reads the anchor's keys from the " +
+            "repo-free per-file scan, which never sees the post-pass. The real effect is on the GROW " +
+            "(keycloak: `.java` map lines 50 -> 80). Also feeds floor_env_tag(), so it is part of the floor " +
+            "cache KEY — sharing a shard between the arms would measure nothing.",
+    readAt: "rust/crates/seam-couple/src/ground/floor.rs" },
   { name: "SEAM_NODE_KEY_CAP", cls: "seam", dflt: "16",
     effect: "Max shared keys attributed to one node; a test lowers it to drive the fan-out cap.",
     readAt: "rust/crates/seam-couple/src/apply/pipeline.rs" },

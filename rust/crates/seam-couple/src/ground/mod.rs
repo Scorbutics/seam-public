@@ -57,12 +57,13 @@ static CACHE: Lazy<Mutex<std::collections::HashMap<String, Arc<FloorIndices>>>> 
 // every later normal run then loaded — the source had not changed, so the epoch still matched. The knobs join
 // the key. (TS carried the same knobs in `couplingEnvHash`; the Rust shard was keyed on source only.)
 fn floor_env_tag() -> String {
+    let nosib = if std::env::var("SEAM_NO_SIBLING_PREFIX").as_deref() == Ok("1") { "-nosib" } else { "" };
     let noadapt = std::env::var("SEAM_NO_ADAPTERS").unwrap_or_default();
     if noadapt.is_empty() {
-        return String::new();
+        return nosib.to_string();
     }
     // the trailing `-mb` is kept so the tag is byte-identical to the form that also carried a scan-byte cap
-    format!("-na{noadapt}-mb")
+    format!("{nosib}-na{noadapt}-mb")
 }
 
 /// THE CORE'S OWN IDENTITY joins the shard key.
@@ -109,7 +110,14 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
                     eprintln!("[perf] floor_indices LOAD {:.2}s", t.elapsed().as_secs_f64());
                 }
                 let arc = Arc::new(idx);
-                CACHE.lock().unwrap().insert(repo.to_string(), arc.clone());
+                // `repo_key`, NOT `repo` — the lookup above is keyed by repo+env tag, so inserting under the
+                // bare repo meant a knob-tagged run NEVER hit its own memo and re-read + re-deserialised the
+                // 1.1 MB shard on every call within the process. Worse in principle than slow: the bare-`repo`
+                // entry is what an UNTAGGED lookup finds, so a `SEAM_NO_ADAPTERS=1` load would have been served
+                // to a plain query in the same process — the exact cross-arm contamination `floor_env_tag`
+                // exists to prevent, reintroduced one line below it. (Found while A/B-ing the sibling-prefix
+                // inference, which added the second tagged variant that makes this reachable.)
+                CACHE.lock().unwrap().insert(repo_key.clone(), arc.clone());
                 return arc;
             }
         }

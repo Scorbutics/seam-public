@@ -141,7 +141,18 @@ pub fn floor_contributions(repo: &str) -> Vec<(String, FloorContribution)> {
                 .filter_map(|k| crate::adapters::http_route::compose_with_sibling_prefix(repo, rel, &k.value)
                     .map(|v| KeyHit { value: v, label: Some("suggested-sibling-prefix".into()), ..k.clone() }))
                 .collect();
-            c.keys.extend(inferred);
+            // SEAM_NO_SIBLING_PREFIX=1 — the A/B ARM, kept because it is the only way to attribute an effect to
+            // this inference, and using it immediately corrected a claim made without it. `883e8a8` reported
+            // "Java routers cited by `--query coupling --center realms.ts#Realms`: 0 -> 26". Re-measured with
+            // this switch, the two arms are BYTE-IDENTICAL on that query, and they must be: `project_coupling`
+            // takes the anchor's keys from `scan_file_keys(anchor_file)` — the per-file scan, which by design
+            // never sees this post-pass — so a composed key can only ever appear on the COMPLEMENT side there.
+            // The real effect is on the GROW (keycloak, same anchor): `.java` lines in the agent map 50 -> 80,
+            // grounded seams 156 -> 210, map 25,620 -> 34,657 B.
+            //
+            // It joins `floor_env_tag()` (and so the shard key) for the reason every knob here does: the floor
+            // is DISK-CACHED per repo epoch, so an arm sharing a shard with the other arm measures nothing.
+            if std::env::var("SEAM_NO_SIBLING_PREFIX").as_deref() != Ok("1") { c.keys.extend(inferred); }
             Some((rel.clone(), c))
         })
         .collect()
