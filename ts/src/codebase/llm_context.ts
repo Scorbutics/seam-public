@@ -982,9 +982,20 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       // — the "candidate" is the file the evidence just named, with no symbol to add. That is ~half the row,
       // carrying nothing, in a section exempt from cropping on a map re-read on every later turn. A candidate
       // earns its bytes only when it says something the evidence did not (a fanout lead's `file#key` still does).
-      const candsOf = (b: any) => [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))]
-        .filter((c: string) => !String(b.evidence ?? "").includes(c))
-        .slice(0, 6);
+      // CANDIDATES CAPPED AT 3, and the cut DECLARED. Measured (keycloak, 2026-08-02) after the module-
+      // resolution fixes stopped discarding imports: `## Blindspots` went 3,105 -> 8,011 B and single lead
+      // lines reached 1,078 chars, because a `node-key-fanout` lead on a route-heavy file lists six full route
+      // keys (`/admin/realms/*/localization/*/*` and friends). Six near-identical paths do not tell a reader
+      // six times as much as three, and this section is exempt from the degrade ladder on a map that is
+      // 42-44% of a run's tool-result context cost. The count is stated so the crop is visible, never silent.
+      const CAND_CAP = 3;
+      const candsOf = (b: any) => {
+        const all = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))]
+          .filter((c: string) => !String(b.evidence ?? "").includes(c));
+        return all.length > CAND_CAP
+          ? [...all.slice(0, CAND_CAP), `+${all.length - CAND_CAP} more`]
+          : all;
+      };
       // …AND MERGE LEADS THAT RENDER IDENTICALLY. Same measurement: `d10` and `fc1930` produced BYTE-IDENTICAL
       // bodies (same mechanism, evidence and candidate — two nodes in one file hitting the same fanout), so the
       // section paid ~250 B twice for one fact. Keyed on what is RENDERED, not on the node, because that is
