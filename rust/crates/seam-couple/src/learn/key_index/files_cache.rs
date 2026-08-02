@@ -30,15 +30,38 @@ const MODULE_MARKERS: &[&str] = &[
 /// The repo-RELATIVE prefix of the SMALLEST enclosing module of `file` (nearest ancestor with a build manifest),
 /// e.g. `services/`; "" when none. Port of `module_scope`.
 pub fn module_scope(repo: &str, file: &str) -> String {
-    let mut d = seam_fs::dirname(file);
-    while d != "." && !d.is_empty() {
+    // MEMOIZED PER DIRECTORY, because this is a pure function OF THE DIRECTORY and it is on the hot path.
+    //
+    // MEASURED (bench/grep-vs-seam, keycloak multi-center grow, 2026-08-02). `key_index` is memoized per
+    // (repo, module-scope) — but `module_scope` is what COMPUTES that cache key, so it runs BEFORE the memo,
+    // on every call. The agent's grow made 265 `key_index` calls over ~20 distinct scopes; the 245 that were
+    // cache HITS still paid this walk in full. Each walk climbs to the repo root probing 22 build manifests
+    // per level, so a 9-deep Java path is ~200 `stat()` calls: ~50,000 filesystem probes per grow, ~3.7s of a
+    // 24.5s operation, to recompute ~20 distinct answers.
+    //
+    // Keyed on the DIRECTORY, not the file, so every file in a package shares one entry (265 calls collapse to
+    // a handful of walks). Invalidated with the rest of the per-repo coupling state in `reset_file_contrib`.
+    let dir = seam_fs::dirname(file);
+    let ck = (repo.to_string(), dir.clone());
+    if let Some(hit) = MODULE_SCOPE_CACHE.lock().unwrap().get(&ck) {
+        return hit.clone();
+    }
+    let mut d = dir;
+    let scope = loop {
+        if d == "." || d.is_empty() {
+            break String::new();
+        }
         if MODULE_MARKERS.iter().any(|m| std::path::Path::new(&format!("{repo}/{d}/{m}")).exists()) {
-            return format!("{d}/");
+            break format!("{d}/");
         }
         d = seam_fs::dirname(&d);
-    }
-    String::new()
+    };
+    MODULE_SCOPE_CACHE.lock().unwrap().insert(ck, scope.clone());
+    scope
 }
+
+static MODULE_SCOPE_CACHE: once_cell::sync::Lazy<std::sync::Mutex<HashMap<(String, String), String>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn in_scope(scope: &str, rel: &str) -> bool {
     scope.is_empty() || rel == &scope[..scope.len().saturating_sub(1)] || rel.starts_with(scope)
@@ -103,6 +126,14 @@ pub fn reset_file_contrib(repo: Option<&str>) {
     match repo {
         Some(r) => c.retain(|(repo_key, _), _| repo_key != r),
         None => c.clear(),
+    }
+    // The module-scope memo is per-repo FILESYSTEM state (which dirs carry a build manifest), so it is stale
+    // exactly when this one is — adding a build manifest moves a module boundary. Dropped on the same hook, or
+    // an edit-loop process would keep answering with the pre-edit module layout.
+    let mut m = MODULE_SCOPE_CACHE.lock().unwrap();
+    match repo {
+        Some(r) => m.retain(|(repo_key, _), _| repo_key != r),
+        None => m.clear(),
     }
 }
 
@@ -294,5 +325,62 @@ mod file_contrib_cache_tests {
         reset_file_contrib(Some(r));
         assert_eq!(ser(&cold), ser(&files_index(r, "svc/a.js")), "recompute after reset == original");
         fs::remove_dir_all(&repo).ok();
+    }
+}
+
+#[cfg(test)]
+mod module_scope_memo_tests {
+    use super::*;
+
+    fn repo(tag: &str) -> String {
+        let d = std::env::temp_dir().join(format!("seam-modscope-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("libs/pkg/src/deep/deeper")).unwrap();
+        std::fs::write(d.join("libs/pkg/package.json"), r#"{"name":"p","version":"1.0.0"}"#).unwrap();
+        std::fs::write(d.join("libs/pkg/src/deep/deeper/a.ts"), "export const a = 1;\n").unwrap();
+        d.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_memo_is_transparent() {
+        // Warm then cold must agree — a memo that changes the answer is a bug, not an optimisation.
+        let r = repo("transparent");
+        let cold = module_scope(&r, "libs/pkg/src/deep/deeper/a.ts");
+        let warm = module_scope(&r, "libs/pkg/src/deep/deeper/a.ts");
+        assert_eq!(cold, "libs/pkg/");
+        assert_eq!(warm, cold);
+        // keyed by DIRECTORY: a sibling file in the same dir gets the same scope without another walk
+        assert_eq!(module_scope(&r, "libs/pkg/src/deep/deeper/b.ts"), "libs/pkg/");
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn a_new_build_manifest_moves_the_boundary_after_reset() {
+        // THE DANGEROUS HALF. `module_scope` reads the FILESYSTEM, so adding a manifest moves a module
+        // boundary; a memo that outlived that would answer with the pre-edit layout forever. This asserts the
+        // invalidation hook actually reaches it — without the `reset_file_contrib` addition this fails.
+        let r = repo("invalidate");
+        assert_eq!(module_scope(&r, "libs/pkg/src/deep/deeper/a.ts"), "libs/pkg/");
+        std::fs::write(format!("{r}/libs/pkg/src/deep/package.json"), r#"{"name":"inner","version":"1.0.0"}"#).unwrap();
+        reset_file_contrib(Some(&r));
+        assert_eq!(module_scope(&r, "libs/pkg/src/deep/deeper/a.ts"), "libs/pkg/src/deep/",
+                   "the memo survived an invalidation — a stale module boundary mis-scopes every key index under it");
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn two_repos_do_not_share_an_entry() {
+        // The cache is keyed (repo, dir); a bare-dir key would let one repo's layout answer for another's —
+        // the same cross-arm contamination shape found in `floor_indices`.
+        let a = repo("repoA");
+        let b = std::env::temp_dir().join(format!("seam-modscope-repoB-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&b);
+        std::fs::create_dir_all(b.join("libs/pkg/src/deep/deeper")).unwrap();   // NO package.json anywhere
+        std::fs::write(b.join("libs/pkg/src/deep/deeper/a.ts"), "export const a = 1;\n").unwrap();
+        assert_eq!(module_scope(&a, "libs/pkg/src/deep/deeper/a.ts"), "libs/pkg/");
+        assert_eq!(module_scope(b.to_str().unwrap(), "libs/pkg/src/deep/deeper/a.ts"), "",
+                   "repo B has no manifest — it must not inherit repo A's answer for the same relative dir");
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 }
