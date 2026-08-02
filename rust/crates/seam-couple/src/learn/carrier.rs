@@ -75,7 +75,7 @@ struct StoreWire {
 static MEM: Lazy<Mutex<HashMap<String, indexmap::IndexMap<String, Option<CarrierSignature>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn store_path(repo: &str) -> String {
-    format!("{repo}/.seam/{FILE}")
+    format!("{}/{FILE}", seam_fs::seam_dir(repo))
 }
 
 fn load_from(path: &str) -> indexmap::IndexMap<String, Option<CarrierSignature>> {
@@ -137,7 +137,7 @@ pub fn persist_signature(repo: &str, key: &str, sig: Option<CarrierSignature>) {
     m.insert(key.to_string(), sig);
     let wire = StoreWire { schema: SCHEMA, signatures: m.clone() };
     if let Ok(text) = serde_json::to_string_pretty(&wire) {
-        let _ = std::fs::create_dir_all(format!("{repo}/.seam"));
+        let _ = std::fs::create_dir_all(seam_fs::seam_dir(repo));
         let tmp = format!("{path}.tmp");
         if std::fs::write(&tmp, text).is_ok() {
             let _ = std::fs::rename(&tmp, &path);

@@ -138,7 +138,7 @@ fn fan_sig_env(repo: &str) -> (String, String) {
     // alone (which moves the coupling epoch) does not invalidate a delta whose own inputs are untouched.
     let store = ["key-adapters.json", "key-matchers.json"]
         .iter()
-        .filter_map(|f| std::fs::read_to_string(format!("{repo}/.seam/{f}")).ok())
+        .filter_map(|f| std::fs::read_to_string(format!("{}/{f}", seam_fs::seam_dir(repo))).ok())
         .collect::<Vec<_>>()
         .join("\u{0}");
     (seam_cache::hash(&format!("{}|{}", seam_cache::engine_epoch(), seam_cache::seam_env_snapshot())), seam_cache::hash(&store))

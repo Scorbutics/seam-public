@@ -492,7 +492,7 @@ pub fn shared_dir() -> String {
 pub fn load_matchers(repo: &str) -> Vec<KeyMatcher> {
     let mut out = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (shared, dir) in [(false, format!("{repo}/.seam")), (true, shared_dir())] {
+    for (shared, dir) in [(false, seam_fs::seam_dir(repo)), (true, shared_dir())] {
         for m in load_store_rules(&dir) {
             let id = m.key();
             if seen.insert(id) {

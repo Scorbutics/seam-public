@@ -133,7 +133,7 @@ pub fn coupling_epoch_of(repo: &str) -> String {
     let src = epoch_of(repo);
     let learned: Vec<String> = ["key-adapters.json", "key-matchers.json"]
         .iter()
-        .map(|name| match std::fs::read_to_string(format!("{repo}/.seam/{name}")) {
+        .map(|name| match std::fs::read_to_string(format!("{}/{name}", seam_fs::seam_dir(repo))) {
             Ok(c) => format!("{name}:{}", hash(&c)),
             Err(_) => format!("{name}:∅"),
         })
@@ -157,7 +157,7 @@ fn core_stamp_tag() -> String {
 
 fn shard_dir(repo: &str, name: &str) -> String {
     // NAMESPACE: `.seam/rust/<name>` — distinct from TS's `.seam/<name>` so the caches never collide.
-    format!("{repo}/.seam/rust/{name}")
+    format!("{}/rust/{name}", seam_fs::seam_dir(repo))
 }
 
 fn shard_path(dir: &str, h: &str) -> String {
@@ -198,9 +198,9 @@ pub fn save_shard<T: serde::Serialize>(repo: &str, name: &str, rel: &str, d: &T)
 
 /// Self-ignore the Rust cache dir on first write (so shards never get committed).
 fn ensure_gitignore(repo: &str) {
-    let gi = format!("{repo}/.seam/.gitignore");
+    let gi = format!("{}/.gitignore", seam_fs::seam_dir(repo));
     if !Path::new(&gi).exists() {
-        let _ = std::fs::create_dir_all(format!("{repo}/.seam"));
+        let _ = std::fs::create_dir_all(seam_fs::seam_dir(repo));
         let _ = std::fs::write(&gi, "rust/\n");
     }
     let _ = normpath; // (kept in scope parity with the fs helpers)
@@ -314,10 +314,25 @@ where
         let mut m = MIRROR.lock().unwrap();
         let shard = m.entry(mkey.clone()).or_default();
         shard.insert(key.to_string(), Entry { e: epoch.to_string(), d: val });
+        // AMORTISED DOUBLING, because `save_shard` rewrites the file's ENTIRE shard. Writing per insert is
+        // O(n^2) bytes for n entries landing in one shard, and keycloak's `footprint-v1` shards reach 5 MB —
+        // so a wave of moves through one file rewrote megabytes per move, under the MIRROR guard, which also
+        // serialises every other thread.
+        //
+        // Rewrite only when the shard has DOUBLED since its last write (and always on the first entry). Total
+        // bytes written become 1 + 2 + 4 + ... + n ~= 2n, i.e. O(n) instead of O(n^2), while the number of
+        // writes falls to O(log n).
+        //
+        // NO FLUSH HOOK, deliberately. A dirty-mark + flush-at-end-of-grow was tried and REVERTED: with 202
+        // napi entry points, "the end" is not a place, and `def_table_shard.test.ts` correctly caught that
+        // `--locate` then never persisted its shard at all — silently disabling the disk cache for every
+        // non-grow entry point. Doubling keeps writes on the insert path where they cannot be missed; the
+        // worst case is losing the entries since the last write if the process dies, and this is a cache.
         save_shard(repo, cache, file, shard);
     }
     (d, verdict)
 }
+
 
 /// Drop the in-memory epoch mirrors + the graph mirror (the edit-loop invalidation hook; the disk memo
 /// self-invalidates on (mtime,size) change). Wired into napi resetCaches.
@@ -420,3 +435,4 @@ mod core_stamp_invalidation_tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
+

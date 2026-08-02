@@ -33,7 +33,7 @@ impl CallsiteIndex {
     }
 
     fn shard(repo: &str, epoch: &str) -> String {
-        format!("{repo}/.seam/rust/callsite-index-v1/{epoch}.bin")
+        format!("{}/rust/callsite-index-v1/{epoch}.bin", seam_fs::seam_dir(repo))
     }
 
     /// DISK-persisted (per-repo content epoch): a fresh process LOADS the index via DIRECT bincode (no
@@ -59,7 +59,7 @@ impl CallsiteIndex {
             eprintln!("[perf] callsite_index build {:.2}s", t.elapsed().as_secs_f64());
         }
         if !epoch.is_empty() {
-            let dir = format!("{repo}/.seam/rust/callsite-index-v1");
+            let dir = format!("{}/rust/callsite-index-v1", seam_fs::seam_dir(repo));
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {

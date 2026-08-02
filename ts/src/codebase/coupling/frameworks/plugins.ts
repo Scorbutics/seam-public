@@ -13,6 +13,7 @@
 // SECURITY: the manifest is DATA and loads from any root. Code adapters are a different matter — see the note
 // on `_loadCodeAdapters` below; they are no longer loadable at all, and say so loudly.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { seamRoot } from "../../../core/seam_dir.js";
 import { warn as warnDegraded } from "../../../core/progress.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -34,7 +35,7 @@ let _loaded = false;
 export async function loadFrameworkPlugins(repo: string): Promise<void> {
   if (_loaded) return;
   _loaded = true;
-  for (const dir of [userRoot(), join(repo, ".seam")]) {
+  for (const dir of [userRoot(), seamRoot(repo)]) {
     _loadManifest(join(dir, "frameworks.json"));
     await _loadCodeAdapters(join(dir, "plugins"));
   }

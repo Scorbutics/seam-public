@@ -95,7 +95,7 @@ struct KeyHitJson {
 /// `cachedFileKeys` (repo dir only; shared dir empty in practice).
 pub(crate) fn store_files(repo: &str) -> HashMap<String, Vec<KeyHit>> {
     let mut out = HashMap::new();
-    let Ok(txt) = std::fs::read_to_string(format!("{repo}/.seam/key-adapters.json")) else { return out };
+    let Ok(txt) = std::fs::read_to_string(format!("{}/key-adapters.json", seam_fs::seam_dir(repo))) else { return out };
     let Ok(store) = serde_json::from_str::<StoreFilesJson>(&txt) else { return out };
     if store.schema == Some(3) {
         for (k, v) in store.files {

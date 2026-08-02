@@ -149,6 +149,14 @@ export const SEAM_FLAGS: readonly FlagDoc[] = [
     effect: "`=1` runs the coupling floor with NO framework adapters, isolating what the generic floor finds " +
             "on its own. Also feeds floor_env_tag(), so it is part of the floor cache KEY.",
     readAt: "rust/crates/seam-couple/src/adapters/mod.rs" },
+  { name: "SEAM_REPO_CACHE_DIR", cls: "config", dflt: "unset — the cache lives at `<repo>/.seam`",
+    effect: "redirects the analysed repo's cache root to `$SEAM_REPO_CACHE_DIR/<slug-of-repo-path>`, so two " +
+            "runs against ONE checkout can stop sharing a cache. Both engines honour it and must agree: the " +
+            "Rust core (`seam_fs::seam_dir`) and the TS side (`core/seam_dir.ts::seamRoot`) build the slug by " +
+            "the same rule. NOT to be confused with SEAM_CACHE_DIR, which is the DIFF cache — reusing that " +
+            "name redirected every later test's repo cache into the diff cache and broke 24 tests, because " +
+            "`syncSeamEnv` forwards every `SEAM_*` var into the core.",
+    readAt: "rust/crates/seam-fs/src/lib.rs" },
   { name: "SEAM_NO_SIBLING_PREFIX", cls: "seam", dflt: "off — sibling-prefix route inference is applied",
     effect: "`=1` drops the composed http-route keys the sibling-prefix inference adds, isolating what that " +
             "inference alone contributes. It EARNED its place immediately: the first measurement made without " +

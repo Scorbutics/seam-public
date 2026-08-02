@@ -6,6 +6,7 @@
 // content fingerprint of the engine, the repo, and the learned key-adapter state), the SEAM_* env snapshot
 // those epochs are keyed with, and the P5 settled-grow answer cache the merged-centers path wraps itself in.
 import { statSync, readFileSync } from "node:fs";
+import { seamRoot } from "../core/seam_dir.js";
 import { debugOn, debugValue } from "../core/progress.js";
 import { fileURLToPath } from "node:url";
 import { join, relative, dirname } from "node:path";
@@ -153,7 +154,7 @@ export function couplingEpochOf(repo: string): string {
   if (cached !== undefined) return cached;
   const src = epochOf(repo);
   const learned = _LEARNED_FILES.map((name) => {
-    try { return `${name}:${_hash(readFileSync(join(repo, ".seam", name), "utf-8"))}`; } catch { return `${name}:∅`; }
+    try { return `${name}:${_hash(readFileSync(join(seamRoot(repo), name), "utf-8"))}`; } catch { return `${name}:∅`; }
   });
   const e = src ? `${src}|${_hash(learned.join("\n"))}` : "";
   // SETTLING DIAGNOSTIC: if the coupling epoch differs run-to-run the answer cache can NEVER hit. This prints
@@ -162,7 +163,7 @@ export function couplingEpochOf(repo: string): string {
   // SAME counts = a rewrite with reordered content; growing counts = a pass still learning (see [key-store]).
   if (debugOn("fp")) {
     let sum = "";
-    try { const j = JSON.parse(readFileSync(join(repo, ".seam", "key-adapters.json"), "utf-8")); sum = ` adapters{rules:${(j.rules ?? []).length},files:${Object.keys(j.files ?? {}).length},learnedSigs:${(j.learnedSigs ?? []).length}}`; } catch { sum = " adapters{∅}"; }
+    try { const j = JSON.parse(readFileSync(join(seamRoot(repo), "key-adapters.json"), "utf-8")); sum = ` adapters{rules:${(j.rules ?? []).length},files:${Object.keys(j.files ?? {}).length},learnedSigs:${(j.learnedSigs ?? []).length}}`; } catch { sum = " adapters{∅}"; }
     process.stderr.write(`[coupling-epoch] source=${src} | ${learned.join(" ")}${sum} → epoch=${e}\n`);
   }
   _cEpoch.set(repo, e);

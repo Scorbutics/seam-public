@@ -37,7 +37,7 @@ impl InterfaceIndex {
     }
 
     fn shard(repo: &str, epoch: &str) -> String {
-        format!("{repo}/.seam/rust/interface-index-v1/{epoch}.bin")
+        format!("{}/rust/interface-index-v1/{epoch}.bin", seam_fs::seam_dir(repo))
     }
 
     /// DISK-persisted (per-repo content epoch) via direct bincode — a fresh process LOADS instead of re-parsing
@@ -62,7 +62,7 @@ impl InterfaceIndex {
             eprintln!("[perf] interface_index build {:.2}s", t.elapsed().as_secs_f64());
         }
         if !epoch.is_empty() {
-            let dir = format!("{repo}/.seam/rust/interface-index-v1");
+            let dir = format!("{}/rust/interface-index-v1", seam_fs::seam_dir(repo));
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {

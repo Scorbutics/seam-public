@@ -31,7 +31,7 @@ static KEY_INDEX_CACHE: Lazy<Mutex<HashMap<(String, String), Arc<GroundingIndex>
 // bincode, as proven for the floor index).
 fn load_or_build_persisted(repo: &str, name: &str, build: impl FnOnce() -> GroundingIndex) -> Arc<GroundingIndex> {
     let epoch = seam_cache::coupling_epoch_of(repo);
-    let shard = |e: &str| format!("{repo}/.seam/rust/{name}/{e}.bin");
+    let shard = |e: &str| format!("{}/rust/{name}/{e}.bin", seam_fs::seam_dir(repo));
     if !epoch.is_empty() {
         if let Ok(bytes) = std::fs::read(shard(&epoch)) {
             if let Ok(idx) = bincode::deserialize::<GroundingIndex>(&bytes) {
@@ -41,7 +41,7 @@ fn load_or_build_persisted(repo: &str, name: &str, build: impl FnOnce() -> Groun
     }
     let idx = build();
     if !epoch.is_empty() {
-        let dir = format!("{repo}/.seam/rust/{name}");
+        let dir = format!("{}/rust/{name}", seam_fs::seam_dir(repo));
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {

@@ -536,3 +536,58 @@ mod debug_tests {
         assert_eq!(spec_value("border=a=b", "border").as_deref(), Some("a=b"));
     }
 }
+
+/// THE CACHE ROOT for `repo` — `<repo>/.seam` by default, or `$SEAM_REPO_CACHE_DIR/<slug>` when set.
+///
+/// WHY IT IS OVERRIDABLE (bench/grep-vs-seam, 2026-08-02). Every shard cache lives under the REPO being
+/// analysed, so two processes reading the same repo share one cache whether or not they mean to. That is
+/// normally the point — it is what makes a warm run warm — but it makes isolation impossible: a benchmark run
+/// and a profiling run against the same checkout contend, and clearing the cache for one silently re-times the
+/// other. That happened: deleting `grow-v1` to set up a measurement invalidated two of three in-flight
+/// benchmark runs, and a git worktree does not help because it isolates the CODE, not the repo under test.
+///
+/// `SEAM_REPO_CACHE_DIR=/tmp/x` gives a run its own cache root, keyed by a slug of the repo path so several repos
+/// can share one override directory without colliding. Unset (the default), behaviour is byte-for-byte what it
+/// was: `<repo>/.seam`.
+pub fn seam_dir(repo: &str) -> String {
+    match std::env::var("SEAM_REPO_CACHE_DIR") {
+        Ok(d) if !d.trim().is_empty() => {
+            // Slug the repo path so `/a/b/keycloak` and `/c/keycloak` cannot land on the same subdir.
+            let slug: String = normpath(repo)
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            format!("{}/{}", d.trim().trim_end_matches('/'), slug.trim_matches('_'))
+        }
+        _ => format!("{repo}/.seam"),
+    }
+}
+
+#[cfg(test)]
+mod seam_dir_tests {
+    use super::*;
+
+    /// ONE test, not three, because `SEAM_REPO_CACHE_DIR` is PROCESS-global and `cargo test` runs tests in
+    /// parallel: as three cases, a sibling's `remove_var` cleared the variable mid-assertion and the override
+    /// case failed intermittently. Env-var behaviour has to be exercised serially or not at all.
+    #[test]
+    fn the_cache_root_defaults_to_the_repo_and_is_overridable() {
+        std::env::remove_var("SEAM_REPO_CACHE_DIR");
+        assert_eq!(seam_dir("/a/b/repo"), "/a/b/repo/.seam", "default must be the repo's own .seam");
+
+        // The isolation this exists for: two runs against one checkout must be able to NOT share a cache.
+        std::env::set_var("SEAM_REPO_CACHE_DIR", "/tmp/seamcache");
+        let a = seam_dir("/home/x/keycloak");
+        let b = seam_dir("/other/keycloak");
+        assert!(a.starts_with("/tmp/seamcache/"), "not redirected: {a}");
+        // …and two DIFFERENT repos sharing one override dir must not collide, or the override would trade one
+        // contamination for another.
+        assert_ne!(a, b, "two repos with the same basename collided in the override dir");
+        assert_eq!(a, seam_dir("/home/x/keycloak"), "must be stable for one repo");
+
+        // `SEAM_REPO_CACHE_DIR=` in a shell profile must not silently relocate every cache to `/`.
+        std::env::set_var("SEAM_REPO_CACHE_DIR", "   ");
+        assert_eq!(seam_dir("/a/b/repo"), "/a/b/repo/.seam", "a blank override must be ignored");
+        std::env::remove_var("SEAM_REPO_CACHE_DIR");
+    }
+}

@@ -85,7 +85,7 @@ fn core_stamp_tag() -> String {
 }
 
 fn floor_shard(repo: &str, epoch: &str) -> String {
-    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}{}{}.bin", floor_env_tag(), core_stamp_tag())
+    format!("{}/rust/floor-indices-v1/{epoch}{}{}.bin", seam_fs::seam_dir(repo), floor_env_tag(), core_stamp_tag())
 }
 
 /// Build (or fetch cached) the deterministic floor indices for `repo`. Port of `build_floor_indices` +
@@ -132,7 +132,7 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     }
     let idx = Arc::new(FloorIndices { shared, param, floor_base });
     if !epoch.is_empty() {
-        let dir = format!("{repo}/.seam/rust/floor-indices-v1");
+        let dir = format!("{}/rust/floor-indices-v1", seam_fs::seam_dir(repo));
         let _ = std::fs::create_dir_all(&dir);
         // Sweep shards for OTHER epochs, but keep this epoch's other env variants — they are all still valid,
         // and deleting them would make an alternating (adapters on / off) run rebuild the floor every time.

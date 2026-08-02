@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSy
 import { join, relative } from "node:path";
 import { walk } from "./walk.js";
 import { timingOn } from "../progress.js";
-import { ensureSeamDir, ensureSeamGitignore } from "../seam_dir.js";
+import { ensureSeamDir, ensureSeamGitignore, seamRoot } from "../seam_dir.js";
 
 const _CACHE_VERSION = "v2-incremental";
 
@@ -33,7 +33,7 @@ export const graphCacheEnabled = (): boolean => process.env.SEAM_GRAPH_CACHE !==
 
 type FileEntry<T> = { m: number; s: number; d: T };          // mtimeMs, size, contribution
 type CacheFile<T> = { salt: string; files: Record<string, FileEntry<T>> };
-const _cachePath = (repo: string, name: string) => join(repo, ".seam", `${name}.json`);
+const _cachePath = (repo: string, name: string) => join(seamRoot(repo), `${name}.json`);
 
 // Walk the repo, returning each scanned file's contribution — reused from the on-disk cache when the file is
 // unchanged, recomputed via `scanFile` when it changed/is new. Persists the refreshed per-file map. Returns
@@ -145,7 +145,7 @@ export async function incrementalScanFiles<T>(
 //     without deserializing the entire graph. That is what makes "fast on known territory" possible.
 // Correctness invariants are unchanged from incrementalScan: (m,s) content key, salt-resets-all,
 // corrupt→rebuild, deleted files pruned — the cache only ever affects SPEED, never output.
-const _shardDir = (repo: string, name: string) => join(repo, ".seam", name);
+const _shardDir = (repo: string, name: string) => join(seamRoot(repo), name);
 type ShardManifest = { salt: string; files: Record<string, { m: number; s: number; h: string }> };
 
 // Stable, path-safe shard id (FNV-1a → base36). Collisions are astronomically unlikely at repo scale,

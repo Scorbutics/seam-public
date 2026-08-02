@@ -106,7 +106,7 @@ pub fn load_store(dir: &str) -> Store {
 }
 
 fn repo_dir(repo: &str) -> String {
-    format!("{repo}/.seam")
+    seam_fs::seam_dir(repo)
 }
 
 /// Atomic write (tmp + rename) of the schema-3 store; drops the legacy key-matchers.json. Port of `_writeStore`.
