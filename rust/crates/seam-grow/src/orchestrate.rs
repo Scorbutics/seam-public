@@ -214,7 +214,22 @@ fn caller_files_for(data: &ResolvedGraph, next: &GraphNode, down: bool) -> Optio
 
 /// Apply ONE (node, direction) expansion: build that node's directional footprint (structural), reject a flood,
 /// and merge in place. Port of `_applyMove`.
+// COMPUTE-vs-APPLY CENSUS (SEAM_DEBUG=wave) — the ratio that decides whether level-synchronous parallelism is
+// worth building. Everything up to `built` is INDEPENDENT per move (footprint build + prune, already cached);
+// the flood check and `merge_into` mutate the shared graph and index and must stay serial. If compute
+// dominates, a rayon-then-serial-merge wave is a real win; if apply dominates, the ceiling collapses and the
+// answer is a cheaper per-node build instead.
+static _T_COMPUTE_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _T_APPLY_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _N_MOVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn _move_split() -> (u64, u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (_T_COMPUTE_US.load(Relaxed), _T_APPLY_US.load(Relaxed), _N_MOVES.load(Relaxed))
+}
+
 fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, idx: &mut GrowIndex, why: &mut String) -> usize {
+    let _t_compute = std::time::Instant::now();
     let next = &mv.node;
     let down = mv.dir == Dir::Down;
     let caller_files = caller_files_for(data, next, down);
@@ -238,14 +253,19 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
             g
         })
     };
+    _T_COMPUTE_US.fetch_add(_t_compute.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+    _N_MOVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let _t_apply = std::time::Instant::now();
     let Some(mut add) = built else {
         *why = "build failed".into(); // unsupported file / parse — a frontier miss, and flagTruncation says so
+        _T_APPLY_US.fetch_add(_t_apply.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
         return 0;
     };
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the answer.
     let flood = add.nodes.iter().filter(|n| !idx.by_key.contains_key(&key(n)) && !n.coupling).count();
     if flood > MOVE_CAP {
         *why = "too broad".into(); // a widely-used util floods the footprint without advancing the answer
+        _T_APPLY_US.fetch_add(_t_apply.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
         return 0;
     }
     // carry the move direction outward as the new nodes' default direction.
@@ -256,7 +276,9 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
             n.direction = Some(tag.to_string());
         }
     }
-    merge_into(data, &add, idx, Some(&anchor_id))
+    let r = merge_into(data, &add, idx, Some(&anchor_id));
+    _T_APPLY_US.fetch_add(_t_apply.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+    r
 }
 
 /// The structural wavefront. Port of `_phaseExpand` (structural path). Returns the grown graph (mutated in
@@ -594,6 +616,11 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         }
     }
 
+    if seam_fs::debug_on("wave") {
+        let (c, ap, n) = _move_split();
+        eprintln!("[wave-split] moves={n} compute={:.2}s apply={:.2}s  -> compute is {:.0}% of apply_move",
+            c as f64 / 1e6, ap as f64 / 1e6, 100.0 * c as f64 / (c + ap).max(1) as f64);
+    }
     // ── HUB-GATE CROP — remove the gated off-intent hub fans ────────────────────────────────────────────
     if !hub_fanned.is_empty() {
         data.nodes.retain(|n| !hub_fanned.contains(&n.id));
