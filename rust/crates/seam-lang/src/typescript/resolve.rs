@@ -47,7 +47,33 @@ impl ModuleResolver for TypeScriptResolver {
                 return if sub.is_empty() {
                     pkg_entry(&self.repo, dir)
                 } else {
+                    // THE SOURCE<->BUILD MIRROR, applied to a SUBPATH — `pkg_entry` has always done this for
+                    // the package ENTRY, and the subpath branch did not. A monorepo package declares itself in
+                    // terms of its BUILD output, but only its SOURCE is checked out, so the literal path misses.
+                    //
+                    // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-02). 268 admin-ui files import
+                    // `@keycloak/keycloak-admin-client/lib/defs/…`; `js/libs/keycloak-admin-client/lib/` does
+                    // not exist in the checkout, the source is `src/defs/….ts`. So every one of those imports
+                    // failed to resolve and the package — which is IN THIS REPO — was reported as
+                    //   `external-libraries — save uses 7 external/stdlib dependencies:
+                    //      @keycloak/keycloak-admin-client/lib/defs/userProfileMetadata, react, …`
+                    // i.e. filed next to `react`. That is worse than an unresolved edge: an unresolved import
+                    // is a BLINDSPOT the reader is told to verify, while "external library" is a confident
+                    // wrong answer that ends the enquiry. It is why the TS admin-UI layer never entered a grow
+                    // from the admin client, and `js/apps/admin-ui/src/**` is the ground-truth entry BOTH arms
+                    // miss in every run.
+                    //
+                    // SELF-VALIDATING, so it cannot invent an edge: each candidate is accepted only if
+                    // `resolve_file` finds a real file. A package that genuinely ships `lib/` in-tree still
+                    // resolves on the FIRST candidate and never reaches the rewrite.
                     resolve_file(&self.repo, &join(dir, sub))
+                        .or_else(|| {
+                            let remapped = BUILD_TO_SRC.replace(sub, "src/");
+                            (remapped != sub).then(|| resolve_file(&self.repo, &join(dir, &remapped)))?
+                        })
+                        // …and the mirror image: a package whose subpaths are published bare (`pkg/foo`) while
+                        // the tree keeps them under `src/`. Same FS check, same no-invention guarantee.
+                        .or_else(|| resolve_file(&self.repo, &join(dir, &format!("src/{sub}"))))
                 };
             }
         }
@@ -260,5 +286,87 @@ impl TypeScriptResolver {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod build_output_subpath_tests {
+    use super::*;
+
+    /// A monorepo package that declares itself in terms of its BUILD output while only its SOURCE is checked
+    /// out — the shape of `js/libs/keycloak-admin-client` in keycloak, and of most TS monorepos before a build.
+    fn fixture(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("seam-pkgsub-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let w = |rel: &str, text: &str| {
+            let p = d.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w("package.json", r#"{"name":"root","version":"1.0.0"}"#);
+        // the in-repo package: `main` points at lib/, which does NOT exist on disk
+        w("libs/admin-client/package.json",
+          r#"{"name":"@scope/admin-client","version":"1.0.0","main":"lib/index.js","types":"lib/index.d.ts"}"#);
+        w("libs/admin-client/src/index.ts", "export * from './resources/realms';\n");
+        w("libs/admin-client/src/resources/realms.ts", "export class Realms { update() {} }\n");
+        w("libs/admin-client/src/defs/realmRep.ts", "export default interface RealmRep { id: string }\n");
+        // a package that really DOES ship lib/ in-tree — the first candidate must still win
+        w("libs/shipped/package.json", r#"{"name":"@scope/shipped","version":"1.0.0"}"#);
+        w("libs/shipped/lib/thing.ts", "export const fromLib = 1;\n");
+        w("libs/shipped/src/thing.ts", "export const fromSrc = 2;\n");
+        w("apps/ui/src/Page.tsx", "import RealmRep from '@scope/admin-client/lib/defs/realmRep';\n");
+        d
+    }
+
+    #[test]
+    fn a_build_output_subpath_resolves_to_the_source_file() {
+        let d = fixture("a_build_outp");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        // THE BUG: this returned None, so the importing file's dependency was reported as an EXTERNAL LIBRARY
+        // — a confident wrong answer — rather than an edge into a package sitting in the same repo.
+        assert_eq!(
+            r.resolve("apps/ui/src/Page.tsx", "@scope/admin-client/lib/defs/realmRep").as_deref(),
+            Some("libs/admin-client/src/defs/realmRep.ts"),
+            "a `lib/` subpath of an in-repo package must fall back to `src/`",
+        );
+        assert_eq!(
+            r.resolve("apps/ui/src/Page.tsx", "@scope/admin-client/lib/resources/realms").as_deref(),
+            Some("libs/admin-client/src/resources/realms.ts"),
+        );
+    }
+
+    #[test]
+    fn a_bare_subpath_also_finds_src() {
+        // The mirror image: published bare (`pkg/foo`), kept under `src/` in-tree.
+        let d = fixture("a_bare_subpa");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        assert_eq!(
+            r.resolve("apps/ui/src/Page.tsx", "@scope/admin-client/resources/realms").as_deref(),
+            Some("libs/admin-client/src/resources/realms.ts"),
+        );
+    }
+
+    #[test]
+    fn a_package_that_really_ships_lib_is_not_redirected() {
+        // THE OVER-CORRECTION GUARD, and the reason the fallback is ordered and FS-checked rather than a
+        // rewrite: when `lib/` exists in-tree it is the truth, and `src/` must not shadow it. Without this the
+        // fix would silently relocate every symbol in such a package — the failure mode that makes a stale
+        // address book worse than no address book.
+        let d = fixture("a_package_th");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        assert_eq!(
+            r.resolve("apps/ui/src/Page.tsx", "@scope/shipped/lib/thing").as_deref(),
+            Some("libs/shipped/lib/thing.ts"),
+            "an in-tree lib/ must win over src/",
+        );
+    }
+
+    #[test]
+    fn a_genuinely_external_package_still_does_not_resolve() {
+        // The other half of not inventing edges: `react` is not in the repo and must stay unresolved.
+        let d = fixture("a_genuinely_");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        assert_eq!(r.resolve("apps/ui/src/Page.tsx", "react"), None);
+        assert_eq!(r.resolve("apps/ui/src/Page.tsx", "@scope/admin-client/lib/defs/nope"), None);
     }
 }
