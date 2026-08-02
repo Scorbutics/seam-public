@@ -186,6 +186,11 @@ fn exp_key(n: &GraphNode, d: Dir) -> String {
 /// surfaces only the methods those callers invoke). Port of `_callerFilesFor`.
 fn caller_files_for(data: &ResolvedGraph, next: &GraphNode, down: bool) -> Option<Vec<String>> {
     if !(down && (next.kind == "class" || next.kind == "interface")) {
+        // THE KIND GATE reads NO graph state — it is a property of the move alone, so a move that lands here
+        // is decidable BEFORE the wave runs and its footprint build cannot be perturbed by same-wave merges.
+        // This is the partition a concurrent wave can be built on; the `container_invoked` return below and
+        // the collected-files path both read `data.edges` and are NOT snapshot-independent.
+        _N_KIND_NONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return None;
     }
     let container_invoked = data
@@ -223,6 +228,18 @@ static _T_COMPUTE_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 static _T_APPLY_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static _N_MOVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// WHICH MOVES ARE SNAPSHOT-SAFE. `caller_files_for` reads `data.edges`/`data.nodes`, which `merge_into`
+// mutates DURING a wave — so a move whose caller_files is NON-EMPTY could see a different answer computed
+// from a wave-start snapshot than it does serially. That is the only correctness obstacle to expanding a
+// wave concurrently. Happily it coincides with the cache boundary: `no_callers` (None or empty) is exactly
+// the branch that goes through `seam_cache::cached`, and a non-empty caller_files bypasses it. So counting
+// the buckets answers "how much of the wave is parallelisable WITHOUT changing the answer".
+static _N_KIND_NONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _N_NONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _N_EMPTY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _N_DEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static _T_DEPS_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn _move_split() -> (u64, u64, u64) {
     use std::sync::atomic::Ordering::Relaxed;
     (_T_COMPUTE_US.load(Relaxed), _T_APPLY_US.load(Relaxed), _N_MOVES.load(Relaxed))
@@ -240,6 +257,15 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
     let epoch = seam_cache::epoch_of(repo);
     let dir_s = if down { "down" } else { "up" };
     let no_callers = caller_files.as_ref().map_or(true, |c| c.is_empty());
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        match &caller_files {
+            None => &_N_NONE,
+            Some(c) if c.is_empty() => &_N_EMPTY,
+            Some(_) => &_N_DEPS,
+        }
+        .fetch_add(1, Relaxed);
+    }
     let cache_key = format!("{}|{}|{}", next.symbol, dir_s, next.range.0);
     let built: Option<ResolvedGraph> = if down {
         let build = || build_dependency_graph(repo, &next.file, &next.symbol, &DepOpts { anchor_line: Some(next.range.0), caller_files: caller_files.clone(), data_coupling: false });
@@ -620,6 +646,14 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         let (c, ap, n) = _move_split();
         eprintln!("[wave-split] moves={n} compute={:.2}s apply={:.2}s  -> compute is {:.0}% of apply_move",
             c as f64 / 1e6, ap as f64 / 1e6, 100.0 * c as f64 / (c + ap).max(1) as f64);
+        use std::sync::atomic::Ordering::Relaxed;
+        let (nn, ne, nd) = (_N_NONE.load(Relaxed), _N_EMPTY.load(Relaxed), _N_DEPS.load(Relaxed));
+        let kn = _N_KIND_NONE.load(Relaxed);
+        let tot = (nn + ne + nd).max(1);
+        eprintln!("[wave-callers] caller_files: none={nn} (kind-gate={kn}, container-invoked={}) empty={ne} NON-EMPTY={nd}",
+            nn.saturating_sub(kn));
+        eprintln!("[wave-callers] DATA-INDEPENDENT (kind gate alone) = {kn}/{tot} = {:.1}%  |  reads data.edges = {:.1}%",
+            100.0 * kn as f64 / tot as f64, 100.0 * (tot - kn) as f64 / tot as f64);
     }
     // ── HUB-GATE CROP — remove the gated off-intent hub fans ────────────────────────────────────────────
     if !hub_fanned.is_empty() {
