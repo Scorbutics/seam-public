@@ -173,7 +173,23 @@ fn pkg_entry(repo: &str, pkg_dir: &str) -> Option<String> {
             }
         }
     }
-    resolve_file(repo, &join(pkg_dir, "src/index")).or_else(|| resolve_file(repo, &join(pkg_dir, "index")))
+    // `src/main` LAST, after both index conventions. A bundler-built package names its real source entry in
+    // its BUILD CONFIG, not in package.json — Vite's `build.lib.entry` is `src/main.ts` by convention — so a
+    // package whose declared entry is a `dist/` artefact with no `index` beside the source resolves to nothing.
+    //
+    // MEASURED (keycloak, 2026-08-02): `@keycloak/keycloak-ui-shared` declares `main`/`exports` as
+    // `./dist/keycloak-ui-shared.js`; there is no `dist/` in the checkout, no `src/keycloak-ui-shared.ts` for
+    // the source mirror to land on, and no `src/index.ts`. Its `vite.config.ts` says
+    // `lib: { entry: path.resolve(__dirname, "src/main.ts") }`, and `src/main.ts:94` is
+    // `export { useFetch } from "./utils/useFetch"` — i.e. the barrel to a ground-truth entry of the
+    // cross-language benchmark case. 358 admin-ui files import this package.
+    //
+    // The config is NOT parsed: reading a JS build config would mean evaluating it. This is the convention it
+    // encodes, tried last and only when everything declared has already missed, and — like every branch here —
+    // accepted only if `resolve_file` finds the file on disk.
+    resolve_file(repo, &join(pkg_dir, "src/index"))
+        .or_else(|| resolve_file(repo, &join(pkg_dir, "index")))
+        .or_else(|| resolve_file(repo, &join(pkg_dir, "src/main")))
 }
 
 // [types, typings, exp_entry, module, main], string values only — the exact TS order.
@@ -295,7 +311,7 @@ mod build_output_subpath_tests {
 
     /// A monorepo package that declares itself in terms of its BUILD output while only its SOURCE is checked
     /// out — the shape of `js/libs/keycloak-admin-client` in keycloak, and of most TS monorepos before a build.
-    fn fixture(tag: &str) -> std::path::PathBuf {
+    pub fn fixture(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("seam-pkgsub-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let w = |rel: &str, text: &str| {
@@ -315,6 +331,16 @@ mod build_output_subpath_tests {
         w("libs/shipped/lib/thing.ts", "export const fromLib = 1;\n");
         w("libs/shipped/src/thing.ts", "export const fromSrc = 2;\n");
         w("apps/ui/src/Page.tsx", "import RealmRep from '@scope/admin-client/lib/defs/realmRep';\n");
+        // a BUNDLER-BUILT package: entry declared as a dist/ artefact, real source entry at src/main.ts, and
+        // NO src/index — the shape of `js/libs/ui-shared` in keycloak.
+        w("libs/ui-shared/package.json",
+          r#"{"name":"@scope/ui-shared","version":"1.0.0","main":"./dist/ui-shared.js","exports":{".":{"import":"./dist/ui-shared.js"}}}"#);
+        w("libs/ui-shared/src/main.ts", "export { useFetch } from './utils/useFetch';\n");
+        w("libs/ui-shared/src/utils/useFetch.ts", "export function useFetch() {}\n");
+        // …and one that has BOTH, to pin the precedence
+        w("libs/both/package.json", r#"{"name":"@scope/both","version":"1.0.0","main":"./dist/b.js"}"#);
+        w("libs/both/src/index.ts", "export const viaIndex = 1;\n");
+        w("libs/both/src/main.ts", "export const viaMain = 2;\n");
         d
     }
 
@@ -368,5 +394,32 @@ mod build_output_subpath_tests {
         let r = TypeScriptResolver::build(d.to_str().unwrap());
         assert_eq!(r.resolve("apps/ui/src/Page.tsx", "react"), None);
         assert_eq!(r.resolve("apps/ui/src/Page.tsx", "@scope/admin-client/lib/defs/nope"), None);
+    }
+}
+
+#[cfg(test)]
+mod bundler_entry_tests {
+    use super::build_output_subpath_tests::fixture;
+    use super::*;
+
+    #[test]
+    fn a_bundler_built_package_resolves_to_its_src_main() {
+        // Declared entry is `dist/ui-shared.js`, absent from the checkout; the source mirror lands on
+        // `src/ui-shared`, also absent; there is no `src/index`. Before this, the package was reported as an
+        // external library — see the subpath commit for why that is worse than an unresolved edge.
+        let d = fixture("bundler");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        assert_eq!(r.resolve("apps/ui/src/Page.tsx", "@scope/ui-shared").as_deref(),
+                   Some("libs/ui-shared/src/main.ts"));
+    }
+
+    #[test]
+    fn src_index_still_beats_src_main() {
+        // PRECEDENCE GUARD. `src/main` is a last-resort convention, never a preference: a package with a real
+        // barrel must keep resolving to it, or this "fix" silently re-points every such package.
+        let d = fixture("bothentry");
+        let r = TypeScriptResolver::build(d.to_str().unwrap());
+        assert_eq!(r.resolve("apps/ui/src/Page.tsx", "@scope/both").as_deref(),
+                   Some("libs/both/src/index.ts"));
     }
 }
