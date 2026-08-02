@@ -122,18 +122,27 @@ static FILE_CONTRIB_CACHE: Lazy<Mutex<HashMap<(String, String), Arc<Vec<(String,
 /// Drop the memoized per-file files_index contributions for `repo` (or all when `None`) — invalidation hook so a
 /// resident process re-derives after a file change (mirrors reset of the other key_index caches).
 pub fn reset_file_contrib(repo: Option<&str>) {
-    let mut c = FILE_CONTRIB_CACHE.lock().unwrap();
-    match repo {
-        Some(r) => c.retain(|(repo_key, _), _| repo_key != r),
-        None => c.clear(),
+    // TWO SEPARATE SCOPES, deliberately: each guard is dropped before the next is taken, so this holds ONE
+    // lock at a time and imposes no ordering between the two caches. Written as a single scope first, which
+    // created a FILE_CONTRIB_CACHE -> MODULE_SCOPE_CACHE edge for no reason — harmless today (nothing takes
+    // them the other way round), but the kind of latent edge that turns into a deadlock the moment the grow
+    // runs on more than one thread. A lock ordering that does not exist cannot be violated later.
+    {
+        let mut c = FILE_CONTRIB_CACHE.lock().unwrap();
+        match repo {
+            Some(r) => c.retain(|(repo_key, _), _| repo_key != r),
+            None => c.clear(),
+        }
     }
     // The module-scope memo is per-repo FILESYSTEM state (which dirs carry a build manifest), so it is stale
     // exactly when this one is — adding a build manifest moves a module boundary. Dropped on the same hook, or
     // an edit-loop process would keep answering with the pre-edit module layout.
-    let mut m = MODULE_SCOPE_CACHE.lock().unwrap();
-    match repo {
-        Some(r) => m.retain(|(repo_key, _), _| repo_key != r),
-        None => m.clear(),
+    {
+        let mut m = MODULE_SCOPE_CACHE.lock().unwrap();
+        match repo {
+            Some(r) => m.retain(|(repo_key, _), _| repo_key != r),
+            None => m.clear(),
+        }
     }
 }
 
