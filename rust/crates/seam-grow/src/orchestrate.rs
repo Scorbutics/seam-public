@@ -554,6 +554,10 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             break;
         }
 
+        let _w_ordered = ordered.len();
+        let mut _w_applied = 0usize;
+        let mut _w_skip_expanded = 0usize;
+        let mut _w_broke_budget = false;
         // ── the wavefront flood: expand EVERY ready head this wave ───────────────────────────────────────
         let mut wave_added = 0usize;
         // snapshot BEFORE the wave so the record reports exactly this wave's new nodes + edges
@@ -561,6 +565,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         let wave_before_edges = data.edges.len();
         for (mi, mv) in ordered.iter().enumerate() {
             if flood_n(&data) >= opts.max_nodes {
+                _w_broke_budget = true;
                 // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget.
                 for m in &ordered[mi..] {
                     parked.entry(m.node.id.clone()).or_insert_with(|| "budget".to_string());
@@ -569,8 +574,10 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             }
             let k = exp_key(&mv.node, mv.dir);
             if expanded.contains(&k) {
+                _w_skip_expanded += 1;
                 continue;
             }
+            _w_applied += 1;
             expanded.insert(k);
             let before: Option<HashSet<String>> = Some(data.nodes.iter().map(|n| n.id.clone()).collect());
             let mut why = String::new();
@@ -635,6 +642,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         }
         if wave_added == 0 {
             break; // the region is fully flooded
+        }
+        if seam_fs::debug_on("wave") {
+            eprintln!("[wave-exec] step={step} ordered={_w_ordered} entered={_w_applied} skip_expanded={_w_skip_expanded} budget_break={_w_broke_budget}");
         }
         step += 1;
         if step > opts.max_steps.saturating_mul(4) {
