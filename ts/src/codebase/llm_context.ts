@@ -905,11 +905,30 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const hubsSection = (dropSamples: boolean): string[] => {
     if (!hubs.length) return [];
     const out = ["", "## Collapsed hubs (ubiquitous — expand explicitly if needed)"];
-    for (const h of hubs) {
+    // CAPPED, RANKED BY FAN-IN. Measured (bench/grep-vs-seam, kc8 x3 + keycloak A/B, 2026-08-02):
+    //
+    //   - Of the 15 hub names that appear ONLY in this section, ZERO ever reached a later tool call across
+    //     three runs. Exactly ONE (`RealmRepresentation`) reached the final answer, in 2 of the 3 — and it
+    //     ranks #2 by fan, so a small fan-ranked cap keeps the entry that pays.
+    //   - The section is the one that ABSORBS growth elsewhere: enabling the sibling-prefix route inference
+    //     took it 2,057 -> 6,098 B (16 -> 29 hubs) while `## Cross-stack` — the part that inference was FOR —
+    //     actually shrank. That is 4 KB of ubiquitous DTO type-hubs (fan 5-10), not 4 KB of answer.
+    //   - It is exempt from the degrade ladder, on a map that is 42-44% of a run's tool-result context cost
+    //     and is re-read on every later turn.
+    //
+    // The tail is rolled up as NAMES ONLY: a name costs ~25 B against ~150 B for a name+path+fan row, and it
+    // stays addressable — `--locate <name>` is batched and shard-cached, so nothing here becomes unreachable.
+    const HUB_CAP = 6;
+    const ranked = [...hubs].sort((a, b) => (Number(b.hub?.fan ?? 0) - Number(a.hub?.fan ?? 0))
+      || (String(a.label) < String(b.label) ? -1 : 1));   // fan DESC, then name — stable across runs
+    for (const h of ranked.slice(0, HUB_CAP)) {
       const s = h.hub.sampleConsumers ?? [];
       const sample = (!dropSamples && s.length) ? `, e.g. ${s.slice(0, 3).join(", ")}` : "";
       out.push(`  ${h.label}${h.file ? ` (${h.file})` : ""} — hub: ${h.hub.reason}, fan ${h.hub.fan}${sample}`);
     }
+    const rest = ranked.slice(HUB_CAP);
+    if (rest.length)
+      out.push(`  (+${rest.length} lower fan-in, names only — \`--locate <name>\` for any: ${rest.map((h) => h.label).join(", ")})`);
     return out;
   };
   // CAPPED — a coupling-heavy repo has a WIDE frontier; dumping every decision point (each with a full
@@ -957,10 +976,29 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       const rankedLeads = [...leads].sort((a, b) => (Number(nCands(a) === 0) - Number(nCands(b) === 0))   // candidate-bearing (a resolvable set) first; opaque on-flow dispatch last
       || (nCands(a) - nCands(b)) || (String(a.mechanism) < String(b.mechanism) ? -1 : 1));
       if (rankedLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
-      out.push(...renderCapped(rankedLeads, BLINDSPOT_N, (b) => {
-        const cands = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))].slice(0, 6);
-        return `  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`;
-      }, "resolvable lead(s)"));
+      // A CANDIDATE THAT ONLY RESTATES THE EVIDENCE IS NOT A CANDIDATE. Measured (kc8, 2026-08-02): every
+      // `unresolved-import` lead rendered as
+      //   d2: unresolved-import — …/EventsTab.tsx imports X from '…' (module unresolved); candidates: …/EventsTab.tsx (SUGGESTED)
+      // — the "candidate" is the file the evidence just named, with no symbol to add. That is ~half the row,
+      // carrying nothing, in a section exempt from cropping on a map re-read on every later turn. A candidate
+      // earns its bytes only when it says something the evidence did not (a fanout lead's `file#key` still does).
+      const candsOf = (b: any) => [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))]
+        .filter((c: string) => !String(b.evidence ?? "").includes(c))
+        .slice(0, 6);
+      // …AND MERGE LEADS THAT RENDER IDENTICALLY. Same measurement: `d10` and `fc1930` produced BYTE-IDENTICAL
+      // bodies (same mechanism, evidence and candidate — two nodes in one file hitting the same fanout), so the
+      // section paid ~250 B twice for one fact. Keyed on what is RENDERED, not on the node, because that is
+      // exactly the duplication a reader sees; the node ids are kept and joined, so nothing becomes unaddressable.
+      const byBody = new Map<string, { nodes: string[]; b: any; cands: string[] }>();
+      for (const b of rankedLeads) {
+        const cands = candsOf(b);
+        const k = `${b.mechanism} ${b.evidence} ${cands.join(",")}`;
+        const cur = byBody.get(k);
+        if (cur) cur.nodes.push(String(b.node)); else byBody.set(k, { nodes: [String(b.node)], b, cands });
+      }
+      out.push(...renderCapped([...byBody.values()], BLINDSPOT_N, (m) =>
+        `  ${m.nodes.join(", ")}: ${m.b.mechanism} — ${m.b.evidence}${m.cands.length ? `; candidates: ${m.cands.join(", ")} (SUGGESTED)` : ""}`,
+        "resolvable lead(s)"));
       for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
       if (fanout.length) {
         const keyOf = (b: any) => (b.candidates ?? [])[0]?.symbol ?? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1]) ?? b.node;
@@ -969,8 +1007,27 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
           + " — to follow one, run Seam again from the OTHER side with the key as the intent.");
       }
     }
+    // `## Unresolved` WAS RESTATING `## Blindspots`. Measured (kc8, 2026-08-02): all eight rows it printed
+    // (`d2: resolveModule (unresolved:@keycloak/…/realmEventsConfigRepresentation)`) were the same facts as the
+    // `d2: unresolved-import` leads directly above, with LESS information — and `d6` appeared TWICE among the
+    // eight. 734 B/run, in a section exempt from cropping, on the map that is 42-44% of the run's tool-result
+    // context cost (bench/grep-vs-seam README). Nothing is hidden by dropping the restatement: the map HEADER
+    // already carries the full honest count (`unresolved: 17`), and what an unresolved edge means is stated
+    // better one section up. Only edges NOT already reported as a blindspot are printed.
     const un: any[] = model.unresolved ?? [];
-    if (un.length) { out.push("", `## Unresolved (${un.length} edge(s) static analysis couldn't follow)`); for (const u of un.slice(0, 8)) out.push(`  ${u.node ?? "?"}: ${u.query ?? ""}${u.reason ? ` (${u.reason})` : ""}`); }
+    const bsNodes = new Set(bs.map((b) => String(b.node)));
+    const unNew = un.filter((u) => !bsNodes.has(String(u.node ?? "?")));
+    if (unNew.length) {
+      out.push("", `## Unresolved (${unNew.length} of ${un.length} edge(s) static analysis couldn't follow, not already listed above)`);
+      const seen = new Set<string>();
+      for (const u of unNew) {
+        const line = `  ${u.node ?? "?"}: ${u.query ?? ""}${u.reason ? ` (${u.reason})` : ""}`;
+        if (seen.has(line)) continue;            // the same edge reported twice is one edge
+        seen.add(line);
+        if (seen.size > 8) break;
+        out.push(line);
+      }
+    }
     return out;
   };
 
