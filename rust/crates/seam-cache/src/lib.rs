@@ -145,6 +145,16 @@ pub fn coupling_epoch_of(repo: &str) -> String {
 
 // ── disk shards ─────────────────────────────────────────────────────────────────────────────────────────────
 
+/// The running core's identity, folded into every generic-cache epoch. Same rule as `seam-couple`'s
+/// `ground::core_stamp_tag` (kept separate only because that crate sits ABOVE this one in the dependency
+/// order); `SEAM_CORE_STAMP` is set once by the TS boundary from the addon's own build fingerprint.
+fn core_stamp_tag() -> String {
+    match std::env::var("SEAM_CORE_STAMP") {
+        Ok(v) if !v.trim().is_empty() => format!("-c{}", v.trim().replace(':', "_")),
+        _ => String::new(),
+    }
+}
+
 fn shard_dir(repo: &str, name: &str) -> String {
     // NAMESPACE: `.seam/rust/<name>` — distinct from TS's `.seam/<name>` so the caches never collide.
     format!("{repo}/.seam/rust/{name}")
@@ -268,6 +278,20 @@ where
     if !cache_enabled() || epoch.is_empty() {
         return (compute(), Verdict::Off);
     }
+    // THE CORE'S OWN IDENTITY JOINS THE EPOCH. The stored epoch is the SOURCE epoch, which a core REBUILD does
+    // not move — so a shard computed by the previous core was served as a HIT to a new one. `floor_shard` has
+    // carried `core_stamp_tag()` for exactly this reason ("a rebuilt core loaded a floor computed by the
+    // PREVIOUS one"); the generic cache never did, and it backs `footprint-v1`.
+    //
+    // MEASURED (keycloak, 2026-08-02). After today's two module-resolution fixes the agent map was BYTE-
+    // IDENTICAL, which I reported as "the resolver fixes do not reach the map". Deleting the 168 MB
+    // `footprint-v1` cache and re-running the SAME intent gave a different answer:
+    //     seams: 210 grounded, unresolved: 31   <- stale shards, built before the fixes
+    //     seams: 183 grounded, unresolved:  0   <- rebuilt
+    // `unresolved: 31 -> 0` is precisely what fixing module resolution does. The cache was serving pre-fix
+    // footprints, so the conclusion drawn from that comparison was unsound — a stale cache does not just cost
+    // time, it silently invalidates measurements taken across a rebuild.
+    let epoch = format!("{epoch}{}", core_stamp_tag());
     let mut verdict = Verdict::MissNew;
     let mkey = format!("{cache}\u{0}{repo}\u{0}{file}");
     {
@@ -277,8 +301,8 @@ where
             m.insert(mkey.clone(), disk);
         }
         if let Some(e) = m.get(&mkey).and_then(|s| s.get(key)) {
-            verdict = if e.e == epoch { Verdict::Hit } else { Verdict::MissStale };
-            if e.e == epoch {
+            verdict = if e.e == *epoch { Verdict::Hit } else { Verdict::MissStale };
+            if e.e == *epoch {
                 if let Ok(v) = serde_json::from_value::<T>(e.d.clone()) {
                     return (v, verdict); // fresh deep copy (the caller mutates it)
                 }
@@ -346,5 +370,53 @@ mod tests {
         let e3 = epoch_of(repo);
         assert_ne!(e1, e3, "a CONTENT change MUST bump the epoch → the cache invalidates, never stale");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod core_stamp_invalidation_tests {
+    use super::*;
+
+    /// A REBUILT CORE MUST NOT BE SERVED THE PREVIOUS CORE'S SHARDS.
+    ///
+    /// The stored epoch is the SOURCE epoch, which a rebuild does not move, so without the core stamp a shard
+    /// computed by the old binary is a HIT for the new one. That is not merely stale data: measured on
+    /// keycloak, it served footprints built BEFORE two module-resolution fixes, so the agent map came back
+    /// byte-identical and the fixes were reported as having no effect. `unresolved: 31` from the stale shards
+    /// against `unresolved: 0` once rebuilt. A cache that survives a rebuild silently invalidates every
+    /// measurement taken across one.
+    #[test]
+    fn a_new_core_stamp_misses_the_old_core_s_entry() {
+        let repo = std::env::temp_dir().join(format!("seam-corestamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let r = repo.to_str().unwrap();
+        reset(None);
+
+        std::env::set_var("SEAM_CORE_STAMP", "coreA");
+        let (v1, k1) = cached_reporting::<u32, _>(r, "t-stamp", "f.ts", "key", "epoch1", || 1);
+        assert_eq!(v1, 1);
+        assert!(matches!(k1, Verdict::MissNew));
+        // same core, same epoch → served
+        let (v2, k2) = cached_reporting::<u32, _>(r, "t-stamp", "f.ts", "key", "epoch1", || 99);
+        assert_eq!(v2, 1, "same core must reuse");
+        assert!(matches!(k2, Verdict::Hit));
+
+        // THE REBUILD. Source epoch is unchanged; only the binary moved.
+        std::env::set_var("SEAM_CORE_STAMP", "coreB");
+        let (v3, _) = cached_reporting::<u32, _>(r, "t-stamp", "f.ts", "key", "epoch1", || 42);
+        assert_eq!(v3, 42, "a rebuilt core was served the PREVIOUS core's cached value");
+
+        // …and the new core's value is then reused, so the stamp costs ONE recompute per rebuild, not one per
+        // call. NOT asserted: that the old core's entry survives alongside. The shard holds one entry per key
+        // with the epoch INSIDE it, so any epoch change overwrites — the pre-existing behaviour, which this
+        // change does not alter. A first draft asserted partitioning and failed for that reason; the assertion
+        // was stronger than the contract, not the code weaker than it.
+        let (v4, k4) = cached_reporting::<u32, _>(r, "t-stamp", "f.ts", "key", "epoch1", || 7);
+        assert_eq!(v4, 42, "the rebuilt core must reuse its OWN entry on the second call");
+        assert!(matches!(k4, Verdict::Hit));
+
+        std::env::remove_var("SEAM_CORE_STAMP");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
