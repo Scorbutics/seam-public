@@ -947,13 +947,41 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
     // drop them, leaving a HIT on a shared center reported nowhere. That reuse is the warm/learned-repo
     // contract, so it has to stay observable, not merely happen.
     let mut verdicts: Vec<seam_scan::graph::CenterVerdict> = Vec::new();
-    for c in centers {
+
+    // GROW THE CENTERS CONCURRENTLY, MERGE THEM SERIALLY.
+    //
+    // MEASURED (keycloak, two centers, isolated cache, warm-up discarded, 2026-08-03). A concern grow runs one
+    // `phase_expand` per center and they SUM rather than overlap: 4.66 + 11.62 + 8.14s of a ~34s grow. Each
+    // center's `grow_to_terminals` is independent — it takes only (repo, file, symbol, opts), answer-caches
+    // itself, and touches no state from a sibling. Only the MERGE is ordered.
+    //
+    // So the fan moves to rayon and the merge below is untouched: same order, same `merge_resolved` calls,
+    // same global-budget check, same verdict collection. The output is identical by construction; only the
+    // wall clock changes (max instead of sum over the centers).
+    //
+    // WHY THIS IS SAFE WHERE THE WAVE PREFETCH WAS NOT. That attempt speculated over a whole wave — 1412 moves
+    // ordered against 666 entered — so the budget cut discarded more work than it kept and it ran 2x SLOWER.
+    // Here the speculation is bounded by the NUMBER OF CENTERS (2-3): a center the budget would have skipped
+    // is grown and then not merged, which is a handful of wasted grows at worst, not hundreds. Shared-cache
+    // safety comes from the lock audit (753ab87): no cycle among the 33 global caches, and `seam_cache`
+    // releases its guard before the compute.
+    let grown: Vec<Option<ResolvedGraph>> = if centers.len() > 1 {
+        use rayon::prelude::*;
+        centers
+            .par_iter()
+            .map(|c| grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts))
+            .collect()
+    } else {
+        centers.iter().map(|c| grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts)).collect()
+    };
+
+    for (ci, c) in centers.iter().enumerate() {
         if let Some(d) = &data {
             if d.nodes.len() >= opts.max_nodes {
                 break; // global budget reached — skip the remaining mechanism(s)
             }
         }
-        let Some(cd) = grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts) else { continue };
+        let Some(cd) = grown[ci].clone() else { continue };
         if !cd.cache_verdict.is_empty() {
             verdicts.push(seam_scan::graph::CenterVerdict {
                 file: c.file.clone(),
