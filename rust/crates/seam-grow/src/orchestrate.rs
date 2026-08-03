@@ -266,10 +266,35 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
         }
         .fetch_add(1, Relaxed);
     }
-    let cache_key = format!("{}|{}|{}", next.symbol, dir_s, next.range.0);
+    // CALLER-KEYED, so a caller-bearing footprint is CACHEABLE too. Before this, a DOWN move on a
+    // class/interface with resolved callers passed `caller_files` into the build — which the key did not
+    // mention — so caching it would have served a footprint built for DIFFERENT callers. The safe answer was
+    // to bypass the cache entirely, and that is what it did.
+    //
+    // MEASURED (keycloak two-center grow, 2026-08-03): 130 of 619 moves take that bypass and rebuild on EVERY
+    // run, warm or cold, at ~185ms each — 24s, which is essentially the entire warm grow's compute (22.96s).
+    // The 537 genuine cache hits cost 0.34s in total.
+    //
+    // WHY IT PAYS ACROSS PROCESSES even though intra-run reuse is only 16% (109 distinct keys over 130
+    // occurrences): the grow is DETERMINISTIC — the same centers produce a byte-identical answer, hence the
+    // same moves with the same callers, hence the same keys. Within one grow a key rarely repeats; between
+    // runs it always does, and every agent invocation is a fresh process. That is the case that matters.
+    //
+    // The callers are SORTED into the key so an ordering difference cannot split one entry into two, and the
+    // no-callers key shape is left exactly as it was, so existing shards keep hitting.
+    let cache_key = match caller_files.as_ref().filter(|c| !c.is_empty()) {
+        None => format!("{}|{}|{}", next.symbol, dir_s, next.range.0),
+        Some(cf) => {
+            let mut v = cf.clone();
+            v.sort();
+            format!("{}|{}|{}|cf:{}", next.symbol, dir_s, next.range.0, v.join(","))
+        }
+    };
     let built: Option<ResolvedGraph> = if down {
         let build = || build_dependency_graph(repo, &next.file, &next.symbol, &DepOpts { anchor_line: Some(next.range.0), caller_files: caller_files.clone(), data_coupling: false });
-        let mut g = if no_callers { seam_cache::cached(repo, "footprint-v1", &next.file, &cache_key, &epoch, build) } else { build() };
+        // `no_callers` no longer gates the CACHE — only which key shape is used. Both go through it now.
+        let mut g = seam_cache::cached(repo, "footprint-v1", &next.file, &cache_key, &epoch, build);
+        let _ = no_callers;
         ex.prune(&mut g);
         Some(g)
     } else {
