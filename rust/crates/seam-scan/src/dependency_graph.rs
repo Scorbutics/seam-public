@@ -387,6 +387,117 @@ impl DepScan {
         }
     }
 
+    /// INHERITED SELF-MEMBERS — `this.m()` where `m` is declared by a BASE class, not by this one.
+    ///
+    /// `self_member_pass` resolves `this.m` against the class's OWN declarations and says so: "anything the
+    /// class does NOT declare (inherited member, data field) is left unresolved, not guessed". That is right
+    /// for a data field and wrong for an inherited METHOD, which is a resolvable call — the base is named in
+    /// the heritage clause and imported like anything else.
+    ///
+    /// TWO GAPS, one pass, because they co-occur in the shape that exposed them. Measured on keycloak
+    /// (bench/grep-vs-seam, 2026-08-04) the TypeScript half of a cross-stack flow was ENTIRELY missing from the
+    /// closure — `findOne`, `makeUpdateRequest` and `request`, three of the nine ground-truth symbols:
+    ///
+    ///   class Realms extends Resource {
+    ///     public findOne = this.makeRequest<…>        // a class FIELD, not a method body
+    ///     public update  = this.makeUpdateRequest<…>  // and the callee is INHERITED
+    ///   }
+    ///
+    /// so (1) the refs live in FIELD INITIALIZERS, which `self_member_pass` never reaches for a class anchor
+    /// (it is not even invoked — `type_methods_pass` runs instead), and (2) the callee is on `Resource`. The
+    /// chain died at the first hop and `agent.ts`, the last TypeScript frame before the HTTP call, was absent
+    /// from the footprint altogether.
+    ///
+    /// GROUNDED, not guessed: the base is resolved through the file's own imports (`ws.resolve`), and only a
+    /// method the base file actually declares produces an edge. An unresolvable base is left alone.
+    fn inherited_member_pass(&mut self, anchor_src: &str) {
+        let Some(actx) = &self.actx else { return };
+        // The class in scope: the anchor itself when it IS a class, else the class enclosing the anchor.
+        let cls_name = if self.aunits.iter().any(|u| u.kind == "class" && u.name == self.symbol) {
+            self.symbol.clone()
+        } else {
+            let Some((alo, ahi)) = self.anchor_span() else { return };
+            ast::enclosing_class(&self.aunits, alo, ahi)
+        };
+        if cls_name.is_empty() {
+            return;
+        }
+        let Some(clsu) = self.aunits.iter().find(|u| u.kind == "class" && u.name == cls_name) else { return };
+        let (clo, chi) = (clsu.start, clsu.end);
+        // what THIS class declares — an own method is `self_member_pass`'s job, not this one's
+        let own: HashSet<String> = self
+            .aunits
+            .iter()
+            .filter(|u| u.kind == "method" && u.start >= clo && u.end <= chi)
+            .map(|u| u.name.clone())
+            .collect();
+        let bases: Vec<String> = ast::class_bases(actx)
+            .into_iter()
+            .find(|(n, _)| *n == cls_name)
+            .map(|(_, b)| b)
+            .unwrap_or_default();
+        if bases.is_empty() {
+            return;
+        }
+        // Scanned over the CLASS span, not the anchor's: the refs that matter sit in field initializers.
+        let refs = ast::self_member_refs(actx, &self.anchor_file, clo, chi);
+        if refs.is_empty() {
+            return;
+        }
+        // base name -> file, through the anchor file's own imports
+        let mut base_files: Vec<String> = Vec::new();
+        if let Some(provider) = provider_for(&self.anchor_file) {
+            for r in provider.imports(anchor_src) {
+                if !bases.iter().any(|b| *b == r.name) {
+                    continue;
+                }
+                if let Some(f) = r.source.as_ref().and_then(|src| self.ws.resolve(&self.anchor_file, src)) {
+                    if !base_files.contains(&f) {
+                        base_files.push(f);
+                    }
+                }
+            }
+        }
+        if base_files.is_empty() {
+            return;
+        }
+        let wanted: Vec<(String, usize)> =
+            refs.into_iter().filter(|(m, _)| !own.contains(m)).collect();
+        for (member, line) in wanted {
+            for bf in base_files.clone() {
+                let hit = {
+                    let units = Self::units_of(&mut self.dep_units, &self.repo, &bf);
+                    units.iter().find(|u| u.kind == "method" && u.name == member).map(|u| (u.start, u.end))
+                };
+                let Some((ms, me)) = hit else { continue };
+                if !self.seen.insert(format!("{member} {bf}")) {
+                    break;
+                }
+                self.counter += 1;
+                let did = format!("d{}", self.counter);
+                self.nodes.push(GraphNode {
+                    id: did.clone(),
+                    symbol: member.clone(),
+                    kind: "method".into(),
+                    file: bf.clone(),
+                    range: (ms, me),
+                    enclosing: String::new(),
+                    complexity: complexity((ms, me)),
+                    ..Default::default()
+                });
+                self.edges.push(GraphEdge {
+                    from: "n1".into(),
+                    to: did,
+                    kind: "call".into(),
+                    provenance: "RESOLVED_FULL".into(),
+                    line: Some(line),
+                    ..Default::default()
+                });
+                break;   // first base that declares it wins — a linearised MRO, not a fan
+            }
+        }
+    }
+
     /// The method names the anchor INVOKES in its own span (insertion order = collect order — it drives the
     /// DI method-binding order). Port of `_anchorCalledMethods`.
     fn anchor_called_methods(&self) -> Vec<String> {
@@ -636,10 +747,14 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         s.file_ref_pass();
         if is_type {
             s.type_methods_pass(opts.caller_files.as_deref());
+            // a CLASS anchor never reached self_member_pass, so its field initializers' `this.m` refs — the
+            // whole delegation chain of an API-client class — were invisible. See inherited_member_pass.
+            s.inherited_member_pass(anchor_src);
         } else {
             s.same_package_pass();
             s.intra_file_callee_pass(anchor_src);
             s.self_member_pass();
+            s.inherited_member_pass(anchor_src);
             s.qualified_callee_pass();
         }
         s.provider_factory_pass();
