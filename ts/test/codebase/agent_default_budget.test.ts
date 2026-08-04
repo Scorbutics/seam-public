@@ -149,10 +149,13 @@ describe("the degrade ladder yields SNIPPETS last", () => {
     // reach "no code" while a cheaper crop is still available. Asserted on the ladder itself because no fixture
     // in this repo is large enough to walk it — the known coverage hole recorded above.
     const src = readFileSync(join(import.meta.dir, "..", "..", "src", "codebase", "llm_context.ts"), "utf-8");
-    const block = src.match(/const steps: \[boolean, boolean, boolean, boolean, number\]\[\] = \[([\s\S]*?)\];/);
+    // The 4th slot is `boolean | number`: `true` = code on every entry, a NUMBER = code on the nearest N
+    // entries (the bounded rung), `false` = no code at all. Both of the first two are snippets-ON for the
+    // ordering invariant below — what must never happen is reaching `false` while a cheaper crop remains.
+    const block = src.match(/const steps: \[boolean, boolean, boolean, boolean \| number, number, boolean, boolean\]\[\] = \[([\s\S]*?)\];/);
     expect(block, "the degrade ladder no longer matches — this guard has stopped testing anything").toBeTruthy();
-    const rungs = [...block![1].matchAll(/\[(true|false), (true|false), (true|false), (true|false), (\w+)\]/g)]
-      .map((m) => ({ snippets: m[4] === "true", mech: m[5] }));
+    const rungs = [...block![1].matchAll(/\[(true|false), (true|false), (true|false), (true|false|\d+), (\w+), (?:true|false), (true|false)\]/g)]
+      .map((m) => ({ snippets: m[4] !== "false", mech: m[5], dropDiag: m[6] === "true" }));
     expect(rungs.length).toBeGreaterThanOrEqual(6);
     const lastOn = rungs.map((r) => r.snippets).lastIndexOf(true);
     const firstOff = rungs.map((r) => r.snippets).indexOf(false);
@@ -161,5 +164,15 @@ describe("the degrade ladder yields SNIPPETS last", () => {
     // …and the rung that was MISSING: crop the mechanism while keeping the code.
     expect(rungs.some((r) => r.snippets && r.mech !== "MECH_FULL"),
       "no rung crops the mechanism with snippets kept — that gap is what created the hole").toBe(true);
+    // …and the SECOND hole: all-or-nothing snippets meant a map whose region tail is large lost every line of
+    // code at once. At least one rung must keep code for a BOUNDED number of entries instead.
+    const bounded = [...block![1].matchAll(/\[(?:true|false), (?:true|false), (?:true|false), (\d+), /g)];
+    expect(bounded.length, "no BOUNDED snippet rung — a large map goes from all code to none in one step").toBeGreaterThan(0);
+    // …and the THIRD hole: the diagnostic sections (hubs/frontier/blindspots) cite nothing an agent reads, and
+    // were outranking source text. At least one rung must drop them while snippets are still on, and no rung
+    // may drop them only AFTER giving up on code — that ordering would trade evidence for diagnostics.
+    const diagRung = rungs.findIndex((r) => r.dropDiag);
+    expect(diagRung, "no rung drops the non-citing diagnostic sections — 34% of the map outranks the code").toBeGreaterThanOrEqual(0);
+    expect(rungs[diagRung].snippets, "the diagnostics are dropped only once code is already gone — backwards").toBe(true);
   });
 });

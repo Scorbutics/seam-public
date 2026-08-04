@@ -536,22 +536,52 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return `${q} (${at(f, startOfId.get(a))})`;
   })();
   let _snipOn = false;   // set per crop rung by `assemble`; see the note on seamLine below
-  // SNIPPETS ON EVERY SEAM LINE, not only inside the mechanism. This header calls itself "the region to read
-  // INSTEAD OF a grep loop", and it was shipping 249 citations with ZERO source text on a real anchor: the
-  // reader was plumbed in (decompose.ts passes it) but only `pipelineSection` ever consulted it, and an anchor
-  // with no pipeline — In / Region / hubs / blindspots — got nothing at all. That is the CONTENT gap
-  // `bench/grep-vs-seam/verification-tax.ts` measures, in the format most explicitly sold as a grep replacement.
+  // HOW MANY entry lines may still carry code on this rung. `Infinity` = the old all-or-nothing "snippets on".
+  // Sections render in a fixed order (spine, In, mechanism, … region last), so a finite budget spends itself on
+  // the NEAREST, highest-value citations first and the long region tail goes without — which is the whole point
+  // (see the SNIPPET BUDGET note on the ladder). Reset per rung, because each rung reassembles from scratch.
+  let _snipLeft = Infinity;
+  let _snipSkipped = 0;   // entry lines that WANTED code and were denied by the cap — reported, never silent
+  // NOT RANK-ALLOCATED, and that is a measured decision rather than an omission. The source budget is spent
+  // in SECTION order, which is not importance, so ranking it by hop distance was the obvious fix. Measured on
+  // keycloak it made the output WORSE: the nearest seams all live in the anchor's own file, so hop-ranking
+  // shipped 35 lines from ONE file where section order had shipped 55 across FIVE, and capping at two per
+  // file to force spread recovered only three. Section order wins because it interleaves the anchor, the
+  // spine and the writers by construction. Two things replace ranking: PINNED centers are exempt from the
+  // budget entirely, and the tail is shown SHALLOW so the budget reaches further.
+
+  // The caller's `--center` pins, as `file:line` keys. These are the locations the caller named, so their
+  // code is guaranteed: exempt from the source budget rather than merely first in line for it (a pinned
+  // center that lost its code to a cap is the same silent omission as one dropped from the grow).
   //
-  // `seamLine` is the ONE entry renderer for Region, In, sinks, producers, consumers and cross-stack, so hooking
-  // it here covers all six with a single rule rather than six drifting ones. `s.primary` carries the same
-  // (file, line) `where()` already prints, so the code shown can never disagree with the citation above it.
-  //
-  // GATED ON THE LADDER'S SNIPPET RUNG (`_snipOn`, set by `assemble`), not on `opts.snippet` directly — the
-  // budget already decided that source text yields before a mechanism step does, and bypassing that would let
-  // the region's snippets crowd out the flow the whole render is built around. Re-assembling at another rung is
-  // free: the reader memoises by (file, line), so a citation costs budget once however often it is rendered.
+  // MATCHED ON THE FILE, NOT THE SYMBOL, and that is measured rather than lax. The first version required the
+  // pinned symbol to be the seam's primary, and on keycloak it never fired for the case it was written for:
+  // `--center RealmAdminResource.java#updateRealm` produces NO seam whose primary is `updateRealm` (the only
+  // one is in a different file), because that file surfaces through its route seams — `/events/config`,
+  // `/users-management-permissions`. A pinned symbol frequently is not a seam primary anywhere, so keying the
+  // exemption on it guarantees the exemption misses. The caller named the FILE; every citation in it is code
+  // they are going to want.
+  const _pinnedFiles = new Set((opts.centers ?? []).map((c) => c.file));
+  const _isPinned = (s: Seam): boolean => !!s.primary?.file && _pinnedFiles.has(s.primary.file);
+  // SHALLOW BY DEFAULT, DEEP WHERE IT PAYS. Every citation used to get the same +/-2 line window, so the
+  // budget bought ~11 of 80 citations on keycloak. The content gap is BINARY — an agent re-opens the file
+  // when there is nothing to dereference — so one real line closes it at a fifth of the cost. The flow's own
+  // spine and the pinned centers keep the full window; everything else gets the cited line alone.
+  const _snipDepth = (s: Seam): number => (_isPinned(s) || s.tier === "spine" ? 2 : 0);
+
   const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${(s.id === _anchorSeamId && _anchorWhere) ? _anchorWhere : where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`
-    + ((_snipOn && s.primary ? (opts.snippet?.(s.primary.file, s.primary.line, "      ") ?? []) : []).map((l) => `\n${l}`).join(""));
+    + ((() => {
+      if (!_snipOn || !s.primary) return "";
+      const pinned = _isPinned(s);
+      // a PINNED center never counts against this rung's entry allowance either — it is not competing
+      if (!pinned && _snipLeft <= 0) { _snipSkipped++; return ""; }
+      const lines = opts.snippet?.(s.primary.file, s.primary.line, "      ",
+        { depth: _snipDepth(s), exempt: pinned }) ?? [];
+      // Only a snippet that ACTUALLY rendered spends budget: an unlocated or unreadable citation costs
+      // nothing, exactly as the reader's own cap treats it (render/snippets.ts).
+      if (lines.length && !pinned) _snipLeft--;
+      return lines.map((l) => `\n${l}`).join("");
+    })());
   // THE CALL SITE between two consecutive spine seams — the resolved edge connecting them, rendered from its OWN
   // caller/callee (edge.from is always the caller, edge.line the call-site line in the caller's file — see
   // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
@@ -1049,11 +1079,35 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // while the mechanism stopped at step 34 of 84, which is the shape of output a plain text search out-scored.
   // It also keeps the hub-crossing fold HONEST at the whole-render level: folding a hundred `user`/`team`
   // co-accesses must give the budget back to the flow, not simply let the region tail expand to refill it.
-  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, snippets: boolean, mechCap: number, overBudget = false): string[] =>
+  // CROP STATED, NEVER SILENT — the same rule the mechanism cap and the reader's own 25-citation cap follow.
+  // A reader who sees code on the spine and none in the region must be told that is a BUDGET decision, or the
+  // output reads as "these lines have no source" and they go and open the files anyway, which is the exact
+  // cost this section exists to remove. Rendered last, so it counts every section's denials.
+  const snipCapSection = (): string[] =>
+    _snipSkipped > 0
+      ? ["", `(source text shown for the ${_snipLeft === Infinity ? "cited" : "nearest"} entries only — `
+        + `${_snipSkipped} further citation(s) carry none, to fit the token budget. `
+        + `Raise --token-budget for the rest, or read them at the file:line above.)`]
+      : [];
+  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, snippets: boolean | number, mechCap: number, overBudget = false, dropDiagnostics = false): string[] =>
     // `_snipOn` carries the ladder's snippet decision to `seamLine`, which every region/entry/sink line goes
     // through. Set here rather than threaded through nine section closures: the flag is a property of the RUNG
     // being assembled, and each rung reassembles the whole render from scratch.
-    ((_snipOn = snippets && !!opts.snippet), [...header(), ...anchorAccessSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()]);
+    ((_snipOn = snippets !== false && !!opts.snippet),
+     (_snipLeft = typeof snippets === "number" ? snippets : Infinity), (_snipSkipped = 0), [...header(), ...anchorAccessSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting),
+     // THE DIAGNOSTIC SECTIONS YIELD BEFORE THE CODE DOES — measured, not assumed. On keycloak these three
+     // are 9,193 B of a 27,267 B map (34%) and carry ZERO `file:line` citations between them: they report
+     // what static resolution could not see and what the grow declined to expand. Valuable, but they are
+     // the engine talking about itself, and they were outranking the source text an agent opens files to
+     // read. 9.2 kB funds ~30 more five-line snippets — the difference between 11 of 80 citations carrying
+     // code and most of them. They come back the moment the render fits without the trade.
+     // ONLY when there is source text to buy with the space. Without a reader attached the trade is pure
+     // loss — nothing takes their place — and a rung that dropped them anyway shrank the render for no
+     // gain, which is exactly what `agent_render.test.ts` caught: a no-snippet caller lost its hubs,
+     // frontier and blindspots to a budget that had nothing better to spend the bytes on.
+     ...(dropDiagnostics && opts.snippet ? [] : [...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()]),
+     ...(dropDiagnostics && opts.snippet ? ["", `(hubs/frontier/blindspots omitted to make room for source text — re-run with --no-snippets to see them)`] : []),
+     ...snipCapSection()]);
   // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
   // intent-relevance ranking above decides WHICH steps survive.
   const MECH_FULL = pipeline.length;
@@ -1075,25 +1129,41 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // cropped, snippets on" overruns but "everything cropped, snippets off" fits. The rung that was missing is the
   // one that crops the MECHANISM while keeping snippets; with it, the ladder degrades monotonically and the
   // snippet-off rung becomes the genuine last resort it was always described as.
-  const steps: [boolean, boolean, boolean, boolean, number][] = [
-    [false, false, false, true, MECH_FULL], [true, false, false, true, MECH_FULL], [true, true, false, true, MECH_FULL],
-    [true, true, true, true, MECH_FULL],
-    [true, true, true, true, EXEMPT_N],       // crop the mechanism, KEEP the code — the rung that was missing
-    [true, true, true, false, MECH_FULL], [true, true, true, false, EXEMPT_N]];
+  // SNIPPETS ARE A BUDGET, NOT A SWITCH — the second non-monotonic hole in this ladder, same shape as the
+  // first. Every snippet rung above was all-or-nothing across the WHOLE render, so on a map whose region tail
+  // is large, EVERY such rung overran the byte ceiling and the ladder fell through to a snippets-off rung.
+  // Measured on keycloak (`--center realms.ts#Realms,RealmAdminResource.java#updateRealm`, default budget):
+  // the map fit at 26,672 B with zero code, while `RealmAdminResource.java:461` was cited and the agent had to
+  // open the file to read it — the CONTENT gap `bench/grep-vs-seam/verification-tax.ts` bins, and the single
+  // biggest source of the re-reads this format exists to remove.
+  //
+  // A numeric rung keeps code on the FIRST N entry lines and drops the tail. Sections render nearest-first, so
+  // those N land on the spine and the ways in — the lines an agent actually opens — instead of the region tail
+  // it skims. 12 and 5 are rungs, not tuning: 12 x ~5 lines is ~60 lines of code (well inside the 28 kB
+  // ceiling for a map that fits at 26.7 kB without any), and 5 is the last rung that still shows the flow's
+  // own crossings before the ladder gives up on code entirely.
+  const steps: [boolean, boolean, boolean, boolean | number, number, boolean, boolean][] = [
+    [false, false, false, true, MECH_FULL, false, false], [true, false, false, true, MECH_FULL, false, false],
+    [true, true, false, true, MECH_FULL, false, false], [true, true, true, true, MECH_FULL, false, false],
+    [true, true, true, true, EXEMPT_N, false, false],    // crop the mechanism, KEEP the code — the rung that was missing
+    [true, true, true, true, EXEMPT_N, false, true],     // ... then drop the DIAGNOSTICS, which cite nothing
+    [true, true, true, 12, EXEMPT_N, false, true],       // ... then keep code only where it is worth most
+    [true, true, true, 5, EXEMPT_N, false, true],
+    [true, true, true, false, MECH_FULL, false, false], [true, true, true, false, EXEMPT_N, false, false]];
   // BOTH BOUNDS. `budget` is what the caller asked for; AGENT_INLINE_CEILING is what the transport will carry.
   // A render satisfies both or drops a rung — see the note on the constant for why the token budget alone
   // cannot do this job, and why this only became enforceable once the exempt sections were capped.
   const bytes = (lines: string[]) => lines.join("\n").length;
   let out: string[] = [], fitted = false;
   for (const step of steps) {
-    out = assemble(...step);
+    out = assemble(step[0], step[1], step[2], step[3], step[4], step[5], step[6]);
     if (tok(out) <= budget && bytes(out) <= AGENT_INLINE_CEILING) { fitted = true; break; }
   }
   // NOTHING fits: the sections that are EXEMPT from cropping already exceed the budget on their own. At that
   // point dropping the caller's EXPLICITLY requested snippets bought no fit — the render overruns either way and
   // the mechanism cap is EXEMPT_N in both — so withholding them is pure loss, not a saving. Give the caller what
   // they asked for and let the section SAY the render is over budget (crop stated, never silent).
-  if (!fitted && opts.snippet) out = assemble(true, true, true, true, EXEMPT_N, true);
+  if (!fitted && opts.snippet) out = assemble(true, true, true, true, EXEMPT_N, true, true);
   return out.join("\n");
 }
 

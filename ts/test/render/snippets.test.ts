@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 import { renderConsumerSet, renderImpact } from "../../src/codebase/render/shapes.js";
-import { makeSnippetReader, snippetsTruncated, MAX_SNIPPET_CITATIONS } from "../../src/codebase/render/snippets.js";
+import { makeSnippetReader, snippetsTruncated, MAX_SNIPPET_BYTES } from "../../src/codebase/render/snippets.js";
 
 let REPO = "";
 
@@ -212,7 +212,7 @@ describe("the citation cap that makes default-on safe", () => {
     const r = makeSnippetReader(REPO, 2);
     const first = r("src/orders/computeQuote.ts", 12);
     expect(first.length).toBeGreaterThan(0);
-    for (let i = 0; i < MAX_SNIPPET_CITATIONS * 3; i++) {
+    for (let i = 0; i < 75; i++) {
       expect(r("src/orders/computeQuote.ts", 12)).toEqual(first);   // same citation, still emitted
     }
     expect(snippetsTruncated(r)).toBe(false);
@@ -223,14 +223,21 @@ describe("the citation cap that makes default-on safe", () => {
     // so citations past it hit the EOF guard and — correctly — consume no budget, which made an earlier version
     // of this test unable to reach the cap at all. The rule being pinned is that only a REAL emitted snippet
     // spends budget; an unlocated or past-EOF citation is free.
+    // The budget is BYTES of emitted snippet, not a citation count (see MAX_SNIPPET_BYTES): what binds is the
+    // transport ceiling, and a 1-line snippet must not cost the same as a 5-line one. So this walks distinct
+    // citations until the reader goes quiet, and pins that it (a) lasts a sane while and (b) says when it stops.
+    const LINES = 4000;
     writeFileSync(join(REPO, "src/orders/long.ts"),
-      Array.from({ length: MAX_SNIPPET_CITATIONS + 10 }, (_, i) => `const l${i + 1} = ${i + 1};`).join("\n"));
+      Array.from({ length: LINES }, (_, i) => `const l${i + 1} = ${i + 1};`).join("\n"));
     const r = makeSnippetReader(REPO, 2);
-    // distinct lines, one per call — the shape of a 247-entry consumer set
-    for (let line = 1; line <= MAX_SNIPPET_CITATIONS; line++) r("src/orders/long.ts", line);
-    expect(snippetsTruncated(r)).toBe(false);
-    expect(r("src/orders/long.ts", MAX_SNIPPET_CITATIONS + 1)).toEqual([]);
-    // the flag is what lets the RENDER explain the tail instead of looking arbitrary
-    expect(snippetsTruncated(r)).toBe(true);
+    let emitted = 0, bytes = 0;
+    for (let line = 3; line < LINES && !snippetsTruncated(r); line += 6) {
+      const out = r("src/orders/long.ts", line);
+      if (out.length) { emitted++; bytes += out.join("\n").length; }
+    }
+    expect(snippetsTruncated(r)).toBe(true);              // it stops, and the flag lets the render SAY so
+    expect(bytes).toBeLessThanOrEqual(MAX_SNIPPET_BYTES + 500);   // and it stops near the budget, not past it
+    // a byte budget buys FAR more citations than the old count of 25 — that is the point of the change
+    expect(emitted).toBeGreaterThan(25);
   });
 });

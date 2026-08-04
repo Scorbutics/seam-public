@@ -162,7 +162,7 @@ export function parseArgs(argv: string[]): Args {
   if (a.format === "llm-context" && a.skeleton === undefined) a.skeleton = true;
   // SNIPPETS DEFAULT ON for the formats a human or agent READS, because locating without showing only moves the
   // cost. Measured, `bench/grep-vs-seam` run 2 on cal.com: the Seam arm spent ~40 of its commands re-reading
-  // files Seam had already pinpointed. The reader is capped (MAX_SNIPPET_CITATIONS) so a 247-entry set degrades
+  // files Seam had already pinpointed. The reader is capped (MAX_SNIPPET_BYTES) so a 247-entry set degrades
   // to the old output instead of exploding, and `--no-snippets` restores it outright.
   //
   // NOT for the machine paths: `json` is a raw model, and --emit-seams/--emit-prompts/--inject-llm/--llm-bridge

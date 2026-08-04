@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { renderImpact } from "../../src/codebase/render/shapes.js";
-import { makeSnippetReader, MAX_SNIPPET_CITATIONS } from "../../src/codebase/render/snippets.js";
+import { makeSnippetReader } from "../../src/codebase/render/snippets.js";
 
 const REPO = mkdtempSync(join(tmpdir(), "seam-impact-budget-"));
 const w = (rel: string, t: string) => { mkdirSync(join(REPO, dirname(rel)), { recursive: true }); writeFileSync(join(REPO, rel), t); };
@@ -30,7 +30,7 @@ const w = (rel: string, t: string) => { mkdirSync(join(REPO, dirname(rel)), { re
 // on the throttling variant it was written to reject. A fixture that cannot distinguish the fix from the bug is
 // the null-answer trap wearing a different hat: it runs the path without exercising what the path decides.
 const PER_FILE_SYMS = 2;
-const ROLLUP_FILES = MAX_SNIPPET_CITATIONS;   // × 2 symbols ⇒ comfortably over the cap
+const ROLLUP_FILES = 60;   // the render rolls up at most this many files, so DEPTH is what reaches the cap
 const impacted: any[] = [];
 const files: any[] = [];
 for (let i = 0; i < ROLLUP_FILES; i++) {
@@ -73,12 +73,15 @@ describe("impact snippet budget", () => {
     const out = renderImpact(small, makeSnippetReader(REPO, 1));
     for (const tag of ["0A", "0B", "1A", "1B"]) expect(out).toContain(`ROLLUP-BODY-${tag}`);
     expect(out).toContain("SURFACE-BODY-0");
-    expect(out).not.toContain("source text shown for the first");   // budget never hit ⇒ no cap note
+    expect(out).not.toContain("source text shown until");   // budget never hit ⇒ no cap note
   });
 
   test("when the budget IS exhausted the render says so", () => {
-    const out = renderImpact(model, makeSnippetReader(REPO, 1));
-    expect(out).toContain("source text shown for the first");
+    // DEPTH, not file count, is what exhausts a BYTE budget here: the rollup caps at 60 files, so 120 shallow
+    // snippets (~11 kB) sit just under MAX_SNIPPET_BYTES however many more files the fixture holds. A wide
+    // window over the same citations clears it — which is the property the byte budget exists to price.
+    const out = renderImpact(model, makeSnippetReader(REPO, 3));
+    expect(out).toContain("source text shown until");   // the byte-budget cap note (MAX_SNIPPET_BYTES)
   });
 });
 

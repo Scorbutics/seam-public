@@ -8,7 +8,7 @@
 // Honest about the floor: resolved members are the verified answer; suggested are leads; the unresolved
 // bucket is "grep these"; noStructure routes the asker away entirely. The two public renderers below fix
 // the direction-specific wording. See grow/project_set.ts.
-import { type SnippetReader, snippetsTruncated, MAX_SNIPPET_CITATIONS } from "./snippets.js";
+import { type SnippetReader, snippetsTruncated, MAX_SNIPPET_BYTES } from "./snippets.js";
 // COUNTING UNITS — one shared derivation for every "how many consumers" figure this module prints, so the
 // edge-grained (`consumers`) and file-grained (`contract`) answers to the SAME relationship are named, not
 // merely numbered. See core/units.ts.
@@ -62,7 +62,7 @@ function crossStackTruncationLines(truncs: any[] | undefined): string[] {
 /// inconsistency into a documented budget the reader can override.
 function snippetCapLines(sr?: SnippetReader): string[] {
   return sr && snippetsTruncated(sr)
-    ? ["", `(source text shown for the first ${MAX_SNIPPET_CITATIONS} citations only — the budget cap, applied in`
+    ? ["", `(source text shown until the ${(MAX_SNIPPET_BYTES / 1000).toFixed(0)} kB source budget ran out — applied in`
       + ` LIST ORDER, which is not a relevance ranking. The remaining entries are resolved just as firmly; they`
       + ` simply carry no code. Re-run with \`--snippets\` on a narrower anchor, or \`--no-snippets\` to drop it entirely.)`]
     : [];
