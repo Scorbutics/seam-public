@@ -311,6 +311,13 @@ pub fn type_names(ctx: &Ctx) -> HashSet<String> {
 
 /// The file's named units (functions/methods/classes), for attributing a call site to its enclosing unit.
 /// Port of `_named_units`. A funclike directly in a class body is a "method" even if its kind isn't a method kind.
+/// A class PROPERTY node — TS `public_field_definition`, plain JS `field_definition`, and the C-family
+/// spellings. Kept local rather than added to `node_kinds`: this is the only place that needs the set, and
+/// `nk` is the shared vocabulary every language agrees on.
+fn is_class_field(k: &str) -> bool {
+    matches!(k, "public_field_definition" | "field_definition" | "property_declaration" | "field_declaration")
+}
+
 pub fn named_units(ctx: &Ctx) -> Vec<Unit> {
     let mut units = Vec::new();
     named_units_visit(ctx, ctx.root(), false, &mut units);
@@ -336,6 +343,22 @@ fn named_units_visit(ctx: &Ctx, n: Node, in_class: bool, units: &mut Vec<Unit>) 
             if ch.first().is_some_and(|c0| nk::is_name_kind(c0.kind())) {
                 let (s, e) = ctx.span(fl);
                 units.push(Unit { name: ctx.text(ch[0]).to_string(), kind: "function".into(), start: s, end: e });
+            }
+        }
+    } else if is_class_field(k) {
+        // A CLASS PROPERTY HOLDING A FUNCTION — `public makeUpdateRequest = <T,…>(…) => {…}`. The node is
+        // not funclike (the ARROW is, and it is anonymous), not a class, and not a var_declarator, so all
+        // three branches above miss it. Same idiom, THIRD extractor: the def table missed it (fixed by
+        // putting TS on the tree-sitter path) and so did this one, which is what `units_of` reads — so an
+        // inherited-member lookup could not find the base's method however well the base resolved.
+        //
+        // Named by the PROPERTY, spanned by the FUNCTION: the name is what a caller writes (`this.makeRequest`)
+        // and the span is the body a reader wants, exactly as the var_declarator branch above does it.
+        let ch = ctx.children(n);
+        if let Some(&fl) = ch.iter().find(|c| nk::is_funclike(c.kind())) {
+            if let Some(name) = name_of(ctx, n).or_else(|| ch.first().filter(|c0| nk::is_name_kind(c0.kind())).map(|c0| ctx.text(*c0).to_string())) {
+                let (s, e) = ctx.span(fl);
+                units.push(Unit { name, kind: if in_class { "method" } else { "function" }.into(), start: s, end: e });
             }
         }
     }
