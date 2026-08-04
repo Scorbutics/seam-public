@@ -98,6 +98,12 @@ A hunk can appear in several seams (a link wires more than one core). Occurrence
 { "id": "h3", "file": "src/api.ts", "start": 10, "end": 24,
   "role": "core|link|environment|test|noise",   // the PRIMARY read — drives the editor colour
   "confidence": 0.8,            // role self-consistency vote share; < 0.6 => surfaced as "maybe"
+  "hops": 2,                    // OPTIONAL (intent grows only). HOP DISTANCE from the anchor, undirected BFS
+                                //   over the resolved graph — the same walk `region.shell` is built from, but
+                                //   PER HUNK. `shell` is the seam's MINIMUM over its members and a seam spans
+                                //   shells, so it collapses the distance; `hops` does not. This is the key the
+                                //   member ranking orders on (see docs/INTENT_RELEVANCE.md). Absent on an
+                                //   unreached node and on every structural (no-intent) grow.
   "label": "…", "relevant": true,
 
   // wiring / boundary signals (all optional)

@@ -69,6 +69,15 @@ pub struct Hunk {
     pub contract: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hub: Option<Value>,
+    /// HOP DISTANCE FROM THE ANCHOR, per hunk — the same undirected BFS `Region::shell` is built from, but
+    /// kept at the granularity where it carries signal. `shell` is the seam's MINIMUM over its members, and a
+    /// seam spans shells (a core plus its wiring), so on keycloak the anchor seam holds 228 members and hands
+    /// `shell = 0` to every file in it. Measured against what agents actually open (`bench/ranking/`), the
+    /// per-seam minimum scores 6% at top-12 where the per-hunk distance scores 24% — same BFS, four times the
+    /// ranking, entirely from not collapsing it. Intent-gated with `region`, so non-intent oracles stay
+    /// byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hops: Option<i64>,
 }
 
 fn seam_hunk(n: &Node, provenance: &str, boundary: &IndexSet<String>) -> Hunk {
@@ -97,6 +106,8 @@ fn seam_hunk(n: &Node, provenance: &str, boundary: &IndexSet<String>) -> Hunk {
         subcores: n.subcores.clone(),
         contract: n.contract.clone(),
         hub: n.hub.clone(),
+        // filled in at seam construction, where the anchor BFS is in scope
+        hops: None,
     }
 }
 
@@ -502,6 +513,10 @@ pub fn emit_seams(g: &Graph, health: &Health, seams: &mut Vec<Seam>, opts: &Emit
         let deduped: Vec<Hunk> = ordered
             .into_iter()
             .filter(|h| h.file.is_empty() || seen_loc.insert(format!("{}:{}:{}", h.file, h.start, h.end)))
+            .map(|mut h| {
+                h.hops = opts.intent.then(|| dist.get(&h.id).copied()).flatten();
+                h
+            })
             .collect();
 
         let mut warns: Vec<String> = Vec::new();

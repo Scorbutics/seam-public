@@ -60,10 +60,14 @@ export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   seams.forEach((s, i) => { if (tiers[i] != null) (s as any).tier = tiers[i]; });
 }
 
+// HOPS DECIDE, relevance only breaks ties inside a hop band — see `mark_spine_members` (Rust) for the
+// measurement behind that. `hops` rides alongside `relevance` and is absent under a structural grow, which is
+// what selects the legacy relevance-above-mean rule on the other side.
 export function markSpineMembers(hunks: any[]): void {
   if (!hunks.length) return;
   const flags: (boolean | null)[] = JSON.parse(_core_or_die().growMarkSpineMembers(
-    hunks.map((h) => (typeof h.relevance === "number" ? h.relevance : undefined))));
+    hunks.map((h) => (typeof h.relevance === "number" ? h.relevance : undefined)),
+    hunks.map((h) => (typeof h.hops === "number" ? h.hops : undefined))));
   hunks.forEach((h, i) => { if (flags[i] != null) h.spine = flags[i]; });
 }
 

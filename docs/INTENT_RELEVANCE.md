@@ -56,6 +56,36 @@ A grown seam is scored by its **primary def's** passage (the seam's anchor/core 
 multi-symbol seam is judged by its *primary* only; a relevant secondary symbol can be missed if the primary
 is generic. A future upgrade is to embed *all* of a seam's symbols and take the max (same machinery).
 
+## What relevance is NOT used for any more: the member ranking
+
+**Members inside a seam are ranked by HOP DISTANCE from the anchor, not by cosine.** `markSpineMembers` used
+to flag every member at or above its seam's mean relevance, ordered by relevance; it now orders by the hunk's
+`hops` and uses relevance only to break ties *inside one hop band*. `bench/ranking/` is the measurement:
+
+| | keycloak (38 cases) | cal.com families |
+|---|---|---|
+| read demand in a top-12, cosine-ranked files | 4% | 6-45% |
+| read demand in a top-12, hop-ranked files | **24%** | **37-88%** |
+| what the shipped render surfaces, cosine | 20% (arm A) / 32% (arm B) | — |
+| what the shipped render surfaces, hops | **26%** (arm A) / **40%** (arm B) | — |
+
+Two findings drove it. First, the cosine head is *wrong*, not merely blunt: on one keycloak closure 157 of
+457 files tie at tier `spine` with scores packed between 0.641 and 0.557, the head is `RevocationModal.tsx` /
+`ClientSessions.tsx` / `GroupTree.tsx` (opened by neither benchmark arm), the most-opened file in the corpus
+sits at rank 18, and the grow's OWN CENTER sits at 103. Second, cosine is **redundant** once structure orders
+the candidates — breaking hop ties by relevance, tier or citation count gives identical coverage on all 38
+keycloak cases.
+
+A boundary term (distance to the nearest route/table node) was tried in three formulations — added, then
+lexicographic, then boolean — and lost or tied every time. It is not saturated; it simply is not monotone
+(its lift spikes at distance 0 and collapses at 1 on both repos, and keycloak's distance 4 is more predictive
+than its distance 1). See `bench/ranking/README.md`.
+
+The **seam-level** `tier` banding is still cosine-ranked, and still measures badly (`current` = 4% on
+keycloak, below the raw cosine it is built on). Re-keying it needs a per-seam hop number that is not
+`region.shell`, whose per-seam minimum is exactly the collapse `hops` was added to avoid — that work is not
+done.
+
 ## What it emits
 
 `annotateIntentRelevance` (`src/codebase/grow/intent_rank.ts`) attaches to each seam:

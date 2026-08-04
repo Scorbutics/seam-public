@@ -66,14 +66,29 @@ pub struct Member {
     pub relevance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spine: Option<bool>,
+    /// Hop distance from the anchor (`Hunk::hops`). Present whenever the grow ran with an intent; `None`
+    /// under a structural grow, which is what selects the legacy relevance rule below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hops: Option<i64>,
 }
 
-/// Flag the most intent-relevant MEMBERS of one seam as its spine.
+/// Flag the MEMBERS of one seam that a consumer should read first — its spine.
 ///
 /// The structural floor collapses a tangled (god-object / DI-heavy) closure into ONE seam, so seam-level
-/// tiering has nothing to separate — but the embedding still says which members answer the intent. Marks the
-/// members at or above the seam's MEAN relevance, capped, so a consumer can surface the path inside the
-/// tangle. A seam with fewer than two scored members has nothing to rank.
+/// tiering has nothing to separate, and this is what surfaces the path inside the tangle. A seam with fewer
+/// than two scored members has nothing to rank.
+///
+/// HOP-FIRST. This used to rank members by cosine to the intent, taking everything at or above the seam's
+/// mean. Measured against what agents actually open (`bench/ranking/`, 9 repo families over keycloak and
+/// cal.com), that ranking put 3-6% of read demand in a top-12 while plain hop distance from the anchor put
+/// 24-54% — and on keycloak the cosine head was `RevocationModal.tsx` / `ClientSessions.tsx` / `GroupTree
+/// .tsx`, none of which any arm opened, while the most-opened file in the corpus sat at rank 18 and the
+/// grow's OWN CENTER at 103. Cosine also proved REDUNDANT rather than merely weak: once hops orders the
+/// candidates, breaking ties by relevance, tier or citation count gave identical coverage on all 38 keycloak
+/// cases. So hops decides, and relevance only settles ties within one hop band.
+///
+/// DEGRADES TO THE OLD RULE. No intent means no `hops`, and then this is byte-for-byte the relevance
+/// behaviour it replaces — an intent ranking must never be a gate on a structurally-correct answer.
 pub fn mark_spine_members(hunks: &mut [Member]) {
     let scored: Vec<usize> = (0..hunks.len()).filter(|i| hunks[*i].relevance.is_some()).collect();
     if scored.len() < 2 {
@@ -82,9 +97,33 @@ pub fn mark_spine_members(hunks: &mut [Member]) {
         }
         return;
     }
+    let cap = SPINE_MEMBER_CAP.min(1.max((scored.len() + 3) / 4));
+
+    // HOP-FIRST PATH — available only when the grow carried an intent, so `hops` was computed.
+    if scored.iter().any(|i| hunks[*i].hops.is_some()) {
+        let mut order = scored.clone();
+        // hops ASC, then relevance DESC inside a band. A STABLE sort, so equal members keep hunk order and
+        // which one wins the last capped slot is decided by position rather than by sort implementation.
+        order.sort_by(|a, b| {
+            let (ha, hb) = (hunks[*a].hops.unwrap_or(i64::MAX), hunks[*b].hops.unwrap_or(i64::MAX));
+            ha.cmp(&hb).then_with(|| {
+                hunks[*b]
+                    .relevance
+                    .unwrap_or(0.0)
+                    .partial_cmp(&hunks[*a].relevance.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+        for (n, i) in order.into_iter().enumerate() {
+            // An UNREACHED member (`hops` absent while others have it) is not near the anchor — it is not
+            // placed at all. It must never outrank a member the graph actually resolved a distance for.
+            hunks[i].spine = Some(n < cap && hunks[i].hops.is_some());
+        }
+        return;
+    }
+
     let sum: f64 = scored.iter().map(|i| hunks[*i].relevance.unwrap_or(0.0)).sum();
     let mean = sum / scored.len() as f64;
-    let cap = SPINE_MEMBER_CAP.min(1.max((scored.len() + 3) / 4));
     let mut order = scored.clone();
     // relevance DESC. A STABLE sort, so members of equal relevance keep hunk order — the cap makes that
     // observable: which of two equal members gets the last slot is decided by position, not by chance.
@@ -159,13 +198,72 @@ mod tests {
     }
 
     fn members(rels: &[f64]) -> Vec<Member> {
-        rels.iter().map(|r| Member { relevance: Some(*r), spine: None }).collect()
+        rels.iter().map(|r| Member { relevance: Some(*r), spine: None, hops: None }).collect()
+    }
+    fn hopped(rh: &[(i64, f64)]) -> Vec<Member> {
+        rh.iter().map(|(h, r)| Member { relevance: Some(*r), spine: None, hops: Some(*h) }).collect()
+    }
+    fn flagged(m: &[Member]) -> Vec<usize> {
+        (0..m.len()).filter(|i| m[*i].spine == Some(true)).collect()
+    }
+
+    #[test]
+    fn hops_decide_the_spine_and_cosine_does_not_get_a_vote_across_bands() {
+        // The measured failure in one case: the cosine favourite is FAR from the anchor and the near members
+        // score poorly. Ranking by relevance would take index 0; hop-first must take the near ones.
+        let mut h = hopped(&[(5, 0.99), (1, 0.10), (2, 0.11), (1, 0.20)]);
+        mark_spine_members(&mut h);
+        // cap = min(12, max(1, (4+3)/4)) = 1 -> only the nearest member survives, and among the two at hop 1
+        // it is the higher-relevance one, because relevance breaks ties INSIDE a band.
+        assert_eq!(flagged(&h), [3]);
+    }
+
+    #[test]
+    fn relevance_still_orders_within_one_hop_band() {
+        let mut h = hopped(&[(2, 0.10), (2, 0.90), (2, 0.50), (2, 0.70), (2, 0.60), (2, 0.20), (2, 0.30), (2, 0.40)]);
+        mark_spine_members(&mut h);
+        // cap = min(12, max(1, 11/4)) = 2 -> the two highest-relevance members of the single band
+        assert_eq!(flagged(&h), [1, 3]);
+    }
+
+    #[test]
+    fn an_unreached_member_never_outranks_a_placed_one() {
+        // `hops: None` beside members that HAVE a distance means the graph resolved no path to it. It must
+        // sort last and must not be flagged, or an unplaced node takes a capped slot from a real one.
+        let mut h = vec![
+            Member { relevance: Some(0.99), spine: None, hops: None },
+            Member { relevance: Some(0.10), spine: None, hops: Some(3) },
+        ];
+        mark_spine_members(&mut h);
+        assert_eq!(flagged(&h), [1]);
+        assert_eq!(h[0].spine, Some(false));
+    }
+
+    #[test]
+    fn without_hops_it_is_byte_for_byte_the_relevance_rule() {
+        // The degradation contract: a structural grow carries no `hops`, and must rank exactly as before.
+        let mut a = members(&[0.34, 0.31, 0.28, 0.02, 0.03]);
+        let mut b = members(&[0.34, 0.31, 0.28, 0.02, 0.03]);
+        mark_spine_members(&mut a);
+        // the pre-change rule, inlined, as the oracle
+        let mean: f64 = 0.98 / 5.0;
+        let cap = 12usize.min(1.max((5 + 3) / 4));
+        let mut order: Vec<usize> = (0..5).collect();
+        order.sort_by(|x, y| b[*y].relevance.unwrap().partial_cmp(&b[*x].relevance.unwrap()).unwrap());
+        let mut n = 0;
+        for i in order {
+            let rel = b[i].relevance.unwrap();
+            let take = rel >= mean && n < cap;
+            if rel >= mean { n += 1; }
+            b[i].spine = Some(take);
+        }
+        assert_eq!(a.iter().map(|m| m.spine).collect::<Vec<_>>(), b.iter().map(|m| m.spine).collect::<Vec<_>>());
     }
 
     #[test]
     fn top_above_average_members_are_flagged_and_the_noise_tail_is_not() {
         let mut h = members(&[0.34, 0.31, 0.28]);
-        h.extend((0..20).map(|i| Member { relevance: Some(0.02 + i as f64 * 0.001), spine: None }));
+        h.extend((0..20).map(|i| Member { relevance: Some(0.02 + i as f64 * 0.001), spine: None, hops: None }));
         mark_spine_members(&mut h);
         let flagged: Vec<usize> = (0..h.len()).filter(|i| h[*i].spine == Some(true)).collect();
         assert_eq!(flagged, [0, 1, 2]);
@@ -176,7 +274,7 @@ mod tests {
     fn the_cap_holds_at_twelve_even_when_thirty_members_beat_the_mean() {
         // cap = min(12, ceil(60/4)=15) = 12. "The path" through a tangle is a handful, not a top third.
         let mut h: Vec<Member> =
-            (0..60).map(|i| Member { relevance: Some(if i < 30 { 0.9 } else { 0.1 }), spine: None }).collect();
+            (0..60).map(|i| Member { relevance: Some(if i < 30 { 0.9 } else { 0.1 }), spine: None, hops: None }).collect();
         mark_spine_members(&mut h);
         assert_eq!(h.iter().filter(|x| x.spine == Some(true)).count(), 12);
         // and it is the FIRST twelve of the equal-scoring block — a stable sort, so which members win the
@@ -188,7 +286,7 @@ mod tests {
     fn unscored_members_are_ignored_and_a_lone_scored_member_is_the_spine() {
         // summary/caller hunks ("+3 more") carry no relevance; they must not be flagged, and they must not
         // stop the one real member from being the path.
-        let mut h = vec![Member { relevance: Some(0.2), spine: None }, Member::default()];
+        let mut h = vec![Member { relevance: Some(0.2), spine: None, hops: None }, Member::default()];
         mark_spine_members(&mut h);
         assert_eq!(h[0].spine, Some(true));
         assert_eq!(h[1].spine, None);

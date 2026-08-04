@@ -36,15 +36,26 @@ export const facts = (s: Seam): string => {
 // it can trust alongside the code location.
 export const lineageOf = (s: any): string => s.lineage ? `  ↳ ${s.lineage.sha} "${s.lineage.subject}" (${s.lineage.author}, ${s.lineage.date})` : "";
 
-// The intent-RELEVANT MEMBERS inside a seam — the embedding-ranked spine the floor collapsed into one
-// blob. Without these a tangled (god-object / DI) seam renders as one near-empty line; with them the
-// reader sees WHICH of the N members answer the intent. Only the `spine`-flagged members (top, above
-// the seam's mean), highest relevance first, capped. Empty when embeddings were unavailable.
+// The MEMBERS to read first inside a seam — the spine the structural floor collapsed into one blob. Without
+// these a tangled (god-object / DI) seam renders as one near-empty line; with them the reader sees WHICH of
+// the N members carry the flow. Only the `spine`-flagged members, NEAREST THE ANCHOR FIRST, capped.
+//
+// Ordered by hop distance, not by cosine. Measured against what agents actually open (`bench/ranking/`), the
+// cosine order put 3-6% of read demand in a top-12 against 24-54% for hop distance, and ties inside a hop
+// band came out identical however they were broken — so `hops` decides and relevance is shown, not obeyed.
+// Falls back to relevance order when the grow carried no intent and so computed no distances.
 const _MEMBER_CAP = 8;
 export const memberLines = (s: Seam): string[] => {
   const sp = (s.hunks ?? []).filter((h) => h.spine && typeof h.relevance === "number")
-    .sort((a, b) => (b.relevance! - a.relevance!)).slice(0, _MEMBER_CAP);
-  return sp.map((h) => `     ★ ${h.relevance!.toFixed(2)} ${h.label ?? "?"}${h.file ? ` (${at(h.file, h.start)})` : ""}`);
+    .sort((a, b) => {
+      const ha = typeof (a as any).hops === "number" ? (a as any).hops : Infinity;
+      const hb = typeof (b as any).hops === "number" ? (b as any).hops : Infinity;
+      return (ha - hb) || (b.relevance! - a.relevance!);
+    }).slice(0, _MEMBER_CAP);
+  return sp.map((h) => {
+    const hp = typeof (h as any).hops === "number" ? `[${(h as any).hops}] ` : "";
+    return `     ★ ${hp}${h.relevance!.toFixed(2)} ${h.label ?? "?"}${h.file ? ` (${at(h.file, h.start)})` : ""}`;
+  });
 };
 
 // A seam's WAVE SHELL — hops from the anchor (the flood's own bookkeeping). Shared by the region/wave/
