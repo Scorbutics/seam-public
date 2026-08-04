@@ -66,6 +66,36 @@ describe("the merged concern grow honours the global node budget", () => {
     } finally { delete process.env.SEAM_CENTERS_MERGED; }
   });
 
+  // THE OTHER HALF OF THE CONTRACT. The budget guard above is right for a DETECTED covering set — nobody
+  // named those, so bounding the K-way blow-up is the whole point. It is wrong for a center the caller PINNED
+  // with `--center`: measured on keycloak, `--center "realms.ts#Realms,RealmAdminResource.java#updateRealm"`
+  // grew BOTH centers fine (1062 and 1228 nodes) and then dropped the second at the merge, because center 1
+  // alone was already past the budget. The answer came back with no trace of a symbol the caller had named,
+  // and the render cited `updateRealm` zero times.
+  //
+  // Scaling the budget does NOT fix this — 1062 is past any scaled 500 — because one number was doing two
+  // jobs: the per-grow runaway backstop AND the merge guard. `mergeAllCenters` separates them.
+  test("a PINNED center is merged even when an earlier one already met the budget", async () => {
+    if (!available()) return;
+    process.env.SEAM_CENTERS_MERGED = "1";
+    try {
+      const centers = [
+        { file: "src/a/mechA.ts", symbol: "mechA" },
+        { file: "src/b/mechB.ts", symbol: "mechB" },
+      ];
+      const opts = { ctx: new EngineCtx(), dataCoupling: false, dataCouplingLlm: false, structuralGrow: true, maxNodes: 8, maxSteps: 12 };
+      const one = (await grow_centers_scoped(repo, centers.slice(0, 1), { ...opts, ctx: new EngineCtx() } as any))[0]?.[0];
+      const both = (await grow_centers_scoped(repo, centers, { ...opts, ctx: new EngineCtx(), mergeAllCenters: true } as any))[0]?.[0];
+      expect(one?.nodes?.length ?? 0).toBeGreaterThan(0);
+      // the second mechanism's closure is ADDED, not skipped — the merged answer is strictly bigger
+      expect(both?.nodes?.length ?? 0).toBeGreaterThan(one?.nodes?.length ?? 0);
+      // and the pinned symbol is actually IN it. Size alone would pass on any extra nodes; the failure this
+      // pins is a NAMED center missing, so assert the name.
+      const labels = new Set((both?.nodes ?? []).map((n: any) => n.symbol ?? n.label));
+      expect(labels.has("mechB")).toBe(true);
+    } finally { delete process.env.SEAM_CENTERS_MERGED; }
+  });
+
   test("a single center is unaffected — the budget was already honoured there", async () => {
     if (!available()) return;
     process.env.SEAM_CENTERS_MERGED = "1";

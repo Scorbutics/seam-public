@@ -632,7 +632,13 @@ async function runCodebase(a: Args): Promise<number> {
         const anchors = anchorSet ?? [{ name: a.symbol!, file: a.anchorFile!, kind: fileAnchor ? "module" : "function" }];
         const ctx = new EngineCtx();
         _growCtx = ctx;
-        const maxNodes = growNodes;   // the per-anchor budget, reused as the GLOBAL merged budget (--max-nodes)
+        // `max_nodes` IS A PER-GROW BACKSTOP, NOT A MERGE GUARD — and the merge loop below used it as both,
+        // so a center the caller PINNED was dropped because an EARLIER center had already spent the budget.
+        // Scaling this number does NOT fix that (keycloak's first center is 1062 nodes on its own, past any
+        // scaled 500), so the two jobs are separated instead: the budget still bounds each grow, and
+        // `mergeAllCenters` says a pinned center is merged whatever the running total.
+        const maxNodes = growNodes;
+        const mergeAllCenters = centerPicked;
         // CONCERN detection-only first grow (auto-anchor legacy): coupling discarded on re-anchor → skip it.
         const dcForCenters = a.concern && !centerPicked ? false : a.dataCoupling;
         const mergeOne = (r: [any, any[]] | null, name: string): void => {
@@ -670,10 +676,31 @@ async function runCodebase(a: Args): Promise<number> {
           // center-first (centerPicked): the mechanisms are CONFIRMED → grow them STRUCTURALLY (intent-free →
           // the answer cache reuses across intent rewordings that pick the same centers). A plain multi-anchor
           // covering set (non-concern) keeps the env-driven default.
-          const results = await orch.grow_centers_scoped(a.repo, centers, gOptsFor(ctx, { dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined }));
+          // `maxNodes` OVERRIDDEN, or the fix above only reaches the TypeScript merge loop. The merged path
+          // (SEAM_CENTERS_MERGED, the CLI's default) merges inside the core under the budget it is HANDED, so
+          // the un-scaled 500 would drop the later centers there exactly as the loop below used to.
+          const results = await orch.grow_centers_scoped(a.repo, centers, gOptsFor(ctx, { mergeAllCenters, dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined }));
           for (let i = 0; i < results.length; i++) {
-            if (data && (data.nodes?.length ?? 0) >= maxNodes) { warnDegraded(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)`); break; }
+            if (!mergeAllCenters && data && (data.nodes?.length ?? 0) >= maxNodes) {
+              warnDegraded(`[multi-anchor] node budget ${maxNodes} reached — dropping ${results.length - i} pinned center(s): `
+                + `${centers.slice(i).map((c) => c.symbol || c.file).join(", ")} (raise --max-nodes to include them)`);
+              break;
+            }
             mergeOne(results[i], centers[i].name);
+          }
+          // A PINNED CENTER THAT IS NOT IN THE ANSWER IS THE WORST FAILURE THIS PATH HAS, and it was silent.
+          // The loop above only warns about centers IT skipped; the merged path (the default) returns ONE
+          // result, so a center dropped inside the core never reached that check at all — keycloak answered a
+          // two-center `--center` with no trace of the second and said nothing. Verify against the merged
+          // graph instead of against the loop's bookkeeping, so it holds however the centers were grown.
+          if (centerPicked && data) {
+            const present = new Set<string>((data.nodes ?? []).map((n: any) => `${n.file}#${n.label ?? n.symbol ?? ""}`));
+            const files = new Set<string>((data.nodes ?? []).map((n: any) => String(n.file ?? "")));
+            const missing = centers.filter((c) => (c.symbol ? !present.has(`${c.file}#${c.symbol}`) : !files.has(c.file)));
+            if (missing.length)
+              warnDegraded(`[multi-anchor] ${missing.length} of ${centers.length} pinned center(s) are NOT in the answer: `
+                + `${missing.map((c) => `${c.file}${c.symbol ? "#" + c.symbol : ""}`).join(", ")}\n`
+                + `       the grow reached them but the merge dropped them — raise --max-nodes, or grow them separately.`);
           }
         } else {
           const anc = anchors[0];

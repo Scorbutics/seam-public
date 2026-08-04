@@ -60,6 +60,17 @@ pub struct WaveOpts {
     /// Footprint exclusion — `--exclude` dirs and whether test files are kept. TS `excludeDirs` / `includeTests`.
     pub exclude_dirs: Vec<String>,
     pub include_tests: bool,
+    /// MERGE EVERY CENTER, whatever the running node total. `max_nodes` is a PER-GROW runaway backstop, and
+    /// `grow_centers` also used it as the guard on its merge loop — one number doing two jobs. The result: a
+    /// center the caller PINNED by name was dropped because an EARLIER center had already spent the budget.
+    /// Measured on keycloak — `--center "realms.ts#Realms,RealmAdminResource.java#updateRealm"`: center 1
+    /// grows to 1062 nodes, so at any budget below that the second center is never merged and the answer
+    /// contains no trace of a symbol the caller named. Scaling the budget does not fix it (1062 > 2x500);
+    /// only separating the two jobs does.
+    ///
+    /// Set for EXPLICIT `--center` pins only. A DETECTED covering set keeps the guard: nobody asked for those
+    /// by name, and that is where the K-way blow-up it protects against is real.
+    pub merge_all_centers: bool,
     /// The INTENT text. None/empty (or `structural_grow`) → no field, and every intent-shaped decision below
     /// degrades to its structural form. TS `opts.intent`.
     pub intent: Option<String>,
@@ -102,6 +113,7 @@ impl Default for WaveOpts {
             coupling_hub_contain: true,
             exclude_dirs: Vec::new(),
             include_tests: false,
+            merge_all_centers: false,
             intent: None,
             structural_grow: false,
             border_tol: None,
@@ -1002,7 +1014,8 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
 
     for (ci, c) in centers.iter().enumerate() {
         if let Some(d) = &data {
-            if d.nodes.len() >= opts.max_nodes {
+            // A PINNED center is never traded against the budget — see `merge_all_centers`.
+            if !opts.merge_all_centers && d.nodes.len() >= opts.max_nodes {
                 break; // global budget reached — skip the remaining mechanism(s)
             }
         }

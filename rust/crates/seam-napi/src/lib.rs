@@ -543,6 +543,8 @@ pub struct GrowOptsDto {
     pub coupling_hub_contain: Option<bool>,
     pub exclude_dirs: Option<Vec<String>>,
     pub include_tests: Option<bool>,
+    /// Merge EVERY pinned center regardless of the running node total — see `WaveOpts::merge_all_centers`.
+    pub merge_all_centers: Option<bool>,
     /// The INTENT-SHAPED knobs. Omitted (the structural caller) ⇒ no field ⇒ the wave is bit-for-bit the
     /// structural grow it was before the field existed — see WaveOpts.
     pub intent: Option<String>,
@@ -574,6 +576,7 @@ impl GrowOptsDto {
             coupling_hub_contain: self.coupling_hub_contain.unwrap_or(d.coupling_hub_contain),
             exclude_dirs: self.exclude_dirs.unwrap_or(d.exclude_dirs),
             include_tests: self.include_tests.unwrap_or(d.include_tests),
+            merge_all_centers: self.merge_all_centers.unwrap_or(d.merge_all_centers),
             intent: self.intent.filter(|s| !s.is_empty()),
             structural_grow: self.structural_grow.unwrap_or(d.structural_grow),
             border_tol: self.border_tol.map(|v| v as f32),
@@ -2970,6 +2973,42 @@ pub fn locate_names(repo: String, names: String, limit: Option<u32>, in_prefix: 
 /// One requested name and everything found for it. Grouped rather than flattened so a caller can tell WHICH of
 /// its names came back empty — a flat list cannot say that, and "which of these does not exist" is precisely
 /// the question a batch lookup is asked.
+/// One route and both ends of its crossing — the server side and the client side of the same HTTP hop.
+#[napi(object)]
+pub struct RouteSideDto {
+    pub file: String,
+    pub line: u32,
+}
+
+#[napi(object)]
+pub struct RouteEntryDto {
+    pub route: String,
+    /// handlers that SERVE it (`route-serve`)
+    pub servers: Vec<RouteSideDto>,
+    /// call sites that FETCH it (`route-fetch`)
+    pub clients: Vec<RouteSideDto>,
+}
+
+/// locateRoutes — resolve a ROUTE address against the coupling floor's grounded `http-route` keys.
+///
+/// The flow question an agent actually holds ("how does the admin UI update a realm") names an HTTP surface,
+/// not a symbol, and until now Seam had no address for one: `--locate "/admin/realms"` fell through to a PATH
+/// match and confidently returned `realms.ts#Realms`. This is a lookup over the SAME floor index the crossing
+/// edges are built from, so its answer cannot disagree with the map's.
+#[napi]
+pub fn locate_routes(repo: String, pattern: String, limit: Option<u32>) -> Vec<RouteEntryDto> {
+    let side = |a: &seam_couple::Access| RouteSideDto { file: a.file.clone(), line: (a.line as u32) + 1 };
+    seam_shapes::route::locate_routes(&repo, &pattern)
+        .into_iter()
+        .take(limit.unwrap_or(25) as usize)
+        .map(|r| RouteEntryDto {
+            route: r.route,
+            servers: r.servers.iter().map(side).collect(),
+            clients: r.clients.iter().map(side).collect(),
+        })
+        .collect()
+}
+
 #[napi(object)]
 pub struct LocateGroupDto {
     pub name: String,
@@ -3545,13 +3584,25 @@ pub fn grow_band_tiers(relevance: Vec<Option<f64>>, tiers: Vec<Option<String>>) 
     serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
 
-/// growMarkSpineMembers — flag the above-mean, capped members of ONE seam as its intent spine.
-/// Same shape as `grow_band_tiers`: doubles in, flags out, no value echoed back.
+/// growMarkSpineMembers — flag the capped, nearest members of ONE seam as its intent spine.
+/// Same shape as `grow_band_tiers`: values in, flags out, no value echoed back.
+///
+/// `hops` is the HOP DISTANCE from the anchor per member and is what decides the spine now (relevance only
+/// settles ties inside one band — see `mark_spine_members`). It is parallel to `relevance` and may be shorter
+/// or absent: a structural grow computes no distances, and that is exactly what selects the legacy
+/// relevance-above-mean rule. A SHORT array is padded with `None` rather than truncating the members, so a
+/// caller that sends only relevance keeps the old behaviour instead of silently losing its tail.
 #[napi]
-pub fn grow_mark_spine_members(relevance: Vec<Option<f64>>) -> napi::Result<String> {
+pub fn grow_mark_spine_members(relevance: Vec<Option<f64>>, hops: Option<Vec<Option<i64>>>) -> napi::Result<String> {
+    let hops = hops.unwrap_or_default();
     let mut hunks: Vec<seam_grow::intent_rank::Member> = relevance
         .into_iter()
-        .map(|relevance| seam_grow::intent_rank::Member { relevance, spine: None })
+        .enumerate()
+        .map(|(i, relevance)| seam_grow::intent_rank::Member {
+            relevance,
+            spine: None,
+            hops: hops.get(i).copied().flatten(),
+        })
         .collect();
     seam_grow::intent_rank::mark_spine_members(&mut hunks);
     let out: Vec<Option<bool>> = hunks.into_iter().map(|h| h.spine).collect();

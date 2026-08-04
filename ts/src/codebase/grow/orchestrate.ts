@@ -415,6 +415,9 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
     const g: any = rc.loadAddon()?.growCenters(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
       opts.dataCoupling !== false,
       { maxSteps: opts.maxSteps ?? 12, maxNodes: opts.maxNodes ?? 80,
+        // PINNED centers are merged whatever the running node total. Without this the core's merge loop
+        // applies `maxNodes` as a global guard and silently drops every center after the first big one.
+        mergeAllCenters: (opts as any).mergeAllCenters ?? false,
         excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow });
     if (g) {
       // THE PER-CENTER WARM VERDICTS. Emitted here, not in the core: a caller asserting on this contract
