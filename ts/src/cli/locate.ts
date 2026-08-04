@@ -8,22 +8,117 @@
 // caller, and the engine's text-matcher is measurably worse at it — SKILL.md tells an agent to always pass
 // `--center` for exactly that reason. So when a name has several definitions this prints ALL of them with what
 // distinguishes them and lets the caller decide. It resolves an address; it does not form an opinion.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Args } from "./args.js";
 import { loadAddon } from "../codebase/rust_core.js";
 import { err } from "./util.js";
 import { at } from "../codebase/render/shapes.js";
 
-// ONE row renderer for both the single-name and batched forms — two copies is how they would come to disagree
-// about what a definition looks like.
-const row = (r: any): string => {
-  const sig = r.signature ? `${r.signature}` : "";
+// THE DECLARATION, NOT THE ANCHOR LINE.
+//
+// `d.signature` is the text at the def's own line, and for an annotated/decorated member that line is the
+// ANNOTATION. Measured on keycloak: `--locate updateRealm` returned 7 definitions of which FOUR showed only
+// `@PUT`, `@Override`, `@PUT`, `@Test` — nothing a caller can act on. And `--locate` is not a side road: across
+// six benchmark runs the seam arm made 48 Seam calls and 35 of them were `--locate` (73%), each one followed by
+// a `Read` of the file it had just named. A locate that shows `@PUT` has resolved an address and bought nothing.
+//
+// So: print from the def's line THROUGH the first line that actually declares something, capped. The annotation
+// is kept — `@PUT` is real information about a route — it just stops being the whole answer.
+const _fileCache = new Map<string, string[] | null>();
+const _linesOf = (repo: string, file: string): string[] | null => {
+  const key = `${repo}\u0000${file}`;
+  const hit = _fileCache.get(key);
+  if (hit !== undefined) return hit;
+  let v: string[] | null = null;
+  try { v = readFileSync(join(repo, file), "utf-8").split("\n"); } catch { v = null; }
+  _fileCache.set(key, v);
+  return v;
+};
+/// A line that only decorates: an annotation/decorator, a comment, or blank. Language-agnostic on purpose —
+/// `@Foo` covers Java/Kotlin/TS-decorators/Python, and the comment forms cover the rest. It never SKIPS such a
+/// line, it only keeps looking for the declaration underneath.
+const _isDecoration = (l: string): boolean => {
+  const t = l.trim();
+  return t === "" || /^@[\w.]+/.test(t) || t.startsWith("//") || t.startsWith("#") || t.startsWith("*")
+    || t.startsWith("/*") || t.startsWith("<!--");
+};
+/// How far below the def's line to look for the declaration. Keycloak's `updateRealm` carries a 15-line
+/// OpenAPI annotation block, so a small window returns the annotation and nothing else — the exact failure
+/// this function exists to remove.
+const _MAX_SCAN = 60;
+
+/// The def's line plus the line that actually DECLARES it, with the annotation block between them elided.
+///
+/// Depth-tracked, because an annotation's arguments span lines and its continuations are not decorations by
+/// any textual test: `@Operation(summary = "...",` / `description = "...")` — the second line looks like code.
+/// Only a line at bracket depth ZERO can be the declaration, which is what makes this work on a 15-line
+/// `@APIResponses(value = { ... })` block without a Java parser.
+function declarationLines(repo: string, file: string, line: number, signature: string): string[] {
+  const src = _linesOf(repo, file);
+  if (!src || !line || line < 1 || line > src.length) return signature ? [signature] : [];
+  const first = src[line - 1];
+  let depth = 0, decl: string | null = null, skipped = 0;
+  for (let i = line - 1; i < Math.min(line - 1 + _MAX_SCAN, src.length); i++) {
+    const t = src[i];
+    if (depth === 0 && !_isDecoration(t)) { decl = t; break; }
+    if (i > line - 1) skipped++;
+    depth += (t.match(/[([{]/g) ?? []).length - (t.match(/[)\]}]/g) ?? []).length;
+    if (depth < 0) depth = 0;
+  }
+  // No declaration within the window (or the def's line already IS one) → whatever we have, no elision.
+  if (decl === null) return signature ? [signature] : [_trimEnd(first)];
+  if (decl === first) return [_trimEnd(first)];
+  const out = [first];
+  // Say that something was skipped rather than silently splicing two non-adjacent lines together — a reader
+  // must not think `@PUT` and the declaration are consecutive when 15 lines of annotation sit between them.
+  if (skipped > 0) out.push(`  … ${skipped} line(s) of annotation`);
+  out.push(decl);
+  const real = [first, decl];
+  const indents = real.filter((l) => l.trim()).map((l) => (l.match(/^[ \t]*/) as RegExpMatchArray)[0].length);
+  const strip = indents.length ? Math.min(...indents) : 0;
+  return out.map((l, k) => (k === 1 && skipped > 0 ? l : (l.trim() ? l.slice(strip) : "")).replace(/\s+$/, ""));
+}
+const _trimEnd = (l: string) => l.replace(/\s+$/, "").replace(/^[ \t]+/, "");
+
+const row = (r: any, repo = "."): string => {
+  const decl = declarationLines(repo, r.file, r.line, r.signature ?? "");
   const encl = r.enclosing ? `  in ${r.enclosing}` : "";
   // `signature` is ALREADY the full declaration text, so prefixing the symbol printed `cnexport function cn(`.
   // `file:line#symbol` — the LINE is what makes this a jump rather than a search. Without it a caller who has
   // just been told where a symbol lives still has to open the file and look, which is exactly what a benchmark
   // agent did: seven paging reads of a 1,449-line Java file after Seam had named it.
-  return `- ${at(r.file, r.line)}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n` + (sig ? `    ${sig}\n` : "");
+  return `- ${at(r.file, r.line)}#${r.symbol}   [${r.kind}${r.isTest ? ", TEST" : ""}]${encl}\n`
+    + decl.map((l) => `    ${l}\n`).join("");
 };
+
+// ── ROUTE ADDRESSING ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// A flow question names an HTTP SURFACE, not a symbol: "how does the admin UI read and update a realm" is
+// addressed by `/admin/realms`, and until now `--locate "/admin/realms"` fell through to a PATH match and
+// confidently answered `realms.ts#Realms` — the wrong end of the flow, stated as fact.
+//
+// MEASURED (bench/grep-vs-seam, keycloak, 2026-08-04): of 20 tool calls in one seam-arm run, SIXTEEN were the
+// agent deriving by hand which Java class serves `PUT /admin/realms/{realm}` — sed on RealmsResource, grep on
+// AdminRoot, three paging Reads of RealmAdminResource, three of RealmsAdminResource. The case's own ground
+// truth calls that hop "not symbol-resolvable". It is resolved: the coupling floor grounds every `http-route`
+// key with BOTH sides, repo-wide and cached. The data existed; it had no address. This gives it one.
+const routeRows = (entries: any[]): string => {
+  let out = "";
+  for (const e of entries) {
+    out += `- ${e.route}\n`;
+    // SERVER FIRST. The question that sends an agent here is almost always "who handles this?" — the client
+    // side it usually already has in hand (that is where it read the URL).
+    for (const s of e.servers) out += `    serves   ${at(s.file, s.line)}\n`;
+    for (const c of e.clients) out += `    fetches  ${at(c.file, c.line)}\n`;
+    if (!e.servers.length) out += `    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)\n`;
+    if (!e.clients.length) out += `    (no client side resolved in this repo — an endpoint nothing here calls)\n`;
+  }
+  return out;
+};
+
+/// A route-shaped address: a path, not an identifier. `/admin/realms`, `api/v2/users`, `/users/{id}`.
+const looksLikeRoute = (n: string): boolean => n.startsWith("/") || /^[\w-]+(\/[\w{}*:-]+){1,}$/.test(n);
 
 export async function runLocate(a: Args): Promise<number> {
   const name = (a.locate ?? "").trim();
@@ -55,11 +150,38 @@ export async function runLocate(a: Args): Promise<number> {
       }
       process.stdout.write(`## ${g.name} — ${g.rows.length} definition(s)`
         + (g.total > g.rows.length ? ` of ${g.total} — narrow with \`--in <path-prefix>\`` : "") + `\n`);
-      for (const r of g.rows) process.stdout.write(row(r));
+      for (const r of g.rows) process.stdout.write(row(r, a.repo));
       process.stdout.write("\n");
     }
     process.stdout.write(`## Next\nPick one per name and pass it as --center "<file>#<symbol>".\n`);
     return 0;
+  }
+
+  // ROUTES FIRST for a route-shaped address. A leading `/` is never a symbol, so trying the symbol table
+  // first can only produce the module-path false positive this branch exists to remove.
+  if (looksLikeRoute(name)) {
+    const entries: any[] = addon.locateRoutes?.(a.repo, name, 200) ?? [];
+    if (entries.length) {
+      const crossing = entries.filter((e) => e.servers.length && e.clients.length);
+      // A CROSSING ANSWERS THE QUESTION; a one-sided route is context. `/admin/realms` matches 25 routes on
+      // keycloak and exactly ONE has both sides — printing all 25 equally buries the answer in its own
+      // context, which is the cost this command exists to remove. So: every crossing, then a short tail.
+      const _TAIL = 5;
+      const oneSided = entries.filter((e) => !(e.servers.length && e.clients.length));
+      const shown = [...crossing, ...oneSided.slice(0, _TAIL)];
+      process.stdout.write(`# Locate route: ${name}\n`
+        + `${entries.length} route(s) matched; ${crossing.length} with BOTH sides resolved — `
+        + `the crossing itself, from the coupling floor (no grow).\n\n`
+        + routeRows(shown)
+        + (oneSided.length > _TAIL
+          // NOT silently truncated: the cut is stated with the flag that widens it, as everywhere else here.
+          ? `\n(+${oneSided.length - _TAIL} more one-sided route(s) — narrow the path to see them)\n` : "")
+        + `\n## Next\n`
+        + `--center "<file>#<symbol>" on either side to trace it, or --scan --auto --center on the server\n`
+        + `handler to see what it reaches.\n`);
+      return 0;
+    }
+    // fall through: a slash-shaped name that matches no route may still be a file/module path
   }
 
   const groups: any[] = addon.locateNames(a.repo, name, 25, a.locateIn ?? undefined) ?? [];
@@ -105,7 +227,7 @@ export async function runLocate(a: Args): Promise<number> {
         + `Do NOT go looking for one — pick the member below that does the work, or anchor on a CALLER instead.\n`
       : "")
     + `\n`);
-  for (const r of rows) process.stdout.write(row(r));
+  for (const r of rows) process.stdout.write(row(r, a.repo));
   // The paste-ready line: this command exists to produce the argument of the NEXT one.
   process.stdout.write(`\n## Next\n`
     + (one

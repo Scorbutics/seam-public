@@ -301,3 +301,71 @@ pub fn resolve_name(repo: &str, name: &str) -> Option<ResolvedName> {
     let top = hits[0];
     Some(ResolvedName { symbol: top.name.clone(), file: top.file.clone(), kind: top.kind.clone(), ambiguous })
 }
+
+// ── ROUTE ADDRESSING ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// `--locate` resolves SYMBOLS, but a flow question is usually addressed by ROUTE: "how does the admin UI read
+// and update a realm" names an HTTP surface, not a symbol. Measured on keycloak (bench/grep-vs-seam, 2026-08-04):
+// of 20 tool calls in one seam-arm run, SIXTEEN were the agent hand-deriving which Java class serves
+// `PUT /admin/realms/{realm}` — sed on RealmsResource, grep on AdminRoot, three paging Reads of
+// RealmAdminResource, three of RealmsAdminResource. The ground truth calls that hop "not symbol-resolvable".
+//
+// It is resolved. The coupling floor already grounds every `http-route` key with its two sides, repo-wide and
+// cached: PRODUCERS are the server handlers (`route-serve`), CONSUMERS the clients that fetch it
+// (`route-fetch`). One grow carries 322 of them on keycloak. The data was there; it had no address.
+//
+// So this is a LOOKUP, not a new analysis — no LLM, no grow, no guess. It reads the same floor index the
+// crossing edges are built from, which is what makes its answer agree with the map's by construction.
+
+/// One route and both ends of its crossing.
+// No `Serialize` derive: this crate does not depend on serde, and the napi layer maps it to its own
+// DTO anyway — one wire shape, defined where the wire is.
+#[derive(Debug, Clone)]
+pub struct RouteEntry {
+    pub route: String,
+    /// Handlers that SERVE it (`route-serve`) — the server side of the hop.
+    pub servers: Vec<seam_couple::Access>,
+    /// Call sites that FETCH it (`route-fetch`) — the client side.
+    pub clients: Vec<seam_couple::Access>,
+}
+
+/// Routes whose path matches `pattern`, most-specific first.
+///
+/// MATCHING IS SUBSTRING ON THE NORMALISED PATH, deliberately: a caller who knows the surface writes
+/// `/admin/realms`, and the stored key may be `/admin/realms/*` or `/*/admin/realms/*` depending on which side
+/// declared it and how the sibling-prefix composition resolved. Anchoring the match would answer "not found"
+/// for a route that exists, which is the one failure `--locate` must not have (locate_recall.test.ts).
+pub fn locate_routes(repo: &str, pattern: &str) -> Vec<RouteEntry> {
+    let idx = seam_couple::floor_indices(repo);
+    let needle = crate::route::normalise_for_match(pattern);
+    let mut out: Vec<RouteEntry> = Vec::new();
+    for (key, sides) in idx.floor_base.iter() {
+        let Some(value) = key.strip_prefix("http-route ") else { continue };
+        if !needle.is_empty() && !crate::route::normalise_for_match(value).contains(&needle) {
+            continue;
+        }
+        out.push(RouteEntry {
+            route: value.to_string(),
+            servers: sides.producers.clone(),
+            clients: sides.consumers.clone(),
+        });
+    }
+    // A route with BOTH sides answers the question ("who serves what this client calls"); a one-sided route is
+    // still real (an unused endpoint, a call to another service) and is kept, just after them.
+    out.sort_by(|a, b| {
+        let both = |r: &RouteEntry| (!r.servers.is_empty() && !r.clients.is_empty()) as u8;
+        both(b).cmp(&both(a))
+            .then_with(|| b.route.matches('/').count().cmp(&a.route.matches('/').count()))
+            .then_with(|| crate::collate::locale_compare(&a.route, &b.route))
+    });
+    out
+}
+
+/// Lowercased, wildcard-free, trailing-slash-free — so `/admin/realms`, `/admin/realms/`, `/admin/realms/*`
+/// and `/*/admin/realms/{realm}` all compare equal on their shared prefix.
+pub fn normalise_for_match(p: &str) -> String {
+    let mut s = p.to_lowercase();
+    s = s.replace("{*}", "").replace('*', "");
+    while s.contains("//") { s = s.replace("//", "/"); }
+    s.trim_end_matches('/').to_string()
+}

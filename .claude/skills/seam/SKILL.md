@@ -271,9 +271,25 @@ step, not an option:
    seam --repo <repo> --locate "Realms,updateRealm,agent.ts" # SEVERAL at once — one call, one block per name
    seam --repo <repo> --locate getRealm --in services/src/   # narrow when it says the list was cut
 
-  It takes a SYMBOL name, a FILE name, or a DIRECTORY/module name, searches the whole repo, and prints every
-  definition with its kind and signature — forming no opinion about which you want. That output IS your
-  `--center`. **Do NOT use `find`, `ls` or `grep` to hunt for the anchor.** Measured 2026-07-31
+  It takes a SYMBOL name, a FILE name, a DIRECTORY/module name, **or an HTTP ROUTE**, searches the whole repo,
+  and prints every definition with its kind and signature — forming no opinion about which you want. That
+  output IS your `--center`.
+
+      seam --repo <repo> --locate "/admin/realms"             # a ROUTE, not a symbol
+
+  **A CROSS-STACK QUESTION IS ADDRESSED BY ROUTE, NOT BY SYMBOL.** "How does the UI read and update a realm,
+  from the TS client to the Java server?" names an HTTP surface. Ask for it by path and you get BOTH ENDS of
+  the hop in one call — which file SERVES the route and which file FETCHES it:
+
+      - /admin/realms
+          serves   services/.../admin/AdminRoot.java:232
+          fetches  js/libs/keycloak-admin-client/src/resources/realms.ts:409
+
+  Do NOT try to derive that hop by hand. Measured 2026-08-04 (bench/grep-vs-seam, keycloak): an agent spent
+  **16 of its 20 tool calls** working out which Java class serves `PUT /admin/realms/{realm}` — sed on
+  RealmsResource, grep on AdminRoot, three paging Reads of RealmAdminResource, three of RealmsAdminResource.
+  The route lookup answers it in one call, from the resolved coupling floor. If a route shows only one side,
+  that side is the truth: the other end is genuinely not in this repo. **Do NOT use `find`, `ls` or `grep` to hunt for the anchor.** Measured 2026-07-31
   (bench/grep-vs-seam, cal-ab3/ab4): an agent following the old wording spent **10 of its 19-32 tool calls**
   on `find`/`ls` orientation — the single largest block in its budget, and more than twice what the actual
   analysis cost. `--locate` answers the same question in one call and ~0.8s on a 10k-file monorepo.
