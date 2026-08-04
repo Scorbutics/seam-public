@@ -80,6 +80,30 @@ pub fn star_reexports(text: &str) -> Vec<crate::types::StarReexport> {
 pub fn imports(text: &str) -> Vec<ImportRef> {
     let mut out = Vec::new();
     for m in IMPORT_RE.captures_iter(text) {
+        // THE DEFAULT BINDING — `import Resource from "./resource.js"`. Group 1 was captured and then
+        // DISCARDED: only the `{…}` list (group 2) was ever emitted, so a default import produced no
+        // ImportRef, no dep edge, and no reachable file. Every consumer of `imports()` inherited that hole.
+        //
+        // MEASURED (bench/grep-vs-seam, keycloak, 2026-08-04). `class Realms extends Resource` could not
+        // resolve its base, so the whole TypeScript half of a cross-stack flow was missing from the closure —
+        // `findOne`, `makeUpdateRequest` and `request`, three of the nine ground-truth symbols, with
+        // `agent.ts` (the last TS frame before the HTTP call) absent from the footprint entirely. Default
+        // exports are the norm in a TS client library, so this was not a corner: `import { Named }` resolved
+        // and `import Named` did not, in the same directory, with the same extension.
+        //
+        // NAME = THE LOCAL BINDING, not "default": code references the base as `Resource`, the target file
+        // declares `export default class Resource`, and every downstream resolver matches on the name a
+        // caller can actually write.
+        if let Some(dflt) = m.get(1) {
+            out.push(ImportRef {
+                name: dflt.as_str().to_string(),
+                local: dflt.as_str().to_string(),
+                line: line_at(text, m.get(0).unwrap().start()),
+                col: 0,
+                source: Some(m[3].to_string()),
+                reexport: false,
+            });
+        }
         if let Some(named) = m.get(2) {
             emit(text, named.as_str(), &m[3], m.get(0).unwrap().start(), false, &mut out);
         }
