@@ -253,6 +253,14 @@ static CALLABLE: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| {
     ["function_declaration", "function_definition", "method_definition", "method_declaration", "method", "constructor_declaration"].into_iter().collect()
 });
 static ARROW_HOLDERS: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| ["lexical_declaration", "variable_declaration"].into_iter().collect());
+/// Class PROPERTY nodes whose initializer may be a function. `public_field_definition` is TS; `field_definition`
+/// is plain JS; `property_declaration`/`field_declaration` cover the C-family grammars that name it that way.
+/// Nodes that can bind a NAME to an object literal: an object-literal member (`pair`) and the class/JS field
+/// forms. Kept apart from FIELD_HOLDERS because the value test differs — a function there, an object here.
+static OBJ_PROPERTY: Lazy<std::collections::HashSet<&'static str>> =
+    Lazy::new(|| ["pair", "public_field_definition", "field_definition", "property_declaration"].into_iter().collect());
+static FIELD_HOLDERS: Lazy<std::collections::HashSet<&'static str>> =
+    Lazy::new(|| ["public_field_definition", "field_definition", "property_declaration", "field_declaration"].into_iter().collect());
 static FN_VALUES: Lazy<std::collections::HashSet<&'static str>> = Lazy::new(|| ["arrow_function", "function", "function_expression"].into_iter().collect());
 static NAME_LEAVES: Lazy<std::collections::HashSet<&'static str>> =
     Lazy::new(|| ["identifier", "field_identifier", "qualified_identifier", "destructor_name", "operator_name", "type_identifier"].into_iter().collect());
@@ -297,6 +305,14 @@ fn sig_line(lines: &[&str], row: usize) -> String {
 }
 
 /// The tree-sitter def extractor for a parsed file. Port of `defs_in_file_treesitter` (None if no grammar).
+/// An object-literal member's KEY (`pair` uses the field `key`, not `name`); quotes stripped so
+/// `"select": {…}` and `select: {…}` yield the same def name.
+fn ts_pair_key(ctx: &Ctx, n: tree_sitter::Node) -> Option<String> {
+    let k = n.child_by_field_name("key")?;
+    let t = ctx.text(k).trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+    if t.is_empty() || !t.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '$') { None } else { Some(t) }
+}
+
 pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
     let grammar = grammar_for(file)?;
     let ctx = Ctx::parse(text, grammar)?;
@@ -342,6 +358,43 @@ pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
             if let Some(name) = field_name(ctx, n).or_else(|| declarator_name(ctx, n)) {
                 let dk = if enclosing.is_empty() { "function" } else { "method" };
                 out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
+            }
+        } else if OBJ_PROPERTY.contains(kind) {
+            // AN OBJECT-VALUED PROPERTY — `select: { … }` in a descriptor, `handlers = { … }`. The regex path
+            // indexed these as kind `property` and the tree-sitter path did not, so moving TS onto it would
+            // have SILENTLY dropped them. Descriptor objects are how route tables, config maps and handler
+            // registries are written, and the def table feeds the embedding field, where a named region is
+            // real signal — `locate_is_addressable.test.ts` pins that they are kept and labelled `property`,
+            // and it is what caught this.
+            let is_obj = n
+                .child_by_field_name("value")
+                .map(|v| v.kind().contains("object") && !FN_VALUES.contains(v.kind()))
+                .unwrap_or(false);
+            if is_obj {
+                if let Some(name) = field_name(ctx, n).or_else(|| ts_pair_key(ctx, n)) {
+                    out.push(Def { name, kind: "property".into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
+                }
+            }
+        } else if FIELD_HOLDERS.contains(kind) {
+            // A CLASS PROPERTY HOLDING A FUNCTION — `public makeUpdateRequest = <T,…>({…}) => {…}`. Not a
+            // `method_definition`, so CALLABLE misses it, and not a `lexical_declaration`, so ARROW_HOLDERS
+            // missed it too. It is how a TS class exposes a callable member, and the regex path could not see
+            // it either: `ARROW_RE` requires `const`/`let` and `METHOD_RE` requires `name(…)`.
+            //
+            // MEASURED (keycloak admin client). `--locate makeUpdateRequest` answered "No definition found …
+            // grep is the right next step" for a symbol declared at resource.ts:30 — a confident false
+            // negative, and the one failure `--locate` must not have. Only 5 such members exist in that
+            // library, but they are `makeRequest`/`makeUpdateRequest`, the delegation hub every one of ~40
+            // resource classes routes through: 5 invisible defs severed the whole library's call graph, and
+            // with it the TypeScript half of every cross-stack flow through it.
+            if let Some(v) = n.child_by_field_name("value") {
+                if FN_VALUES.contains(v.kind()) {
+                    if let Some(name) = field_name(ctx, n) {
+                        // a class property is only callable-as-a-member, so it is a `method` when enclosed
+                        let dk = if enclosing.is_empty() { "function" } else { "method" };
+                        out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
+                    }
+                }
             }
         } else if ARROW_HOLDERS.contains(kind) {
             for i in 0..n.named_child_count() {

@@ -62,8 +62,22 @@ impl LanguageProvider for TypeScriptProvider {
     fn name(&self) -> &'static str {
         "typescript"
     }
+    /// TS/JS is on the TREE-SITTER def path.
+    ///
+    /// It was on the regex one for speed — measured 0.10 ms/file against 0.79 for tree-sitter — and that
+    /// bought a def table which could not see two mainstream idioms: a class property holding a function
+    /// (`public makeUpdateRequest = <T,…>(…) => …`, missed by both ARROW_RE and METHOD_RE) and a method whose
+    /// parameter list does not close on its own line (`public request({`, missed by METHOD_RE's paren match).
+    /// On the keycloak admin client that hid `makeRequest`/`makeUpdateRequest` — the delegation hub every one
+    /// of ~40 resource classes routes through — and `agent.ts#request`, which issues every HTTP call. The
+    /// whole TypeScript half of a cross-stack flow was unreachable, and `--locate` answered a confident "No
+    /// definition found … grep is the right next step" for symbols that are plainly declared.
+    ///
+    /// A line-based regex will keep losing to TS syntax (generics, decorators, overloads, `accessor`), so the
+    /// cost is paid once rather than patched per idiom. The per-call cost is bounded by the `def-table-v1`
+    /// disk shard, which did not exist when the regex path was chosen.
     fn regex_defs_validated(&self) -> bool {
-        true
+        false
     }
     fn extensions(&self) -> &'static [&'static str] {
         &[".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
