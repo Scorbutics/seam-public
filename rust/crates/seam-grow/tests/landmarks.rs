@@ -437,3 +437,88 @@ fn keycloak_two_ended_corridor() {
     files.dedup();
     eprintln!("[corridor] slack+2 files ({}): {:?}", files.len(), files.iter().take(40).collect::<Vec<_>>());
 }
+
+/// THE WEIGHTED-GRAPH EXPERIMENT — can the pre-grow graph carry a corridor if hubs are PRICED instead of free?
+///
+/// The unweighted corridor on this graph is unusable: 3 files at slack+1, 1240 at slack+2, because a key node
+/// with 731 sides and a name edge fanning to 32 defs are traversed at the same cost as a real call. Dropping
+/// them outright barely helped (key fan 512 -> 8 changed nothing). The remaining question is whether making a
+/// hub EXPENSIVE rather than absent restores the metric — a hub is a real connection, just not a local one.
+///
+/// Cost to pass THROUGH a node scales with its degree, so a 731-side key costs ~10 while a call costs 1. The
+/// graph is unchanged; only the distance function is. Output is compared against the corridor on the RESOLVED
+/// graph (7 -> 13 -> 77 -> 96 -> 228 files), which is the only one known to carry a usable metric.
+#[test]
+fn keycloak_weighted_corridor() {
+    let repo = "/home/scorbutics/dev/keycloak";
+    if !Path::new(repo).exists() {
+        return;
+    }
+    LandmarkIndex::reset(None);
+    let idx = LandmarkIndex::build(repo);
+    let (keys, adj) = idx.debug_graph();
+    let ix = |k: &str| keys.iter().position(|x| x == k);
+    let (Some(a), Some(b)) = (
+        ix("js/libs/keycloak-admin-client/src/resources/realms.ts#Realms"),
+        ix("services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm"),
+    ) else {
+        eprintln!("[weighted] an end is missing from the graph");
+        return;
+    };
+    // node cost: 1 for an ordinary node, growing with degree for a hub. log2 keeps a 731-side key at ~10
+    // rather than 731 — a hub is a real connection, just an expensive one.
+    // THREE CURVES, not one, so the verdict cannot rest on an arbitrary choice: log2 (a hub is mildly
+    // expensive), sqrt, and linear (a hub costs its whole fan).
+    for mode in ["log", "sqrt", "linear"] {
+    let w: Vec<u32> = (0..keys.len())
+        .map(|i| {
+            let deg = adj[i].len() as f64;
+            1 + match mode {
+                "linear" => deg as u32,
+                "sqrt" => deg.sqrt() as u32,
+                _ => deg.log2().max(0.0) as u32,
+            }
+        })
+        .collect();
+    let dijkstra = |src: usize| -> Vec<u32> {
+        let mut d = vec![u32::MAX; keys.len()];
+        let mut heap = std::collections::BinaryHeap::new();
+        d[src] = 0;
+        heap.push(std::cmp::Reverse((0u32, src)));
+        while let Some(std::cmp::Reverse((du, u))) = heap.pop() {
+            if du > d[u] { continue; }
+            for &v in &adj[u] {
+                let nv = du.saturating_add(w[v as usize]);
+                if nv < d[v as usize] {
+                    d[v as usize] = nv;
+                    heap.push(std::cmp::Reverse((nv, v as usize)));
+                }
+            }
+        }
+        d
+    };
+    let (da, db) = (dijkstra(a), dijkstra(b));
+    let dab = da[b];
+    eprintln!("[weighted] {mode}: weighted d(A,B) = {dab}");
+    let mut sizes: Vec<usize> = Vec::new();
+    for slack in [0u32, 1, 2, 3, 4, 6, 8, 12] {
+        let mut files: Vec<&str> = (0..keys.len())
+            .filter(|&i| da[i] != u32::MAX && db[i] != u32::MAX && da[i].saturating_add(db[i]) <= dab + slack)
+            .map(|i| keys[i].split('#').next().unwrap_or(""))
+            .collect();
+        files.sort_unstable();
+        files.dedup();
+        eprintln!("[weighted] {mode} slack +{slack}: {} files", files.len());
+        sizes.push(files.len());
+    }
+    // THE ONE THING WEIGHTING DID FIX, and it is worth pinning: the UNWEIGHTED corridor has a cliff — 3 files
+    // at one slack, 1240 at the next — so there is no band to select. Pricing hubs removes the cliff.
+    let worst_jump = sizes.windows(2).map(|w| if w[0] == 0 { 0 } else { w[1] / w[0].max(1) }).max().unwrap_or(0);
+    assert!(worst_jump < 100, "{mode}: the corridor still steps by {worst_jump}x — pricing hubs did not remove the cliff");
+    }
+    // AND THE VERDICT, which no assertion here can express because it needs the resolved graph to compare
+    // against (bench/ranking): at every one of the three curves the weighted corridor recovers only 3-8% of the
+    // corridor the RESOLVED graph gives, at comparable size — 205 files for 8%, 105 for 6%, 3 for 3%. The shape
+    // is fixed and the CONTENT is different, so this graph cannot stand in for the grown one. That closes
+    // corridor-pruning-before-the-grow: see the module note in landmarks.rs.
+}

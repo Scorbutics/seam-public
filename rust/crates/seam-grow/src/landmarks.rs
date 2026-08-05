@@ -50,6 +50,33 @@
 //! a real grow's emitted edges instead of asserting it. If that test ever reports violations, the cure is to
 //! add the missing edge kind here, never to relax the check.
 //!
+//! # CORRIDOR-PRUNING BEFORE THE GROW IS CLOSED — do not reopen it on this graph
+//!
+//! The whole point of a heuristic here was to prune the flood by aiming it. Four measurements say this graph
+//! cannot support that, whatever the algorithm:
+//!
+//!   1. ALT `h` is INERT — 63% of the 83,301-node main component sits at exactly distance 3 from a landmark,
+//!      so |d(L,goal) - d(L,n)| = 0 nearly everywhere and keycloak's two-center grow is byte-identical with
+//!      the ordering on or off. More landmarks do not help (K=8..128 moves mean h/d* 0.418 -> 0.585, and the
+//!      grow output not at all).
+//!   2. An EXACT two-ended corridor needs no heuristic and fails the same way: 3 files at slack+1, 1240 at
+//!      slack+2, with `saml/config/Key.java` and `common/util/Time.java` inside it. There is no band to pick.
+//!   3. Dropping the hubs barely moves it (key fan 512 -> 8: nothing; name fan 32 -> 2: d(A,B) 4 -> 6, against
+//!      the resolved graph's 7).
+//!   4. PRICING the hubs instead — Dijkstra with node cost rising in degree — fixes the SHAPE (a smooth
+//!      2/5/51/68/205 instead of the cliff) and still points somewhere else: against the corridor the RESOLVED
+//!      graph gives, agreement is 8% (log2), 6% (sqrt), 3% (linear) at comparable size. Three curves, same
+//!      verdict — the content is different, not merely coarser.
+//!
+//! The resolved graph the grow itself produces DOES carry a corridor (d=7; 7/13/77/96/228 files, the 96-file
+//! band holding 48.9% of read demand against 50.0% for all 611). It is the only one that does, and it does not
+//! exist until the grow has run. So the corridor is available only as an analysis of an answer, never as a way
+//! to have avoided computing one.
+//!
+//! What DID move the metric, over the same period: naming better ENDS. `--to-kind route` plus mount-parent
+//! derivation took content coverage 47.2% -> 53.3% from a single named center, with no change to the search.
+//! Center selection dominates traversal here; spend effort there first.
+//!
 //! A file-level projection was measured as the cheap alternative and rejected: admissible (0 violations in 1788
 //! nodes) but worthless as guidance — it reports d=1 where the truth is 7, because a single route edge crosses
 //! TS->Java in one file hop and every intra-file symbol chain collapses to zero.
