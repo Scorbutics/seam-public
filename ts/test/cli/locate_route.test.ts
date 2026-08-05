@@ -34,6 +34,10 @@ beforeAll(() => {
     "  async list() {",
     "    return fetch('/api/orders');",
     "  }",
+    "  async drafts() {",
+    // HYPHENATED and matching no symbol or file — the `ui-ext` shape that sent an agent hunting
+    "    return fetch('/api/order-drafts');",
+    "  }",
     "}",
   ].join("\n"));
   // the SERVER side — a Java resource that serves it
@@ -71,6 +75,22 @@ describe("--locate resolves an HTTP route to both ends of the hop", () => {
     expect(out).toContain("# Locate: Orders");
     expect(out).toContain("client/src/orders.ts");
     expect(out).not.toContain("# Locate route:");
+  });
+
+  test("a route FRAGMENT with no slash falls back to the route table, not to \"go grep\"", () => {
+    // `looksLikeRoute` only fires on a path shape, so a fragment reaches the symbol lookup and comes back
+    // empty. Measured: an agent read a fragment out of the source, asked Seam, was told "grep is the right
+    // next step", and spent SIX calls chasing a class that does not exist — while the route table held it.
+    const out = run("order-drafts");
+    expect(out).not.toContain("grep is the right next step");
+    expect(out).toContain("ROUTE(s)");
+    expect(out).toContain("/api/order-drafts");
+  });
+
+  test("a name that is neither symbol nor route still says so honestly", () => {
+    const out = run("definitelyNotHere");
+    expect(out).toContain("No definition of");
+    expect(out).toContain("No route of that name either");
   });
 
   test("a slash-shaped name that is NOT a route still falls through to the file/module lookup", () => {

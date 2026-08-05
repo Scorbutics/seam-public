@@ -198,9 +198,26 @@ export async function runLocate(a: Args): Promise<number> {
 
 
   if (!rows.length) {
+    // BEFORE DECLARING IT ABSENT, TRY THE ROUTE TABLE. `looksLikeRoute` only fires on a path shape (a leading
+    // `/`, or `a/b`), so a route FRAGMENT reaches here as a failed symbol lookup — and the "grep is the right
+    // next step" line then sends the caller hunting for a symbol that does not exist.
+    //
+    // MEASURED (bench/grep-vs-seam, keycloak). An agent read `ui-ext` out of the admin-UI source, asked Seam
+    // for it, was told to grep, and spent SIX calls on `--locate UiExt` / `AdminUiExt` / `RealmUiExtResource`
+    // / `find -iname "*UiExt*"` chasing a class that is not there. The route table holds six `ui-ext` routes.
+    // Seam knew; it just would not answer unless the question was punctuated like a path.
+    const routes: any[] = addon.locateRoutes?.(a.repo, name, 25) ?? [];
+    if (routes.length) {
+      process.stdout.write(`# Locate: ${name}\n`
+        + `No SYMBOL of that name — but it names ${routes.length} ROUTE(s). Showing the crossing instead.\n\n`
+        + routeRows(routes.slice(0, 8))
+        + `\n## Next\n--center "<file>#<symbol>" on either side to trace it.\n`);
+      return 0;
+    }
     // An honest empty: say which corpus was searched, so the caller knows whether to widen or to spell it right.
     process.stdout.write(`No definition of '${name}' found in ${a.repo}${a.locateIn ? ` under '${a.locateIn}'` : ""}.\n`
-      + `It may be an external package symbol, defined dynamically, or spelled differently — grep is the right next step.\n`);
+      + `No route of that name either. It may be an external package symbol, defined dynamically, or spelled\n`
+      + `differently — grep is the right next step.\n`);
     return 0;
   }
 
