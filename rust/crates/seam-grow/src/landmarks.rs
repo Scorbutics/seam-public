@@ -50,32 +50,38 @@
 //! a real grow's emitted edges instead of asserting it. If that test ever reports violations, the cure is to
 //! add the missing edge kind here, never to relax the check.
 //!
-//! # CORRIDOR-PRUNING BEFORE THE GROW IS CLOSED — do not reopen it on this graph
+//! # THERE IS NO CORRIDOR TO FIND — the two ends of a cross-stack flow are TWO HOPS APART
 //!
-//! The whole point of a heuristic here was to prune the flood by aiming it. Four measurements say this graph
-//! cannot support that, whatever the algorithm:
+//! This module was built to aim the flood along the corridor between two centers. That corridor does not
+//! exist, and the reason is structural rather than algorithmic.
 //!
-//!   1. ALT `h` is INERT — 63% of the 83,301-node main component sits at exactly distance 3 from a landmark,
-//!      so |d(L,goal) - d(L,n)| = 0 nearly everywhere and keycloak's two-center grow is byte-identical with
-//!      the ordering on or off. More landmarks do not help (K=8..128 moves mean h/d* 0.418 -> 0.585, and the
-//!      grow output not at all).
-//!   2. An EXACT two-ended corridor needs no heuristic and fails the same way: 3 files at slack+1, 1240 at
-//!      slack+2, with `saml/config/Key.java` and `common/util/Time.java` inside it. There is no band to pick.
-//!   3. Dropping the hubs barely moves it (key fan 512 -> 8: nothing; name fan 32 -> 2: d(A,B) 4 -> 6, against
-//!      the resolved graph's 7).
-//!   4. PRICING the hubs instead — Dijkstra with node cost rising in degree — fixes the SHAPE (a smooth
-//!      2/5/51/68/205 instead of the cliff) and still points somewhere else: against the corridor the RESOLVED
-//!      graph gives, agreement is 8% (log2), 6% (sqrt), 3% (linear) at comparable size. Three curves, same
-//!      verdict — the content is different, not merely coarser.
+//! MEASURED on keycloak's own case, `realms.ts#Realms` to `RealmAdminResource#updateRealm`, on the RESOLVED
+//! graph the grow produces:
 //!
-//! The resolved graph the grow itself produces DOES carry a corridor (d=7; 7/13/77/96/228 files, the 96-file
-//! band holding 48.9% of read demand against 50.0% for all 611). It is the only one that does, and it does not
-//! exist until the grow has run. So the corridor is available only as an analysis of an answer, never as a way
-//! to have avoided computing one.
+//! ```text
+//!     Realms  --route-fetch-->  /admin-events  --route-serve-->  updateRealm        d(A,B) = 2
+//! ```
 //!
-//! What DID move the metric, over the same period: naming better ENDS. `--to-kind route` plus mount-parent
-//! derivation took content coverage 47.2% -> 53.3% from a single named center, with no change to the search.
-//! Center selection dominates traversal here; spend effort there first.
+//! One crossing, no intermediate nodes. At the exact distance the corridor IS the two endpoints (2 files, 0
+//! irrelevant); one step of slack takes it to 159 files of which 150 carry no read demand at all. There is
+//! nothing between the ends to select, because a client and the handler it calls are adjacent THROUGH the key.
+//!
+//! So the valuable content — how the client builds the request (`resource.ts`, `agent.ts`, `client.ts`), how
+//! the server dispatches it (`RealmsAdminResource`) — is not ON the path. It is the NEIGHBOURHOOD of each end.
+//! That is a selection problem, not a navigation one, and it is why every corridor and ranking experiment here
+//! lost while every end-derivation experiment won (`--to-kind` + mount parents: 47.2% -> 53.3% content
+//! coverage, 50.0% -> 62.0% citation, from a single named center, with no change to traversal).
+//!
+//! A PRIOR VERSION OF THIS NOTE CLAIMED d(A,B) = 7 and a usable 96-file corridor holding 48.9% of demand. That
+//! was an artifact of the wrong endpoint: the target node was picked as "the first hunk in
+//! RealmAdminResource.java", which is `organizations` at 7 hops, not `updateRealm` at 2. Every figure derived
+//! from it — the 7/13/77/96/228 bands, and the 3-8% "agreement" that the weighted-graph experiment was scored
+//! against — measured a path to the wrong place, wandering through Groups and Organizations because that was
+//! genuinely where it was going. The lesson is narrower than the retraction: WHEN A GRAPH SEARCH RETURNS A
+//! SEMANTICALLY ABSURD PATH, SUSPECT THE ENDPOINTS BEFORE THE ALGORITHM.
+//!
+//! The landmark table and the `f = g + h` wiring stay, behind `SEAM_ASTAR`, because they are correct and cheap
+//! to re-test; but nothing here should be revived on the theory that the corridor was merely mis-weighted.
 //!
 //! A file-level projection was measured as the cheap alternative and rejected: admissible (0 violations in 1788
 //! nodes) but worthless as guidance — it reports d=1 where the truth is 7, because a single route edge crosses
