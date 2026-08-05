@@ -174,6 +174,51 @@ pub fn impl_contribution(ctx: &Ctx) -> ImplContribution {
     ImplContribution { interfaces, edges, accessors }
 }
 
+/// Every TYPE-ANNOTATED class field, as `(field name, declared type)` — the data behind typed-field receiver
+/// resolution (see seam-scan `receiver_types::field_receiver_type`).
+///
+/// THE IDIOM: a facade whose members are sub-resources — `class KeycloakAdminClient { public realms: Realms; }`
+/// called as `adminClient.realms.update(…)`. `call_sites` records the MEMBER NAME (`realms`) as the receiver,
+/// which binds nothing locally, so the type pass and the factory hop both decline and the call site is dropped.
+/// The type is written down one hop away, on the field.
+///
+/// DISTINCT FROM def_table's property branch, which requires a `value` (a function literal or a `this`
+/// delegation) and so cannot see a bare `public realms: Realms;`. This reads the ANNOTATION and ignores values.
+///
+/// The annotation must BE a lone type reference, not merely contain one: collecting references and requiring
+/// exactly one accepts `Realms | null` (the `null` is not a type reference), which is a receiver that may not
+/// be there. Reading the annotation's own child makes unions and generics decline structurally.
+pub fn typed_fields(ctx: &Ctx) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for f in ctx.collect(ctx.root(), nk::is_class_field) {
+        if f.child_by_field_name("value").is_some() {
+            continue; // a function-valued property is a callable member, not a typed handle
+        }
+        let Some(name) = f.child_by_field_name("name").map(|n| ctx.text(n).to_string()) else { continue };
+        let Some(ann) = f.child_by_field_name("type") else { continue };
+        let Some(t) = ctx.children(ann).into_iter().find(|c| c.is_named()).filter(|c| nk::is_type_ref(c.kind())) else { continue };
+        out.push((name, ctx.text(t).to_string()));
+    }
+    out
+}
+
+/// Whether field-bound `this`-delegating members count as class methods. See the note in `field_fn_members`.
+pub fn member_fields_on() -> bool {
+    std::env::var("SEAM_MEMBER_FIELDS").ok().as_deref() == Some("1")
+}
+
+/// `this.m(…)` / `this.m<T>(…)` — a call whose receiver is literally `this`. Twin of def_table's
+/// `is_self_delegation_call`, kept equally narrow: it is evidence of a CALLABLE member, and a looser test would
+/// admit any field initialised from a property read.
+fn is_this_delegation(ctx: &Ctx, val: Node) -> bool {
+    ctx.collect(val, nk::is_call).into_iter().any(|c| {
+        let Some(f) = c.child_by_field_name("function") else { return false };
+        let inner = f.child_by_field_name("function").unwrap_or(f);
+        inner.child_by_field_name("object").or_else(|| ctx.children(inner).into_iter().next())
+            .is_some_and(|r| ctx.text(r).trim() == "this")
+    })
+}
+
 /// Each class → its `extends` base names (port of `_class_bases`). The extends clause is a direct heritage
 /// child, or nested one level under a TS `class_heritage` wrapper.
 pub fn class_bases(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
@@ -1021,7 +1066,22 @@ fn field_fn_members(ctx: &Ctx, cls: Node, method_names: &HashSet<String>) -> Vec
             || ctx
                 .collect(val, |k| nk::is_member_name(k) || nk::is_name_kind(k))
                 .into_iter()
-                .any(|n| method_names.contains(ctx.text(n)));
+                .any(|n| method_names.contains(ctx.text(n)))
+            // …OR a delegation to `this` — how a TS API-client class writes its whole surface (`public del =
+            // this.makeRequest<…>({…})` on `Realms extends Resource`). Without it such a class reports ZERO
+            // methods, so the up-build has no names to hunt and its consumers are never even CANDIDATES.
+            //
+            // OFF BY DEFAULT, and the reason is a measured TRADE rather than doubt about correctness — these
+            // really are the class's members. Turning it on takes `--query consumers --center realms.ts#Realms`
+            // from 1 resolved edge to 212 (144 symbols in 108 files), surfacing `RealmSettingsTabs.tsx` (123 of
+            // keycloak's 1232 measured opens), `RealmContext.tsx` (55) and `LoginTab.tsx` (9) — real consumers
+            // that were invisible. But `class_methods` also seeds the GROW's up-climb, and 40 more hunted names
+            // took the same case from 33s to 134s and content coverage from 57.8% to 53.3%: the consumer fan is
+            // 108 files of which SIX carry any read demand, and no ranking tried (call count, test exclusion,
+            // lexical intent) separates them — the useful ones are structurally identical to the rest.
+            //
+            // So it is a query capability, not a grow input, until that fan can be bounded. `SEAM_MEMBER_FIELDS=1`.
+            || (member_fields_on() && is_this_delegation(ctx, val));
         if callable {
             out.push((nm, ctx.span(f)));
         }

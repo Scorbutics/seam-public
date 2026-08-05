@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 pub struct CallsiteIndex {
     callers: HashMap<String, Vec<String>>,
     bases: HashMap<String, Vec<String>>,
+    /// FIELD NAME → every declared type seen for it, with the file that declared it. A name with more than one
+    /// distinct type is ambiguous and `field_type` declines, so the values matter as much as the key.
+    field_types: HashMap<String, Vec<(String, String)>>,
 }
 
 // Per-repo memoization — the index is a pure function of the repo's source, immutable within a query run,
@@ -33,7 +36,7 @@ impl CallsiteIndex {
     }
 
     fn shard(repo: &str, epoch: &str) -> String {
-        format!("{}/rust/callsite-index-v1/{epoch}.bin", seam_fs::seam_dir(repo))
+        format!("{}/rust/callsite-index-v2/{epoch}.bin", seam_fs::seam_dir(repo))
     }
 
     /// DISK-persisted (per-repo content epoch): a fresh process LOADS the index via DIRECT bincode (no
@@ -59,7 +62,7 @@ impl CallsiteIndex {
             eprintln!("[perf] callsite_index build {:.2}s", t.elapsed().as_secs_f64());
         }
         if !epoch.is_empty() {
-            let dir = format!("{}/rust/callsite-index-v1", seam_fs::seam_dir(repo));
+            let dir = format!("{}/rust/callsite-index-v2", seam_fs::seam_dir(repo));
             let _ = std::fs::create_dir_all(&dir);
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {
@@ -92,7 +95,7 @@ impl CallsiteIndex {
         // MERGE sequentially in source_files (walk) order so `callers` push-order and `bases` last-write-wins are
         // byte-identical to the sequential build. Per-file compute is independent (no shared state).
         let files = seam_fs::source_files(repo, |r| provider_for(r).is_some());
-        let per_file: Vec<Option<(Vec<String>, Vec<(String, Vec<String>)>)>> = files
+        let per_file: Vec<Option<(Vec<String>, Vec<(String, Vec<String>)>, Vec<(String, String)>)>> = files
             .par_iter()
             .map(|rel| {
                 provider_for(rel)?;
@@ -101,13 +104,17 @@ impl CallsiteIndex {
                 // others contribute nothing (as in TS when makeCtx fails).
                 let grammar = grammar_for(rel)?;
                 let ctx = Ctx::parse(&text, grammar)?;
-                Some((ast::called_method_names(&ctx), ast::class_bases(&ctx)))
+                Some((ast::called_method_names(&ctx), ast::class_bases(&ctx), ast::typed_fields(&ctx)))
             })
             .collect();
         let mut callers: HashMap<String, Vec<String>> = HashMap::new();
         let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+        let mut field_types: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for (rel, contrib) in files.iter().zip(per_file) {
-            let Some((methods, class_bases)) = contrib else { continue };
+            let Some((methods, class_bases, fields)) = contrib else { continue };
+            for (name, ty) in fields {
+                field_types.entry(name).or_default().push((ty, rel.clone()));
+            }
             for m in methods {
                 callers.entry(m).or_default().push(rel.clone());
             }
@@ -115,7 +122,7 @@ impl CallsiteIndex {
                 bases.insert(cls, bs); // last write wins (walk order), like TS `bases.set`
             }
         }
-        Self { callers, bases }
+        Self { callers, bases, field_types }
     }
 
     /// The whole `method → calling files` map (the centre-detection prior reads all of it, not one method).
@@ -126,6 +133,17 @@ impl CallsiteIndex {
     /// Files that call a method named `method`, in walk order.
     pub fn callers(&self, method: &str) -> &[String] {
         self.callers.get(method).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The UNAMBIGUOUS declared type of a field named `field`, with its declaring file — `None` when the name
+    /// is undeclared or declared with more than one distinct type. Ambiguity is decided on the TYPE, not the
+    /// declaration count: a facade re-declared identically in a test double still names one dispatch target,
+    /// while a `client` that is `Redis` here and `Stripe` there names none.
+    pub fn field_type(&self, field: &str) -> Option<(&str, &str)> {
+        let decls = self.field_types.get(field)?;
+        let mut it = decls.iter().map(|(t, _)| t.as_str());
+        let first = it.next()?;
+        it.all(|t| t == first).then(|| (first, decls[0].1.as_str()))
     }
 
     /// The `extends` bases of the class named `cls`.
@@ -167,7 +185,7 @@ mod tests {
         bases.insert("C".to_string(), vec!["B".to_string()]);
         bases.insert("D".to_string(), vec!["B".to_string()]);
         bases.insert("E".to_string(), vec!["X".to_string()]);
-        let idx = CallsiteIndex { callers: HashMap::new(), bases };
+        let idx = CallsiteIndex { callers: HashMap::new(), bases, field_types: HashMap::new() };
         let mut fam: Vec<String> = idx.subclass_family("A").into_iter().collect();
         fam.sort();
         assert_eq!(fam, vec!["A", "B", "C", "D"]);

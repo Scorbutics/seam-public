@@ -36,9 +36,35 @@ pub fn factory_receiver_type(repo: &str, from_file: &str, ctx: &Ctx, binder: &st
     if let Some(hit) = cache().lock().unwrap().get(&key) {
         return hit.clone();
     }
-    let out = resolve(repo, from_file, ctx, binder, method);
+    // BOTH hops inside the memo. The field hop is a repo-wide lookup plus a module resolution and a parse, and
+    // running it uncached per call site cost 4.5x on keycloak (33s -> 147s) — the factory hop has always been
+    // memoised on exactly this key and the fallback belongs under the same roof.
+    let out = resolve(repo, from_file, ctx, binder, method)
+        .or_else(|| field_receiver_type(repo, binder, method));
     cache().lock().unwrap().insert(key, out.clone());
     out
+}
+
+/// TYPED-FIELD receiver types — the consumer-side twin of the factory hop, for a receiver that is a MEMBER of
+/// another object rather than a local binder: `adminClient.realms.update(…)`.
+///
+/// MEASURED (bench/ranking, keycloak): the admin-UI files whose only link to the realm flow is
+/// `adminClient.realms.<m>(…)` — `RealmSettingsTabs.tsx` (123 opens), `RealmSettingsSection.tsx` (72),
+/// `RealmContext.tsx` (55), `GeneralTab.tsx` (43) — are ~27% of measured read demand and have ZERO hunks in
+/// the region.
+///
+/// THE SAME SAFETY BAR AS THE FACTORY HOP, which matters more here because the lookup is BY NAME and repo-wide
+/// rather than reached from the receiver's own binding: the field name must resolve to exactly ONE declared
+/// type, the annotation must be a lone type reference, and the type must be a class DECLARING the method.
+fn field_receiver_type(repo: &str, binder: &str, method: &str) -> Option<String> {
+    let idx = seam_resolve::CallsiteIndex::cached(repo);
+    let (ty, decl_file) = idx.field_type(binder)?;
+    // resolved from the DECLARING file: the type is in scope where the field is written, often in a module the
+    // caller never imports (the UI imports a hook, not `KeycloakAdminClient`).
+    let def_file = resolve_def_file(repo, decl_file, ty, crate::def_resolve::DEF_TYPE_KINDS, 0)?;
+    let (dtext, dlang) = read(repo, &def_file)?;
+    let dctx = Ctx::parse(&dtext, &dlang)?;
+    ast::class_owns_method(&dctx, ty, method).then(|| ty.to_string())
 }
 
 fn resolve(repo: &str, from_file: &str, ctx: &Ctx, binder: &str, method: &str) -> Option<String> {
