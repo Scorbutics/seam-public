@@ -47,6 +47,16 @@ pub struct WaveOpts {
     ///
     /// Off by default: an unbounded grow keeps its current shape.
     pub until_crossing: bool,
+    /// STOP AT A HOP RADIUS. `--max-hops N`: never expand a node further than N hops from the anchor.
+    ///
+    /// The third form of the same primitive: two centers name the end by ADDRESS, `until_crossing` names it by
+    /// KIND, and this names it by DISTANCE — "everything within 3 hops of here", which is the honest answer to
+    /// a one-center question that has no other end. 0 = unbounded (the default).
+    ///
+    /// Distinct from `max_steps` (waves) and `max_nodes` (budget): a wave can carry a node many hops out in one
+    /// step, and a budget cuts by count rather than by shape. This bounds the RADIUS, so what comes back is a
+    /// ball around the anchor rather than whichever branches the ordering happened to reach first.
+    pub max_hops: usize,
     pub max_steps: usize,
     pub max_nodes: usize,
     /// Crop a wide PURE (non-crossing) consumer fan an UP move added. TS `hubGate` (subsumed by hubCollapse).
@@ -112,6 +122,7 @@ impl Default for WaveOpts {
     fn default() -> Self {
         Self {
             until_crossing: false,
+            max_hops: 0,
             max_steps: 12,
             max_nodes: 80,
             hub_gate: true,
@@ -556,6 +567,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         for n in &data.nodes {
             if n.id == "n1" || anchor_set.contains(&n.id) || n.file.is_empty() || n.symbol.is_empty() || is_flow_subject(&n.kind) || ex.excluded_file(&n.file) {
                 continue;
+            }
+            if opts.max_hops > 0 && dist_of(&n.id) >= opts.max_hops {
+                continue; // KEEP the node, don't flood THROUGH it — the radius is a shape, not a deletion
             }
             if !grounded.contains(&n.id) {
                 continue; // reached only by a bare-name call match → surface it, don't flood through it

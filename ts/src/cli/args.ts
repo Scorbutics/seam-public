@@ -19,6 +19,7 @@ export interface Args {
   /// `--until crossing` — stop the grow when the flow reaches a boundary (route/table/queue), instead of
   /// flooding to the node budget. The one-center form of "grow toward a target".
   until?: string;
+  maxHops?: number;
   center?: string;     // --center <file>[#<symbol>][,<file>[#<symbol>]…]: the universal node address (supersedes --anchor-file/--symbol). file-only = module anchor; comma-separated = multi-center concern star
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
@@ -106,7 +107,8 @@ export function parseArgs(argv: string[]): Args {
       case "--grow-from": a.growFrom = next(); break;
       case "--concern": a.concern = true; break;
       case "--auto-route": a.autoRoute = true; break;   // route a non-flow intent (blast-radius/find-usages) to its --query shape instead of a flow grow
-      case "--until": a.until = next(); break;   // `crossing` — grow until the flow crosses a boundary
+      case "--until": a.until = next(); break;
+      case "--max-hops": a.maxHops = Math.max(0, parseInt(next() ?? "0", 10) || 0); break;   // `crossing` — grow until the flow crosses a boundary
       case "--center": a.center = next(); break;   // universal node address: file | file#symbol | comma-list; expanded to the anchor below, read as a list by the concern grow
       // --anchor-file / --symbol are the LEGACY node address, superseded by --center (kept for back-compat + internal use).
       case "--expand-graph": a.expandGraph = next(); break;

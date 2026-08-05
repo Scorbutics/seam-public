@@ -545,6 +545,8 @@ pub struct GrowOptsDto {
     pub include_tests: Option<bool>,
     /// Stop the wave once the flow crosses a boundary — see `WaveOpts::until_crossing`.
     pub until_crossing: Option<bool>,
+    /// Never expand past this many hops from the anchor — see `WaveOpts::max_hops`.
+    pub max_hops: Option<u32>,
     /// Merge EVERY pinned center regardless of the running node total — see `WaveOpts::merge_all_centers`.
     pub merge_all_centers: Option<bool>,
     /// The INTENT-SHAPED knobs. Omitted (the structural caller) ⇒ no field ⇒ the wave is bit-for-bit the
@@ -579,6 +581,7 @@ impl GrowOptsDto {
             exclude_dirs: self.exclude_dirs.unwrap_or(d.exclude_dirs),
             include_tests: self.include_tests.unwrap_or(d.include_tests),
             until_crossing: self.until_crossing.unwrap_or(d.until_crossing),
+            max_hops: self.max_hops.map(|v| v as usize).unwrap_or(d.max_hops),
             merge_all_centers: self.merge_all_centers.unwrap_or(d.merge_all_centers),
             intent: self.intent.filter(|s| !s.is_empty()),
             structural_grow: self.structural_grow.unwrap_or(d.structural_grow),

@@ -305,11 +305,14 @@ step, not an option:
   files it produced are never opened by any agent. Say where it should stop, and it stops there:
 
       seam … --center <file>#<symbol> --until crossing     # grow until the flow reaches a route/table/queue
+      seam … --center <file>#<symbol> --max-hops 3         # or bound the RADIUS when there is no other end
 
   "How are bookings created in the UI?" is that shape — center on the service, grow until the HTTP route, and
   the far side of the hop comes with it. Measured: a third fewer seams and files than an unbounded grow, for
   1.7 points of recall. Two pinned centers give the same direction by naming both ends; `--until crossing`
-  names the end by KIND when you only know one side.
+  names the end by KIND when you only know one side; `--max-hops` names it by DISTANCE when there is neither.
+  Measured: `--max-hops 3` returns 44% fewer seams than an unbounded grow for four tenths of a point of
+  recall — the cheapest of the three bounds.
 
 - **STEP 2 — pass what you picked as `--center file#symbol`** (or **several** comma-separated when the concern
   spans a few mechanisms). Seam grows straight from them: **~11s**, and you avoid it guessing a

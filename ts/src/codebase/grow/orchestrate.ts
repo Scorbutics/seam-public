@@ -272,7 +272,7 @@ const _RELATION_PHRASE: Record<string, [string, string]> = {   // [reached-from 
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
-type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; upHop?: number; structuralGrow?: boolean; untilCrossing?: boolean };
+type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; upHop?: number; structuralGrow?: boolean; untilCrossing?: boolean; maxHops?: number };
 
 // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run on known territory
 // skips the wave orchestration entirely. Over-broad key (symbol + every serializable opt + all SEAM_* env) so
@@ -418,7 +418,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
         // PINNED centers are merged whatever the running node total. Without this the core's merge loop
         // applies `maxNodes` as a global guard and silently drops every center after the first big one.
         mergeAllCenters: (opts as any).mergeAllCenters ?? false,
-        excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow, untilCrossing: opts.untilCrossing });
+        excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow, untilCrossing: opts.untilCrossing, maxHops: opts.maxHops });
     if (g) {
       // THE PER-CENTER WARM VERDICTS. Emitted here, not in the core: a caller asserting on this contract
       // captures `process.stderr.write`, which a Rust `eprintln!` bypasses entirely (it goes straight to

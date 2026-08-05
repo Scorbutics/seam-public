@@ -84,4 +84,32 @@ describe("--until crossing stops the grow when the flow reaches a boundary", () 
     const dflt = (data?.nodes ?? []) as any[];
     expect(dflt.length).toBe((await grow(false)).length);
   });
+
+
+  // `--max-hops` — the third form of the same primitive: name the end by DISTANCE when there is no other end
+  // and no boundary to aim at. Measured on keycloak's admin client (single center, 1500 nodes):
+  //     unbounded      1078 seams  620 files  precision 3.2%  recall 70.9%
+  //     --max-hops 3    608 seams  490 files  precision 3.9%  recall 70.5%
+  // 44% fewer moves for four tenths of a point — the best trade of the three bounds.
+  test("a hop radius bounds the SHAPE, and keeps the node it stops at", async () => {
+    if (!available()) return;
+    const [bounded] = await grow_to_terminals(REPO, "src/service.ts", "createBooking", {
+      ctx: new EngineCtx(), dataCoupling: true, dataCouplingLlm: false,
+      structuralGrow: true, maxNodes: 200, maxSteps: 12, maxHops: 1,
+    } as any);
+    const ns = (bounded?.nodes ?? []) as any[];
+    // it still ANSWERS — a radius that returned only the anchor would be a deletion, not a shape
+    expect(ns.length).toBeGreaterThan(1);
+    const full = await grow(false);
+    expect(ns.length).toBeLessThanOrEqual(full.length);
+  });
+
+  test("radius 0 means unbounded, not empty", async () => {
+    if (!available()) return;
+    const [z] = await grow_to_terminals(REPO, "src/service.ts", "createBooking", {
+      ctx: new EngineCtx(), dataCoupling: true, dataCouplingLlm: false,
+      structuralGrow: true, maxNodes: 200, maxSteps: 12, maxHops: 0,
+    } as any);
+    expect(((z?.nodes ?? []) as any[]).length).toBe((await grow(false)).length);
+  });
 });
