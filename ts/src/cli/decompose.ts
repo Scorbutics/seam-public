@@ -913,7 +913,12 @@ async function runCodebase(a: Args): Promise<number> {
       // deterministic annotateForEmit (embeddings, below) supplies the spine/supporting/off tiers instead — LLM stays
       // reserved for the flywheel. Opt back in with --no-skeleton. (Concern already forced skeleton at line 558.)
       const _tRender = Date.now();
+      // GATED, and written to fd 2 like the Rust perf lines — `installQuietFilter` drops lowercase `[tag]`
+      // stderr, which is how a 9.3s block hid inside a total this session. Per-stage timing is the only reason
+      // that was findable, so it stays.
+      const _P = (l: string, t: number) => { if (debugOn("perf")) require("fs").writeSync(2, `[perf] post ${l} ${Date.now() - t}ms\n`); };
       const model2: any = await decompose(g2, decomposeOpts(a, true, a.skeleton ?? true));
+      _P("decompose", _tRender);
       addStage("render", Date.now() - _tRender);
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
@@ -936,10 +941,15 @@ async function runCodebase(a: Args): Promise<number> {
       const usage = get_usage().as_dict();
       if (usage) model2.usage = usage;
       if (!llmBorder) emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);   // LLM border already ranked → no embedding pass
+      const _tAnn = Date.now();
       await annotateForEmit(a.repo, a.intent, model2);   // embed relevance (guarded; skipped when the LLM border ranked)
+      _P("annotateForEmit", _tAnn);
       applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
-      const payload = JSON.stringify(stamped);
+      // LAZY: the agent surface never reads this, and the model is ~5 MB — serialising it unconditionally cost
+      // 268ms of every default run to produce a string three of the four branches below discard.
+      let _payload: string | null = null;
+      const payload = () => (_payload ??= JSON.stringify(stamped));
       // DEFAULT is the token-budgeted AGENT surface, NOT a raw JSON dump — the useful thing for a human or an
       // LLM reading the terminal is the spine + hubs + frontier + gaps, which already say WHERE to re-query /
       // grep for what's missing. The full model stays one flag away: `--format json` (stdout) or `--emit-seams
@@ -947,14 +957,14 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.format === "none") a.format = "agent";
       if (a.stream) {                                 // STREAM: the per-wave records already went to stdout; close with the full model
         process.stdout.write(JSON.stringify({ done: true, model: stamped }) + "\n");
-        if (a.emitSeams) { writeFileSync(a.emitSeams, payload); process.stderr.write(`Seams: ${a.emitSeams}\n`); }   // optional file sink, on stderr (stdout stays pure NDJSON)
+        if (a.emitSeams) { writeFileSync(a.emitSeams, payload()); process.stderr.write(`Seams: ${a.emitSeams}\n`); }   // optional file sink, on stderr (stdout stays pure NDJSON)
       } else if (a.emitSeams) {                       // FILE sink: write JSON, confirm on stdout (unchanged contract)
         emit(`Writing seams JSON → ${a.emitSeams}…`);
-        writeFileSync(a.emitSeams, payload);
+        writeFileSync(a.emitSeams, payload());
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       } else if (a.format === "json") {               // EXPLICIT raw model to stdout (the machine escape — `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → JSON on stdout.\n`);
-        process.stdout.write(payload + "\n");
+        process.stdout.write(payload() + "\n");
       } else {                                        // llm-context/concern, or the DEFAULT+fallback agent surface
         const render = VIEW_RENDERERS[a.format] ?? VIEW_RENDERERS.agent;
         process.stdout.write(await render(stamped, a, concernCenters) + "\n");
