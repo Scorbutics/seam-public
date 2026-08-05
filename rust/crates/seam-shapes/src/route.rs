@@ -336,20 +336,45 @@ pub struct RouteEntry {
 /// declared it and how the sibling-prefix composition resolved. Anchoring the match would answer "not found"
 /// for a route that exists, which is the one failure `--locate` must not have (locate_recall.test.ts).
 pub fn locate_routes(repo: &str, pattern: &str) -> Vec<RouteEntry> {
-    let idx = seam_couple::floor_indices(repo);
+    // BOTH INDEXES. The floor grounds routes declared in one place; the COMPOSED index holds sub-resource
+    // handlers whose full path is assembled from a cross-file mount chain (a JAX-RS locator method annotated
+    // `@Path` that RETURNS a resource class). Reading only the floor missed the entire second kind.
+    //
+    // MEASURED on keycloak: `RealmAdminResource` served ZERO routes by the floor — it has no class-level
+    // `@Path` and is mounted by `RealmsAdminResource.getRealmAdmin()`, so its ~40 endpoints are only
+    // addressable once composed. Its root handlers `getRealm`/`updateRealm` carry a bare `@GET`/`@PUT` with
+    // no path at all and exist ONLY in the composed index, as `/admin/realms/*` at :428 and :473 — the two
+    // ground-truth symbols this shape could not reach.
+    let floor = seam_couple::floor_indices(repo);
+    let composed = seam_couple::learn::key_index::compose_routes::compose_routes(repo);
     let needle = crate::route::normalise_for_match(pattern);
-    let mut out: Vec<RouteEntry> = Vec::new();
-    for (key, sides) in idx.floor_base.iter() {
+    // A plain map plus an ORDER vector rather than a new indexmap dependency for one call site;
+    // insertion order is what keeps the output reproducible before the sort below.
+    let mut by_route: std::collections::HashMap<String, RouteEntry> = std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (key, sides) in floor.floor_base.iter().chain(composed.iter()) {
         let Some(value) = key.strip_prefix("http-route ") else { continue };
         if !needle.is_empty() && !crate::route::normalise_for_match(value).contains(&needle) {
             continue;
         }
-        out.push(RouteEntry {
+        // Merged, not duplicated: a route can be grounded by the floor AND composed, and a caller asking
+        // "who serves this" wants one row with both sides, not the same path twice.
+        if !by_route.contains_key(value) {
+            order.push(value.to_string());
+        }
+        let e = by_route.entry(value.to_string()).or_insert_with(|| RouteEntry {
             route: value.to_string(),
-            servers: sides.producers.clone(),
-            clients: sides.consumers.clone(),
+            servers: Vec::new(),
+            clients: Vec::new(),
         });
+        for a in &sides.producers {
+            if !e.servers.iter().any(|x| x.file == a.file && x.line == a.line) { e.servers.push(a.clone()); }
+        }
+        for a in &sides.consumers {
+            if !e.clients.iter().any(|x| x.file == a.file && x.line == a.line) { e.clients.push(a.clone()); }
+        }
     }
+    let mut out: Vec<RouteEntry> = order.into_iter().filter_map(|k| by_route.remove(&k)).collect();
     // A route with BOTH sides answers the question ("who serves what this client calls"); a one-sided route is
     // still real (an unused endpoint, a call to another service) and is kept, just after them.
     out.sort_by(|a, b| {

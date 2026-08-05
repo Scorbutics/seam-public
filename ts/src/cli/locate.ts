@@ -171,7 +171,7 @@ export async function runLocate(a: Args): Promise<number> {
       const shown = [...crossing, ...oneSided.slice(0, _TAIL)];
       process.stdout.write(`# Locate route: ${name}\n`
         + `${entries.length} route(s) matched; ${crossing.length} with BOTH sides resolved — `
-        + `the crossing itself, from the coupling floor (no grow).\n\n`
+        + `the crossing itself, from the coupling floor + composed sub-resource mounts (no grow).\n\n`
         + routeRows(shown)
         + (oneSided.length > _TAIL
           // NOT silently truncated: the cut is stated with the flag that widens it, as everywhere else here.
