@@ -327,9 +327,37 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the answer.
     let flood = add.nodes.iter().filter(|n| !idx.by_key.contains_key(&key(n)) && !n.coupling).count();
     if flood > MOVE_CAP {
-        *why = "too broad".into(); // a widely-used util floods the footprint without advancing the answer
-        _T_APPLY_US.fetch_add(_t_apply.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
-        return 0;
+        // ALL-OR-NOTHING WAS THE BUG. The cap exists to stop a widely-used util flooding the answer, and for a
+        // util that is right — nothing in it advances the flow. For a mechanism it throws away the needle with
+        // the haystack: measured on keycloak, expanding `RealmAdminResource.getUserMgmtPermissions` offered 145
+        // new nodes and `getRealmEventsConfig` 132, both far over the cap of 30, so BOTH were dropped whole —
+        // and with them `getRealm`/`updateRealm`, two of the nine ground-truth symbols of the flow. The moves
+        // were built, paid for, and binned at 500, 1500 and 3000 node budgets alike.
+        //
+        // So: keep the cap's INTENT (never flood) but salvage the part that answers the question — the nodes
+        // this move brings that bear a CROSSING (a route/table/queue boundary) or are on the same file as the
+        // move itself. A resource class's endpoints are exactly that; a util's 145 helpers are not, so a util
+        // still contributes nothing and the flood is still capped.
+        let salvage: Vec<GraphNode> = add
+            .nodes
+            .iter()
+            .filter(|n| {
+                !idx.by_key.contains_key(&key(n))
+                    && (n.coupling || is_flow_subject(&n.kind) || n.file == next.file)
+            })
+            .cloned()
+            .collect();
+        if salvage.is_empty() || salvage.len() > MOVE_CAP {
+            *why = "too broad".into(); // a widely-used util floods the footprint without advancing the answer
+            _T_APPLY_US.fetch_add(_t_apply.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+            return 0;
+        }
+        let keep: HashSet<String> = salvage.iter().map(|n| n.id.clone()).collect();
+        add.nodes.retain(|n| keep.contains(&n.id) || n.id == add.anchor_id);
+        add.edges.retain(|e| {
+            (keep.contains(&e.from) || e.from == add.anchor_id) && (keep.contains(&e.to) || e.to == add.anchor_id)
+        });
+        *why = "too broad (salvaged the crossing-bearing members)".into();
     }
     // carry the move direction outward as the new nodes' default direction.
     let tag = if down { "backward" } else { "forward" };
