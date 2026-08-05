@@ -393,7 +393,10 @@ async function runCodebase(a: Args): Promise<number> {
         // citation 62.0% -> 64.4%. Radius 3 and 4 grow the region again and score no better.
         //
         // Only when the caller did not choose one; an explicit `--max-hops` always wins.
-        if (!a.maxHops) a.maxHops = 2;
+        // `=== undefined`, NOT falsy: `--max-hops 0` is the documented spelling of UNBOUNDED, and `!a.maxHops`
+        // silently rewrote it to 2 — an explicit "no radius" became the default radius, which is the one way a
+        // default must never fail. Caught by measurement (three up-hop runs returning byte-identical maps).
+        if (a.maxHops === undefined) a.maxHops = 2;
         // STATED, not silent: the answer now has centers the caller did not write, and a map whose ends came
         // from somewhere the caller cannot see is one they cannot check.
         process.stderr.write(`[to-kind] ${a.toKind}: derived ${derived.length} counterpart center(s) from the anchor's boundary — ${derived.join(", ")}\n`);
@@ -687,7 +690,7 @@ async function runCodebase(a: Args): Promise<number> {
       // worst kind of wrong answer, one that looks like a slow success.
       if (a.until !== undefined && a.until !== "crossing")
         err(`--until "${a.until}" is not a target. Supported: crossing (grow until the flow reaches a route/table/queue).`);
-      const gOpts: any = { untilCrossing: a.until === "crossing", maxHops: a.maxHops, bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
+      const gOpts: any = { untilCrossing: a.until === "crossing", maxHops: a.maxHops, upHop: a.upHop, tierMargin: a.tierMargin, bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
       // Every grow call below re-spreads gOpts with its own {ctx, dataCoupling*, structuralGrow} overrides —
       // one helper instead of `{ ...gOpts, ctx, ... }` repeated at each call site (and a forgotten field there
       // being a silent per-site drift instead of a one-place fix).

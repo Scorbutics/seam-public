@@ -418,7 +418,18 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
         // PINNED centers are merged whatever the running node total. Without this the core's merge loop
         // applies `maxNodes` as a global guard and silently drops every center after the first big one.
         mergeAllCenters: (opts as any).mergeAllCenters ?? false,
-        excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow, untilCrossing: opts.untilCrossing, maxHops: opts.maxHops });
+        excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow, untilCrossing: opts.untilCrossing, maxHops: opts.maxHops,
+        // EVERY WAVE KNOB, because this call was forwarding a SUBSET and silently defaulting the rest. A knob
+        // absent here reverts to the core's default on the multi-center path while working on the single-anchor
+        // one — `--up-hop` at 0, 1 and 2 returned byte-identical maps, which is how it surfaced. The containment
+        // knobs (tier/hub/ubiquity) are the ones that actually govern the up-climb once an intent field exists,
+        // so a concern grow was unable to be shaped at all.
+        upHop: (opts as any).upHop, complementUpHop: (opts as any).complementUpHop,
+        hubGate: opts.hubGate, hubFan: opts.hubFan, hubCollapse: opts.hubCollapse,
+        hubUbiquity: opts.hubUbiquity, hubTypeFan: opts.hubTypeFan,
+        tierGrow: opts.tierGrow, tierMargin: opts.tierMargin,
+        ubiquity: opts.ubiquity, ubiquityFan: opts.ubiquityFan,
+        borderField: opts.borderField, borderTol: opts.borderTol });
     if (g) {
       // THE PER-CENTER WARM VERDICTS. Emitted here, not in the core: a caller asserting on this contract
       // captures `process.stderr.write`, which a Rust `eprintln!` bypasses entirely (it goes straight to
