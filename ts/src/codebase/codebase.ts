@@ -39,14 +39,19 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   if (opts.intent && shape !== "policy") _promote_terminals(g);
   assign_roles(g);
   assign_clusters(g);
+  const _dbg = process.env.SEAM_DEBUG?.includes("perf");
+  const _p = (l: string, t: number) => { if (_dbg) require("fs").writeSync(2, `[perf]   decompose ${l} ${Date.now() - t}ms\n`); };
   if (opts.repo) {
+    let _t = Date.now();
     detect_dynamic_import_blindspots(g, opts.repo);
-    detect_dynamic_dispatch_blindspots(g, opts.repo);
-    await detect_subcores(g, opts.repo);
-    await detect_contract(g, opts.repo);
-    await detect_consumer_feeds(g, opts.repo);
+    detect_dynamic_dispatch_blindspots(g, opts.repo); _p("blindspots", _t); _t = Date.now();
+    await detect_subcores(g, opts.repo); _p("subcores", _t); _t = Date.now();
+    await detect_contract(g, opts.repo); _p("contract", _t); _t = Date.now();
+    await detect_consumer_feeds(g, opts.repo); _p("consumer_feeds", _t);
   }
+  const _tS = Date.now();
   let seams = assign_intent_seams(g);
+  _p("assign_intent_seams", _tS);
   // SKELETON mode (LLM consumers — the skill): skip the LLM seam-labeling passes entirely. The det
   // structure is already complete by here (spine, structural labels, blindspots — steps above), and a
   // consuming LLM re-derives the tiers + prose labels itself from the symbols/paths (validated A/B:
@@ -63,7 +68,9 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
   // Emit the model UNCOLLAPSED — off-seam collapsing is a human-render concern, applied by each client
   // (see collapse_off_seams), so an LLM consumer of seams.json gets the full recall, not a "+N more" stub.
+  const _tE = Date.now();
   const model = emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined, intent: Boolean(opts.intent) });
+  _p("emit_seams", _tE);
   if (opts.skeleton) model.skeleton = true;          // tells the renderer to list the untiered seams flat
   return model;
 }

@@ -87,7 +87,10 @@ pub fn embed_score_defs(repo: &str, intent: &str, files: Option<&[String]>) -> V
     // moduleDefs (whole-repo recall only): a file whose identity isn't a named symbol (a module.exports /
     // Vue-plugin / config) is still recallable by its name+doc+path.
     let scoped = files.is_some_and(|f| !f.is_empty());
+    let _pf = seam_fs::debug_on("perf");
+    let _t = std::time::Instant::now();
     let mut defs = enumerate_defs(repo, def_limit(), files, !scoped);
+    if _pf { eprintln!("[perf]   embed enumerate_defs {:.2}s ({} defs)", _t.elapsed().as_secs_f64(), defs.len()); }
     if defs.is_empty() {
         return Vec::new();
     }
@@ -114,8 +117,10 @@ pub fn embed_score_defs(repo: &str, intent: &str, files: Option<&[String]>) -> V
     // DISK CACHE — embed-string hash → vector, per repo AND model AND quantization. Without it every CLI run
     // re-embeds the whole def table, because the in-process vector cache dies with the process; the TS side
     // was explicitly incremental here and dropping that would be a cold-start regression, not a refactor.
+    let _t2 = std::time::Instant::now();
     let cp = cache_path(repo);
     let mut cache = load_cache(&cp);
+    if _pf { eprintln!("[perf]   embed load_cache {:.2}s ({} entries)", _t2.elapsed().as_secs_f64(), cache.len()); }
     let misses: Vec<String> = strings.iter().filter(|s| !cache.contains_key(hash_key(s).as_str())).cloned().collect();
     let mut vecs: HashMap<String, Vec<f32>> = HashMap::new();
     if !misses.is_empty() {
@@ -132,6 +137,7 @@ pub fn embed_score_defs(repo: &str, intent: &str, files: Option<&[String]>) -> V
             vecs.insert(s.clone(), v.clone());
         }
     }
+    if _pf { eprintln!("[perf]   embed misses+lookup {:.2}s", _t2.elapsed().as_secs_f64()); }
     let iv = seam_embed::embed_vecs(&[format!("{}{intent}", seam_embed::query_prefix())]);
     let Some(iv) = iv.values().next() else { return Vec::new() };
     let mut scored: Vec<ScoredDef> = defs
