@@ -543,6 +543,8 @@ pub struct GrowOptsDto {
     pub coupling_hub_contain: Option<bool>,
     pub exclude_dirs: Option<Vec<String>>,
     pub include_tests: Option<bool>,
+    /// Stop the wave once the flow crosses a boundary — see `WaveOpts::until_crossing`.
+    pub until_crossing: Option<bool>,
     /// Merge EVERY pinned center regardless of the running node total — see `WaveOpts::merge_all_centers`.
     pub merge_all_centers: Option<bool>,
     /// The INTENT-SHAPED knobs. Omitted (the structural caller) ⇒ no field ⇒ the wave is bit-for-bit the
@@ -576,6 +578,7 @@ impl GrowOptsDto {
             coupling_hub_contain: self.coupling_hub_contain.unwrap_or(d.coupling_hub_contain),
             exclude_dirs: self.exclude_dirs.unwrap_or(d.exclude_dirs),
             include_tests: self.include_tests.unwrap_or(d.include_tests),
+            until_crossing: self.until_crossing.unwrap_or(d.until_crossing),
             merge_all_centers: self.merge_all_centers.unwrap_or(d.merge_all_centers),
             intent: self.intent.filter(|s| !s.is_empty()),
             structural_grow: self.structural_grow.unwrap_or(d.structural_grow),

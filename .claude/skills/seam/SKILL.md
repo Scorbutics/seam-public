@@ -301,6 +301,16 @@ step, not an option:
   on `find`/`ls` orientation — the single largest block in its budget, and more than twice what the actual
   analysis cost. `--locate` answers the same question in one call and ~0.8s on a 10k-file monorepo.
 
+- **GIVE THE GROW A DIRECTION.** A grow with no end in sight floods: measured on keycloak, 824 of the 846
+  files it produced are never opened by any agent. Say where it should stop, and it stops there:
+
+      seam … --center <file>#<symbol> --until crossing     # grow until the flow reaches a route/table/queue
+
+  "How are bookings created in the UI?" is that shape — center on the service, grow until the HTTP route, and
+  the far side of the hop comes with it. Measured: a third fewer seams and files than an unbounded grow, for
+  1.7 points of recall. Two pinned centers give the same direction by naming both ends; `--until crossing`
+  names the end by KIND when you only know one side.
+
 - **STEP 2 — pass what you picked as `--center file#symbol`** (or **several** comma-separated when the concern
   spans a few mechanisms). Seam grows straight from them: **~11s**, and you avoid it guessing a
   ubiquitous/sibling node.

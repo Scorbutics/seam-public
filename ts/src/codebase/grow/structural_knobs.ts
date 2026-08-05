@@ -23,7 +23,7 @@ export type StructuralKnobs = {
   upHop: number; complementUpHop: number;
   couplingHubContain: boolean;
   excludeDirs: string[]; includeTests: boolean;
-  intent?: string; structuralGrow: boolean;
+  intent?: string; structuralGrow: boolean; untilCrossing?: boolean;
   borderTol?: number; borderField: string; tierGrow: boolean; tierMargin?: number;
   stableFloor: boolean;
 };
@@ -33,7 +33,7 @@ export type KnobOpts = {
   hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number;
   ubiquity?: boolean; ubiquityFan?: number; upHop?: number;
   excludeDirs?: string[]; includeTests?: boolean;
-  dataCoupling?: boolean; structuralGrow?: boolean;
+  dataCoupling?: boolean; structuralGrow?: boolean; untilCrossing?: boolean;
   intent?: string; borderTol?: number | null; borderField?: string; tierGrow?: boolean; tierMargin?: number;
 };
 
@@ -54,6 +54,7 @@ export function resolveStructuralKnobs(opts: KnobOpts = {}, stableFloor = false,
     hubTypeFan: Math.max(2, opts.hubTypeFan ?? 5),
     ubiquityFan: Math.max(2, opts.ubiquityFan ?? 12),
     // 0 = off. A STRUCTURAL grow defaults K=2: with the intent field absent it is the SOLE container.
+    untilCrossing: opts.untilCrossing === true,
     upHop: Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : 0)),
     // Unset → 1; a non-numeric value → 0 (off), matching the original `parseInt(env ?? "1", 10) || 0`.
     complementUpHop: 1,

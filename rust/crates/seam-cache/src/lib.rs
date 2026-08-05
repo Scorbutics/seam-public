@@ -155,6 +155,20 @@ fn core_stamp_tag() -> String {
     }
 }
 
+// WARM-PATH CENSUS (SEAM_DEBUG=wave). A warm keycloak grow is ~35-42s at 107% CPU on 12 cores with
+// `footprint-v1` populated — i.e. nearly every move is a HIT and almost nothing is built, so the wave prefetch
+// has nothing to overlap. Each hit clones a whole `serde_json::Value` tree and re-deserialises it. This says
+// how much of the warm grow that is; if it dominates, the target is the cache REPRESENTATION, not threads.
+static HIT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static N_HIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOAD_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `(deserialise seconds, hits, shard-load seconds)` since process start.
+pub fn hit_census() -> (f64, u64, f64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (HIT_US.load(Relaxed) as f64 / 1e6, N_HIT.load(Relaxed), LOAD_US.load(Relaxed) as f64 / 1e6)
+}
+
 fn shard_dir(repo: &str, name: &str) -> String {
     // NAMESPACE: `.seam/rust/<name>` — distinct from TS's `.seam/<name>` so the caches never collide.
     format!("{}/rust/{name}", seam_fs::seam_dir(repo))
@@ -297,13 +311,19 @@ where
     {
         let mut m = MIRROR.lock().unwrap();
         if !m.contains_key(&mkey) {
+            let _tl = std::time::Instant::now();
             let disk: Shard = load_shard(repo, cache, file).unwrap_or_default();
+            LOAD_US.fetch_add(_tl.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
             m.insert(mkey.clone(), disk);
         }
         if let Some(e) = m.get(&mkey).and_then(|s| s.get(key)) {
             verdict = if e.e == *epoch { Verdict::Hit } else { Verdict::MissStale };
             if e.e == *epoch {
-                if let Ok(v) = serde_json::from_value::<T>(e.d.clone()) {
+                let _t = std::time::Instant::now();
+                let _parsed = serde_json::from_value::<T>(e.d.clone());
+                HIT_US.fetch_add(_t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+                N_HIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if let Ok(v) = _parsed {
                     return (v, verdict); // fresh deep copy (the caller mutates it)
                 }
             }

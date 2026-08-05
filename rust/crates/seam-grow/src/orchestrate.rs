@@ -35,6 +35,18 @@ const UPCLIMB_MIN_DIST: usize = 2; // legacy hop-distance up-climb gate (the fal
 /// this process's `std::env` (see `sync_seam_env` at the napi boundary).
 #[derive(Clone)]
 pub struct WaveOpts {
+    /// STOP WHEN THE FLOW CROSSES. `--until crossing`: the wave halts as soon as a boundary node (route /
+    /// table / queue / egress) is in the graph, instead of flooding to the node budget.
+    ///
+    /// This is the one-center form of the same primitive a multi-center grow expresses with its other end:
+    /// grow toward a TARGET, stop on arrival. The target here is a PREDICATE (any medium) rather than a named
+    /// node, which is what "how are bookings created in the UI — grow up from the service until the HTTP route"
+    /// asks for. Media are ordinary graph nodes, so this needs no new traversal: measured on keycloak, 235 of
+    /// 241 route nodes are reachable from the anchor and the NEAREST sits ONE hop away, so the wave stops
+    /// almost immediately instead of spending its budget past the answer.
+    ///
+    /// Off by default: an unbounded grow keeps its current shape.
+    pub until_crossing: bool,
     pub max_steps: usize,
     pub max_nodes: usize,
     /// Crop a wide PURE (non-crossing) consumer fan an UP move added. TS `hubGate` (subsumed by hubCollapse).
@@ -99,6 +111,7 @@ impl Default for WaveOpts {
     /// Used by the Rust-only tests and the parity harness; the napi boundary always sends explicit values.
     fn default() -> Self {
         Self {
+            until_crossing: false,
             max_steps: 12,
             max_nodes: 80,
             hub_gate: true,
@@ -707,6 +720,16 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         }
         if wave_added == 0 {
             break; // the region is fully flooded
+        }
+        // ARRIVED. The caller asked to grow until the flow crosses a boundary, and it has — every further wave
+        // spends budget PAST the answer. Checked after the wave so the crossing's own wave completes (the
+        // handler on the far side arrives with it, not a step later).
+        if opts.until_crossing && data.nodes.iter().any(|n| is_flow_subject(&n.kind)) {
+            if seam_fs::debug_on("wave") {
+                let n = data.nodes.iter().filter(|n| is_flow_subject(&n.kind)).count();
+                eprintln!("[wave-exec] until-crossing: stopped at step {step} with {n} boundary node(s) reached");
+            }
+            break;
         }
         if seam_fs::debug_on("wave") {
             eprintln!("[wave-exec] step={step} ordered={_w_ordered} entered={_w_applied} skip_expanded={_w_skip_expanded} budget_break={_w_broke_budget}");
