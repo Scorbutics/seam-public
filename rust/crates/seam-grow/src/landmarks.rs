@@ -85,6 +85,16 @@ const K_DEFAULT: usize = 64;
 /// `u16::MAX` is the unreachable marker, so no real distance may collide with it.
 const UNREACHABLE: u16 = u16::MAX;
 
+/// The two hub sources that decide whether this graph carries a metric at all. A key node joins every one of
+/// its sides pairwise-in-2-hops, and a name-based call edge joins every caller of a name to every definition of
+/// it; past a certain fan both stop describing locality and start acting as universal shortcuts.
+fn key_fan() -> usize {
+    std::env::var("SEAM_LM_KEY_FAN").ok().and_then(|v| v.parse().ok()).unwrap_or(32)
+}
+fn name_fan() -> usize {
+    std::env::var("SEAM_LM_NAME_FAN").ok().and_then(|v| v.parse().ok()).unwrap_or(32)
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct LandmarkIndex {
     /// node key -> dense index. A node key is `file#symbol` for a definition, or a bare `file`.
@@ -318,7 +328,7 @@ fn build_graph(repo: &str) -> (Vec<String>, Vec<Vec<u32>>) {
         let Some(targets) = defs_by_name.get(&method) else { continue };
         // a name called from hundreds of files is a hub whose edges say nothing about locality, and it costs
         // |callers| * |targets| edges; the cap keeps the graph from going quadratic on `get`/`toString`.
-        if targets.len() > 32 || callers.len() > 256 {
+        if targets.len() > name_fan() || callers.len() > 256 {
             continue;
         }
         for c in &callers {
@@ -338,6 +348,13 @@ fn build_graph(repo: &str) -> (Vec<String>, Vec<Vec<u32>>) {
     let (produced, consumed) = seam_couple::ground::floor::merge_floor(&contribs);
     for side in [&produced, &consumed] {
         for (key, sides) in side.iter() {
+            // A KEY IS A NODE, so a key with N sides makes all N files mutually 2 hops apart. `/*` on keycloak
+            // has 731 of them: a wildcard artifact, not a boundary anyone crosses. Left in, it collapses the
+            // whole metric — MEASURED, an exact two-ended corridor went from 3 files at slack+1 to 1240 at
+            // slack+2, with `saml/config/Key.java` and `common/util/Time.java` inside it.
+            if sides.producers.len() + sides.consumers.len() > key_fan() {
+                continue;
+            }
             let ki = id_of(&format!("key:{key}"), &mut keys, &mut adj);
             for a in sides.producers.iter().chain(sides.consumers.iter()) {
                 let fi = id_of(&normpath(&a.file), &mut keys, &mut adj);

@@ -337,10 +337,52 @@ async function runCodebase(a: Args): Promise<number> {
           byFile.set(side.file, e);
         }
       }
+      // MOUNT PARENTS (route kind only). A JAX-RS collection resource does not serve the leaf route at all —
+      // it MOUNTS the sub-resource that does, via `@Path("{realm}") public RealmAdminResource getRealmAdmin()`.
+      // So it is on no key the anchor touches and no counterpart list names it, while being the file an agent
+      // opens most after the leaf: `RealmsAdminResource.java` is 85 of keycloak's 1232 measured opens and was
+      // absent from every map this session produced.
+      //
+      // It is reachable because the route TABLE holds the composed path: find the full routes that END with one
+      // of the anchor's own (relative) key values, take the mount PREFIX that composition added, and look that
+      // prefix up as a route in its own right. `/*/events/config` + `/admin/realms` -> the servers of
+      // `/admin/realms`, which are exactly the collection resource and the roots that mount it.
+      //
+      // The anchor's degenerate `/*` key is skipped: it matches every route and grounds no side of its own.
+      const parentFiles = new Map<string, number>();
+      if (want.has("route")) {
+        const locate = (q: string) => ((loadAddon() as any).locateRoutes?.(a.repo, q, 60) ?? []) as any[];
+        const prefixes = new Set<string>();
+        for (const v of new Set((cp?.keys ?? []).filter((k: any) => want.has(k.kind)).map((k: any) => k.value))) {
+          if (!v || v === "/*") continue;
+          for (const r of locate(v as string)) {
+            if (!r.route?.endsWith(v as string)) continue;
+            const pre = r.route.slice(0, r.route.length - (v as string).length);
+            if (pre && pre !== "/") prefixes.add(pre);
+          }
+        }
+        for (const pre of prefixes) {
+          for (const r of locate(pre)) {
+            if (r.route !== pre) continue;                 // the PREFIX as a route, not everything under it
+            for (const sv of (r.servers ?? [])) {
+              if (!sv.file || sv.file === a.anchorFile) continue;
+              parentFiles.set(sv.file, (parentFiles.get(sv.file) ?? 0) + 1);
+            }
+          }
+        }
+      }
+      const _PARENT_CAP = 3;
+      const parents = [...parentFiles.entries()]
+        .filter(([f]) => !byFile.has(f))                    // a direct counterpart is already a better center
+        .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+        .slice(0, _PARENT_CAP)
+        .map(([f]) => f);                                   // no symbol: a mount parent is addressed as a module
+
       const derived = [...byFile.entries()]
         .sort((x, y) => y[1].keys.size - x[1].keys.size || x[0].localeCompare(y[0]))
         .slice(0, _CAP)
-        .map(([file, e]) => `${file}#${e.symbol}`);
+        .map(([file, e]) => `${file}#${e.symbol}`)
+        .concat(parents);
       if (derived.length) {
         a.center = [a.center, ...derived].filter(Boolean).join(",");
         // STATED, not silent: the answer now has centers the caller did not write, and a map whose ends came

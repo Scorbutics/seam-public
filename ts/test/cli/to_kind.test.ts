@@ -34,6 +34,24 @@ beforeAll(() => {
     "export class Orders {",
     "  async list() { return fetch('/api/orders'); }",
     "  async create(o: any) { return fetch('/api/orders', { method: 'POST', body: o }); }",
+    // a RELATIVE path — the shape that makes a mount parent derivable at all. A typed API client builds paths
+    // against a base URL, so the key it grounds is the SUFFIX (`/drafts`) while the server composes the
+    // absolute one (`/api/drafts`); the prefix that composition added is the mount, and its servers are the
+    // collection resource. keycloak's admin client does exactly this (`path: "/{realm}/events/config"`).
+    "  async drafts() { return fetch('/drafts'); }",
+    "}",
+  ].join("\n"));
+  // the MOUNT PARENT — a collection resource that serves NO leaf route itself, it only mounts the
+  // sub-resource that does. It is on no key the client touches, so no counterpart list can name it.
+  w("server/src/main/java/api/ApiRoot.java", [
+    "package api;",
+    "@Path(\"/api\")",
+    "public class ApiRoot {",
+    "    @Path(\"orders\")",
+    "    public OrdersResource orders() { return new OrdersResource(); }",
+    "    @GET",
+    "    @Path(\"drafts\")",
+    "    public Response drafts() { return Response.ok().build(); }",
     "}",
   ].join("\n"));
   // the SERVER — the end that must be DERIVED, never addressed by the caller
@@ -84,6 +102,20 @@ describe("--to-kind derives the counterpart centers from the anchor's grounded k
     // case the answer itself cannot show — a map with no derived centers is indistinguishable from a map that
     // never asked for any.
     expect(err).toMatch(/warning: --to-kind queue/);
+  });
+
+  // MEASURED on keycloak: `RealmsAdminResource.java` serves `/admin/realms` and MOUNTS `RealmAdminResource`,
+  // is the 4th most-opened file in the corpus (85 of 1232 opens), and appeared in ZERO maps this session until
+  // mount parents were derived — the anchor's own key for that endpoint normalizes to `/*` and grounds no side.
+  // Adding it took content coverage 50.9% -> 53.3% and citation coverage 55.7% -> 62.0%.
+  test("a MOUNT PARENT is derived even though it serves no key the anchor touches", () => {
+    const { out, err } = run(["--scan", "--auto", "--center", "client/src/orders.ts#Orders",
+      "--to-kind", "route", "--intent", "how an order is created end to end", "--skeleton", "--format", "agent"]);
+    // NO ESCAPE HATCH. The first version of this test fell back to asserting `OrdersResource.java` when the
+    // parent was absent, and PASSED — on a fixture whose client fetched the absolute path, so no mount prefix
+    // existed and the feature under test never ran. A test that tolerates the feature being missing is a test
+    // that cannot fail for the reason it was written.
+    expect(out + err).toContain("ApiRoot");
   });
 
   test("an unknown kind is not a crash", () => {

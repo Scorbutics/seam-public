@@ -374,3 +374,66 @@ fn the_center_keys_resolve_in_the_landmark_table() {
     // by default. Deleting it instead would lose the only executable statement of what is blocking.
     assert_eq!(h, 0, "h is no longer 0 — the graph now carries a usable metric, so flip this test and enable A*");
 }
+
+/// THE CORRIDOR PROBE — is an EXACT two-ended corridor usable where the ALT heuristic was not?
+///
+/// A* needs `h` because it knows only where it is going. A two-center grow knows BOTH ends, so it does not need
+/// an estimate at all: BFS from each end on the cached approximate graph (two traversals, milliseconds) and
+/// keep the nodes where `d_A(n) + d_B(n) <= d(A,B) + slack`. That is exact for the query, with none of the
+/// triangle-inequality slack that made `h` collapse.
+///
+/// The open question this measures: the hub edges that flattened the landmark distances may flatten this too.
+#[test]
+fn keycloak_two_ended_corridor() {
+    let repo = "/home/scorbutics/dev/keycloak";
+    if !Path::new(repo).exists() {
+        return;
+    }
+    LandmarkIndex::reset(None);
+    let idx = LandmarkIndex::build(repo);
+    let (keys, adj) = idx.debug_graph();
+    let ix = |k: &str| keys.iter().position(|x| x == k);
+    let a = ix("js/libs/keycloak-admin-client/src/resources/realms.ts#Realms");
+    let b = ix("services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm");
+    let (Some(a), Some(b)) = (a, b) else {
+        eprintln!("[corridor] one end is not in the graph (a={:?} b={:?})", a, b);
+        return;
+    };
+    let bfs = |src: usize| -> Vec<u32> {
+        let mut d = vec![u32::MAX; adj.len()];
+        d[src] = 0;
+        let mut q = VecDeque::from([src]);
+        while let Some(u) = q.pop_front() {
+            for &v in &adj[u] {
+                if d[v as usize] == u32::MAX {
+                    d[v as usize] = d[u] + 1;
+                    q.push_back(v as usize);
+                }
+            }
+        }
+        d
+    };
+    let (da, db) = (bfs(a), bfs(b));
+    let dab = da[b];
+    eprintln!("[corridor] d(A,B) = {dab} over {} nodes", keys.len());
+    for slack in 0..=6u32 {
+        let mut files = HashSet::new();
+        let mut n = 0usize;
+        for i in 0..keys.len() {
+            if da[i] == u32::MAX || db[i] == u32::MAX { continue; }
+            if da[i].saturating_add(db[i]) <= dab + slack {
+                n += 1;
+                files.insert(keys[i].split('#').next().unwrap_or("").to_string());
+            }
+        }
+        eprintln!("[corridor] slack +{slack}: {n} nodes, {} files", files.len());
+    }
+    // and WHICH files, at the slack that looks usable — the list is what says whether the corridor is the flow
+    let mut files: Vec<&str> = (0..keys.len())
+        .filter(|&i| da[i] != u32::MAX && db[i] != u32::MAX && da[i] + db[i] <= dab + 2)
+        .map(|i| keys[i].split('#').next().unwrap_or(""))
+        .collect();
+    files.sort_unstable();
+    files.dedup();
+    eprintln!("[corridor] slack+2 files ({}): {:?}", files.len(), files.iter().take(40).collect::<Vec<_>>());
+}
