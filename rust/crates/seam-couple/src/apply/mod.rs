@@ -55,8 +55,27 @@ fn complement_budget() -> i64 {
 // The inferred http-clients for a repo (FULL scope — no footprint), memoized: a pure function of repo source,
 // re-derived once (mirrors ctx.httpClients cached per grow). The expensive full-repo binding scan runs once.
 static HTTP_CLIENTS_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<String>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// PER-REPO BUILD LOCK — the memo above is check-then-build, and `grow_centers` fans its centers across rayon,
+/// so every one of them missed the cache at the same instant and each ran the full-repo scan. Measured on
+/// keycloak with 7 derived centers: 13 calls at ~3.5s EACH, where a working memo shows one build and twelve
+/// hits at 0.00s. Single-flighting it turns N full-repo scans into one.
+///
+/// The build lock is held for the SCAN, the cache lock only around the get/insert — holding the map lock across
+/// the build would serialise every repo against every other and invites the lock-order cycle the cache audit
+/// exists to prevent.
+static HTTP_CLIENTS_BUILD: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub fn effect_clients(repo: &str) -> Arc<Vec<String>> {
+    if let Some(hit) = HTTP_CLIENTS_CACHE.lock().unwrap().get(repo) {
+        return hit.clone();
+    }
+    let build = {
+        let mut b = HTTP_CLIENTS_BUILD.lock().unwrap();
+        b.entry(repo.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+    };
+    let _flight = build.lock().unwrap();
+    // RE-CHECK under the build lock: whoever we queued behind has published by now, and without this every
+    // waiter would still run its own scan — the race merely serialised rather than removed.
     if let Some(hit) = HTTP_CLIENTS_CACHE.lock().unwrap().get(repo) {
         return hit.clone();
     }

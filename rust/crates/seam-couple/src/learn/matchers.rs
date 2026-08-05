@@ -12,6 +12,8 @@ use crate::regex_util::captures_not_word_before;
 use crate::types::KeyHit;
 use crate::verb_class::write_op;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use regex::Regex;
 use seam_lang::{grammar_for, Ctx};
 use serde::{Deserialize, Serialize};
@@ -444,7 +446,33 @@ fn produces(role: &str) -> bool {
 
 /// Load the persisted rules from a `.seam` dir (main store; schema 3). Legacy schema-1 `key-matchers.json` is
 /// folded in (deduped). Returns rules in file order, legacy appended. Port of `_loadStore().rules`.
+/// The parsed rule store, memoised per directory and INVALIDATED ON THE FILE'S OWN mtime+len.
+///
+/// `load_matchers` is called once per `resolve_coupling`, which is once per center per wave — 18 times on a
+/// keycloak `--to-kind` run — and each call re-read and re-parsed `key-adapters.json` from disk. Keyed on the
+/// stat rather than the path alone because the LEARN flywheel WRITES this store: a plain per-dir memo would
+/// hide a rule the same process had just learned.
+static STORE_CACHE: Lazy<Mutex<HashMap<String, (u64, u64, Vec<KeyMatcher>)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn store_stamp(dir: &str) -> (u64, u64) {
+    std::fs::metadata(format!("{dir}/key-adapters.json"))
+        .map(|m| (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos() as u64).unwrap_or(0)))
+        .unwrap_or((0, 0))
+}
+
 fn load_store_rules(dir: &str) -> Vec<KeyMatcher> {
+    let stamp = store_stamp(dir);
+    if let Some((len, mt, rules)) = STORE_CACHE.lock().unwrap().get(dir) {
+        if (*len, *mt) == stamp {
+            return rules.clone();
+        }
+    }
+    let rules = load_store_rules_uncached(dir);
+    STORE_CACHE.lock().unwrap().insert(dir.to_string(), (stamp.0, stamp.1, rules.clone()));
+    rules
+}
+
+fn load_store_rules_uncached(dir: &str) -> Vec<KeyMatcher> {
     let mut rules: Vec<KeyMatcher> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     if let Ok(txt) = std::fs::read_to_string(format!("{dir}/key-adapters.json")) {
