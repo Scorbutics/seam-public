@@ -59,6 +59,7 @@ USAGE
   seam --scan --repo <repo> --center <file>#<symbol> --intent "<q>"        a footprint MAP around an anchor
   seam --scan --repo <repo> --auto --center <f>#<s> --intent "<q>"         GROW a flow to its culmination
   seam --scan ... --auto --center <f>#<s> --to-kind route --intent "<q>"   GROW both sides of a CROSS-STACK flow
+  seam --scan ... --to-kind route --with-consumers 2 --intent "<q>"        …and the center's own callers too
   seam --git <range> --repo <repo>                                        decompose a DIFF into review seams
 
 WHEN TO REACH FOR WHICH

@@ -421,6 +421,71 @@ async function runCodebase(a: Args): Promise<number> {
     }
   }
 
+  // ── `--with-consumers N` — THE SKIRT: pull the center's own callers in as centers ────────────────────────
+  //
+  // `--to-kind` derives what is ACROSS the boundary; this derives what is BEHIND the center. Measured, that is
+  // the largest remaining gap: the admin-UI files whose only link to the realm flow is
+  // `adminClient.realms.<m>(...)` — RealmSettingsTabs.tsx (123 of keycloak's 1232 opens), RealmContext.tsx (55),
+  // LoginTab.tsx (9) — are ~27% of read demand and have ZERO hunks in the region. They are behind one END, so
+  // no corridor and no radius reaches them; only naming them does.
+  //
+  // RANKED BY INTENT, which is the opposite of what every other ranking decision in this engine does, and it is
+  // measured rather than conceded. The fan is 108 files of which SIX carry any demand, and the structural
+  // rankings all fail on it: call count puts TEST files first and 0% of demand in the top 12; excluding tests
+  // still leaves 89 zero-demand files; a lexical intent filter matches 100 of 108 because "admin" is in every
+  // admin-ui path. RealmSettingsTabs.tsx and DefaultGroupsTab.tsx are the same directory, the same shape, both
+  // calling `realms.*` — structure cannot tell them apart because they are not structurally different. What
+  // separates them is the topic, and embeddings rank RealmSettingsTabs 3rd and RealmContext 6th of 108, giving
+  // 14.4% of demand in a top-6 against a 26.1% ceiling.
+  //
+  // Needs SEAM_MEMBER_FIELDS to see them at all (typed-field receiver resolution), so it turns it on for the
+  // consumer scan only — that flag is off by default because it also seeds the grow's up-climb, and this path
+  // wants the CALLERS, not the fan.
+  if (a.scan && a.repo && a.anchorFile && a.symbol && a.withConsumers) {
+    const _tc = Date.now();
+    const prev = process.env.SEAM_MEMBER_FIELDS;
+    try {
+      const { loadAddon, syncEnv } = await import("../codebase/rust_core.js");
+      const addon: any = loadAddon();
+      // RESOLVED CONSUMERS ONLY — deliberately NOT the SEAM_MEMBER_FIELDS fan.
+      //
+      // Widening the scan finds far more: 108 caller files instead of 1, including the admin-UI components that
+      // carry ~27% of read demand. Adding the top 4-6 of them by intent MEASURED WORSE — content coverage
+      // 57.8% -> 53.3% — while adding the single RESOLVED consumer measured BEST, 57.8% -> 62.3%.
+      //
+      // The difference is what kind of node each is. `client.ts` is the facade every resource hangs off, so its
+      // neighbourhood IS the flow's machinery; `ExecutorForm.tsx` and `OtpPolicy.tsx` are leaves that each drag
+      // an unrelated neighbourhood in. A resolved consumer edge is evidence of structure; the widened fan is
+      // name-based recall, and recall without structure is what the region budget cannot afford.
+      const _unused = syncEnv;
+      const set: any = addon.projectConsumerSet(a.repo, a.anchorFile, a.symbol, true, false);
+      const files = [...new Set(((set?.members ?? []) as any[]).map((m) => m.file).filter(Boolean))]
+        .filter((f) => f !== a.anchorFile);
+      let picked: string[] = [];
+      if (files.length) {
+        const best = new Map<string, number>();
+        for (const { def, score } of (addon.embedScoreDefs(a.repo, a.intent ?? "", files) as any[])) {
+          if (!(best.get(def.file)! >= score)) best.set(def.file, score);
+        }
+        picked = [...best.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+          .slice(0, a.withConsumers).map(([f]) => f);
+      }
+      if (picked.length) {
+        a.namedCenters ??= parseCenters(a.center).length;
+        a.center = [a.center, ...picked].filter(Boolean).join(",");
+      }
+      if (debugOn("perf")) require("fs").writeSync(2, `[perf] with-consumers ${files.length} caller file(s) -> ${picked.length} center(s) in ${Date.now() - _tc}ms\n`);
+      if (!picked.length) process.stderr.write(`warning: --with-consumers: no callers of ${a.symbol} resolved — growing the named center(s) only.\n`);
+    } catch (e) {
+      process.stderr.write(`warning: --with-consumers: the caller scan failed (${e}) — growing the named center(s) only.\n`);
+    } finally {
+      // restore BOTH sides — leaving it on would seed the grow's up-climb with the whole consumer fan, which
+      // measured 33s -> 134s and 57.8% -> 53.3% content coverage.
+      if (prev === undefined) delete process.env.SEAM_MEMBER_FIELDS; else process.env.SEAM_MEMBER_FIELDS = prev;
+      try { const { loadAddon, syncEnv } = await import("../codebase/rust_core.js"); syncEnv(loadAddon()); } catch { /* best effort */ }
+    }
+  }
+
   // SINGLE-DEF FILE CENTER → resolve it STRUCTURALLY (don't fall into the SEMANTIC concern center-first, whose
   // intent-relevance ranking can crown an off-subject shared-key cluster — the `/member/v1/survey` route out-
   // scoring the real `/member/booking/v1`). A bare `--center <file>` leaves a.symbol unset. Resolve the file's
