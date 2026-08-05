@@ -128,6 +128,12 @@ is really opened. Measured on keycloak arm A (970 opens over 68 files):
 |---|---:|---:|
 | demand the map CITES | 48.4% | 48.4% |
 | demand the map SHIPS CODE for | **5.6%** | **34.8%** |
+
+> **These figures are from the pre-fold fixture and are UNDERSTATED.** `demand.ts` counted a file once per
+> spelling — an agent that `cd`s and reads `resources/realms.ts` was charged a different file from
+> `js/libs/.../resources/realms.ts`. Folding by unique suffix against `git ls-files`: 87 path strings are 54
+> real files, and content coverage on the same map reads **62.2%**, not 47.8%. Every number in this README
+> derived from the fixture before that fold is low by roughly 14 points.
 | files with code | 1 | 33 |
 | `RealmAdminResource.java` (127 opens, the hottest file) | cited, no code | **CODE** |
 

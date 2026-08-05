@@ -35,6 +35,7 @@
 //   - `/tmp/*` — the same, via redirection.
 //   - paths outside `--repo` — the benchmark's own scripts, the seam repo itself.
 import { readdirSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join, dirname } from "node:path";
 
 const HERE = dirname(new URL(import.meta.url).pathname);
@@ -101,15 +102,50 @@ function parse(path: string, caseId: string, arm: Arm): Raw {
 }
 
 /** Normalize one arm's raw accesses against the CASE's repo (resolved across both arms — see repoOf). */
+/// A REPO-RELATIVE PATH, however the agent typed it.
+///
+/// An agent `cd`s into a subdirectory and then reads `resources/realms.ts`, or `realms.ts`, for the file whose
+/// repo-relative path is `js/libs/keycloak-admin-client/src/resources/realms.ts`. Counting those as different
+/// files fragments the demand: measured on the keycloak arm-A corpus, 87 distinct path STRINGS folded to 60
+/// real files, and closure coverage read 65.3% when the true figure was 80.6% — a 15.3-point understatement in
+/// every content-coverage number derived from this fixture.
+///
+/// So a path that is not repo-relative as written is matched by SUFFIX against the repo's own file list. An
+/// AMBIGUOUS suffix (two files ending the same way) is left unfolded rather than guessed — folding it would
+/// invent demand for a file the agent may never have opened.
+function repoFiles(repo: string): Map<string, string[]> {
+  const byTail = new Map<string, string[]>();
+  let out = "";
+  try { out = execSync("git ls-files", { cwd: repo, encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 }); }
+  catch { return byTail; }
+  for (const f of out.split("\n")) {
+    if (!f) continue;
+    const parts = f.split("/");
+    // index every suffix, so `realms.ts` and `resources/realms.ts` both find it
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const tail = parts.slice(i).join("/");
+      byTail.set(tail, [...(byTail.get(tail) ?? []), f]);
+    }
+  }
+  return byTail;
+}
+const _repoIndex = new Map<string, Map<string, string[]>>();
+
 function resolve(raw: Raw, repo: string): Case {
-  const rel = (p: string): string | null => (p.startsWith(repo + "/") ? p.slice(repo.length + 1) : null);
+  if (!_repoIndex.has(repo)) _repoIndex.set(repo, repoFiles(repo));
+  const idx = _repoIndex.get(repo)!;
+  const fold = (p: string): string => {
+    const hit = idx.get(p);
+    return hit && hit.length === 1 ? hit[0] : p;   // unique suffix → the real path; ambiguous → leave it
+  };
+  const rel = (p: string): string | null => (p.startsWith(repo + "/") ? fold(p.slice(repo.length + 1)) : null);
   const reads: string[] = [];
   const bash: string[] = [];
   let offRepo = 0;
   for (const p of raw.rawReads) { const r = rel(p); if (r) reads.push(r); else offRepo++; }
   for (const c of raw.cmds) for (const t of bashReadTargets(c)) {
     // a bare relative path under `cd <repo> && grep …` is already repo-relative
-    const r = t.startsWith("/") ? rel(t) : t;
+    const r = t.startsWith("/") ? rel(t) : fold(t);
     if (r) bash.push(r);
   }
   const seamCmds = raw.cmds.filter((c) => /decompose\.ts/.test(c) && !/--help/.test(c));
