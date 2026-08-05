@@ -59,6 +59,37 @@ believe: you will be scored on precision as well as completeness.
 EOF
 )
 
+# ── MEASUREMENT HYGIENE: an isolated, PRE-WARMED cache ───────────────────────────────────────────────────────
+# Two confounds cost most of a day (2026-08-02/03) and both are apparatus, not tool:
+#
+#   1. SHARED CACHE. Every shard lives under the analysed repo (`<repo>/.seam`), so any concurrent profiling
+#      run contends with the benchmark — and clearing a cache for one silently re-times the other. That
+#      happened mid-flight: deleting `grow-v1` invalidated two of three runs. A git worktree does NOT help;
+#      it isolates the code, not the repo under test. `SEAM_REPO_CACHE_DIR` gives this benchmark its own root.
+#
+#   2. COLD-AFTER-REBUILD. The cache is keyed on the core's build stamp, so the FIRST run after any
+#      `cargo build` pays a full floor + footprint rebuild. Measured on one unchanged command: 15s, 34s, 49s,
+#      52s, 115s — nearly all of that spread was first-after-build, not the engine.
+#
+# So: one cache root for the whole case, warmed by a DISCARDED grow before either arm starts. That is also the
+# honest model of a real user, whose repo cache is warm — a per-run cold cache would charge arm SEAM for
+# first-run cost that no real invocation pays, which is the mirror image of the bias this harness exists to
+# avoid.
+export SEAM_REPO_CACHE_DIR="${SEAM_REPO_CACHE_DIR:-/tmp/seam-bench-cache}"
+mkdir -p "$SEAM_REPO_CACHE_DIR"
+echo "  cache root: $SEAM_REPO_CACHE_DIR (isolated)"
+# WARMED BY REPLAY, not by a hand-picked anchor. kc12 pre-warmed ONE anchor into a fresh root and arm SEAM's
+# engine time came out 111.6/120.9/32.7s against 20.4/22.6/62.7s on a shared warm cache — the isolation had
+# stripped the legitimate warmth along with the contamination, charging the treatment arm for cold-path work
+# no real invocation pays. `prewarm.sh` replays the Seam commands PREVIOUS runs actually issued, so the cache
+# holds what an agent reaches for on this case rather than what the harness author guessed.
+if [ -n "$(ls "$OUT"/*.B.jsonl 2>/dev/null | head -1)" ]; then
+  "$HERE/prewarm.sh" "$REPO" $(ls -t "$OUT"/*.B.jsonl 2>/dev/null | head -6) || true
+else
+  echo "  pre-warm: no prior transcripts to replay — first run on this case will be COLD, and its arm-SEAM"
+  echo "            engine time is not comparable to a warmed one. Discard it or re-run."
+fi
+
 run_arm () {  # run_arm <letter> <allowed-tools...> ; prompt comes from $PROMPT
   local letter="$1"; shift
   local started ended

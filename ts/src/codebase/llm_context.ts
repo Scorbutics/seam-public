@@ -496,8 +496,37 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const header = (): string[] => {
     // Prefer the anchor NODE's own label (the pinned method) over the cluster label, which resolves to the bigger
     // enclosing symbol (the class) when the anchor is a member of a class-primaried seam.
+    let _pinLines: string[] = [];
     const h = [`anchor: ${label.get(String(model.anchor)) ?? cl.intent ?? model.anchor ?? "?"}`];
     if (opts.intent) h.push(`intent: ${opts.intent}`);
+    // EVERY PINNED CENTER IS NAMED, WITH ITS LOCATION. `anchor:` prints ONE symbol and no file, so on a
+    // multi-center grow the second end the caller pinned appeared nowhere in the map — measured on keycloak,
+    // `RealmsAdminResource.java` is the most-opened file in the whole benchmark corpus (85 opens) and was
+    // never CITED: it survived only as prose inside other seams' lines ("reached from RealmsAdminResource"),
+    // which carries no `file:line` to jump to. A caller who names an end and cannot find it in the answer
+    // opens it by hand, which is the exact read this format exists to remove.
+    //
+    // The center is cited even when the decomposition gave it no seam of its own — that is a property of the
+    // partition, not something the caller should have to know.
+    const pins = (opts.centers ?? []).filter((c) => c?.file);
+    if (pins.length) {
+      const loc = (c: { file: string; symbol?: string }): string => {
+        const hit = seams.flatMap((s) => s.hunks ?? []).find((x: any) => x.file === c.file && (!c.symbol || x.label === c.symbol))
+          ?? seams.flatMap((s) => s.hunks ?? []).find((x: any) => x.file === c.file);
+        return `${at(c.file, (hit as any)?.start)}${c.symbol ? `#${c.symbol}` : ""}`;
+      };
+      h.push(`centers: ${pins.map(loc).join(" · ")}`);
+      _pinLines = pins.flatMap((c) => {
+        const hit = seams.flatMap((s) => s.hunks ?? []).find((x: any) => x.file === c.file && (!c.symbol || x.label === c.symbol))
+          ?? seams.flatMap((s) => s.hunks ?? []).find((x: any) => x.file === c.file);
+        // AN ADDRESS WITHOUT CODE STILL COSTS THE READ. Naming the center bought 6.9 points of "cited" and
+        // zero of "shown" — the agent has the location and opens the file anyway, which is the CONTENT gap
+        // verification-tax.ts bins as the expensive one. Pinned centers are already exempt from the snippet
+        // budget, so showing them costs nothing the caller did not ask for.
+        const code = opts.snippet?.(c.file, (hit as any)?.start, "      ", { depth: 2, exempt: true }) ?? [];
+        return code.length ? [`  ${c.symbol ?? c.file.split("/").pop()} (${at(c.file, (hit as any)?.start)}) — PINNED CENTER`, ...code] : [];
+      });
+    }
     // HONEST counts — most of a coupling-heavy footprint is the shared-key FAN (crossing seams + hub-fanout
     // blindspots), which the render folds. Split them out so "seams: 330 / blindspots: 215" doesn't read as chaos
     // when the body is ~90 lines: N GROUNDED seams + the coupling crossings; the ACTIONABLE blindspots + folded hubs.
@@ -517,7 +546,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       `seams: ${seams.length - _crossSeams} grounded${_crossSeams ? ` + ${_crossSeams} shared-key crossing(s)` : ""}`,
       `unresolved: ${(model.unresolved ?? []).length}`,
       `blindspots: ${_leadBs} actionable${_ambientBs ? ` (+${_ambientBs} ambient)` : ""}${_fanoutBs ? ` (+${_fanoutBs} hub table(s))` : ""}`);
-    const out = ["# Agent map — the region to read instead of a grep loop", h.join(" | ")];
+    const out = ["# Agent map — the region to read instead of a grep loop", h.join(" | "), ..._pinLines];
     const im = model.intentMatch;
     if (im?.offIntent) out.push(`⚠ low intent match (top ${im.max} < ${im.floor}) — this anchor's flow may not answer the intent`);
     return out;

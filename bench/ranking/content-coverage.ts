@@ -40,8 +40,19 @@ const cited = new Set<string>();
 const coded = new Set<string>();
 let cur: string | null = null;
 for (const line of out.split("\n")) {
-  const m = line.match(/([\w./@-]+\.\w{1,5}):(\d+)/);
-  if (m && !isGutter(line)) { cur = m[1]; cited.add(m[1]); }
+  // EVERY citation on the line, not the first. A line can carry several — the header names all pinned
+  // centers, a spine step names caller and callee — and `match()` returned only the leftmost, so the second
+  // file on any such line read as uncited. Measured: `RealmsAdminResource.java`, the most-opened file in the
+  // corpus, is cited in the header after `realms.ts` and was scored missing because of it.
+  if (!isGutter(line)) {
+    let first: string | null = null;
+    for (const m of line.matchAll(/([\w./@-]+\.\w{1,5}):(\d+)/g)) { first ??= m[1]; cited.add(m[1]); }
+    // ATTRIBUTION IS THE FIRST citation, CITATION is all of them. A snippet is emitted by `seamLine` from the
+    // seam's OWN primary, which leads the line; the trailing prose ("reached from X (f:l)") cites others that
+    // get no code. Crediting the last one moved `coded` from 62.2% to 46.9% by attributing every snippet to
+    // whatever the prose happened to mention.
+    if (first) cur = first;
+  }
   if (isGutter(line) && cur) coded.add(cur);
 }
 if (!cited.size) { console.error(`ABORT: parsed 0 citations from ${mapPath} — the extractor or the map is broken.`); process.exit(3); }
