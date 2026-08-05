@@ -160,6 +160,46 @@ anchor's own file — 35 lines from ONE file where section order gave 55 across 
 citations per file (recovered three). Section order wins because it interleaves anchor, spine and writers by
 construction. Do not retry these without a scoreboard.
 
+## The ceiling is not 100% — and knowing that changes what to build
+
+Content coverage @ demand on the keycloak cross-language case, measured against 1232 real arm-A opens:
+
+| | |
+|---|---:|
+| start of session | 5.6% |
+| **current** | **69.1%** |
+| missing | 30.6% |
+
+The missing 30.6% is NOT one thing, and only part of it is a defect:
+
+| | share of demand | what it is |
+|---|---:|---|
+| mentions the realm flow | **9.9%** | genuinely missing — recoverable |
+| no realm-flow reference at all | **20.7%** | the agent EXPLORED and found nothing |
+
+`RealmSettingsSection.tsx` is opened 72 times and contains no `adminClient` or `realms` reference whatsoever.
+`GeneralTab.tsx` calls `adminClient.users.getProfile(...)` — the USERS resource. Neither is on the read/update
+flow. The agent opened them because the directory name looked right.
+
+**Those opens are a symptom, not a target.** They are evidence of the agent not having the answer — files it
+opened, read, and discarded. Serving them would mean growing files that are not on the flow, which is the
+precision problem in another costume. A perfect map makes those opens STOP; it does not contain them.
+
+So the realistic ceiling for this case is around **79%**, and the headroom worth chasing is the 9.9%. Treating
+the metric as if 100% were the target would send the next change in exactly the wrong direction.
+
+### What the recoverable 9.9% needs
+
+`--query consumers --center realms.ts#Realms` resolves ONE consumer and declares its own blocker:
+
+    method-unattributed-consumers — 1 consumer(s) import Realms as a RESOLVED reference but no method call
+    could be attributed to an instance (factory/DI/dynamic): client.ts
+
+The chain is `adminClient.realms.update(...)`, where `client.ts:54` declares `public realms: Realms` and `:98`
+does `this.realms = new Realms(this)`. Linking a UI caller to `Realms` needs **member access through a typed
+field** — the consumer-side twin of the class-property idiom fixed in `def_table`/`named_units`. Bounded
+payoff, resolver-level risk: gate it with a parity check over the def and consumer sets.
+
 ## Traps this harness already hit — do not re-introduce
 
 1. **`Read`-only demand.** Made arm A vacuous. An open is either channel; the split is always printed.
