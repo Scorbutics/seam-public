@@ -355,7 +355,19 @@ fn named_units_visit(ctx: &Ctx, n: Node, in_class: bool, units: &mut Vec<Unit>) 
         // Named by the PROPERTY, spanned by the FUNCTION: the name is what a caller writes (`this.makeRequest`)
         // and the span is the body a reader wants, exactly as the var_declarator branch above does it.
         let ch = ctx.children(n);
-        if let Some(&fl) = ch.iter().find(|c| nk::is_funclike(c.kind())) {
+        // A function LITERAL value, or a DELEGATION call on `this` — `public update = this.makeUpdateRequest(…)`.
+        // The second is how a TS API-client class declares its callable surface; the member is dispatched like a
+        // method (`adminClient.realms.update(...)`) though its initializer is a call, not a function. Narrow on
+        // purpose: only a call whose receiver is literally `this`, so a data field stays out.
+        let val = ch.iter().find(|c| nk::is_funclike(c.kind())).copied().or_else(|| {
+            ch.iter().find(|c| {
+                c.kind().contains("call")
+                    && c.child_by_field_name("function")
+                        .and_then(|f| f.child_by_field_name("object").or_else(|| ctx.children(f).into_iter().next()))
+                        .is_some_and(|r| ctx.text(r).trim() == "this")
+            }).copied()
+        });
+        if let Some(fl) = val {
             if let Some(name) = name_of(ctx, n).or_else(|| ch.first().filter(|c0| nk::is_name_kind(c0.kind())).map(|c0| ctx.text(*c0).to_string())) {
                 let (s, e) = ctx.span(fl);
                 units.push(Unit { name, kind: if in_class { "method" } else { "function" }.into(), start: s, end: e });

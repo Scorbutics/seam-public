@@ -313,6 +313,26 @@ fn ts_pair_key(ctx: &Ctx, n: tree_sitter::Node) -> Option<String> {
     if t.is_empty() || !t.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '$') { None } else { Some(t) }
 }
 
+/// Is this initializer a call on `this` — `this.makeRequest<…>({…})`?
+///
+/// The DELEGATION idiom: a class member defined by calling a sibling/inherited method that returns the real
+/// implementation. It is how a TS API-client class declares its surface (`public update =
+/// this.makeUpdateRequest({method:"PUT"})`), and the member IS callable — `adminClient.realms.update(...)` is
+/// a real call site — even though the initializer is not a function literal.
+///
+/// DELIBERATELY NARROW: only a call whose callee is a member of `this`. A bare `compute()` or a member access
+/// (`public count = items.length`) stays out, because nothing locally says those yield something callable,
+/// and `--locate` must not offer an address that `--center` cannot resolve.
+fn is_self_delegation_call(ctx: &Ctx, v: tree_sitter::Node) -> bool {
+    if !v.kind().contains("call") {
+        return false;
+    }
+    let Some(f) = v.child_by_field_name("function") else { return false };
+    // `this.m` / `this.m<T>` — the receiver must literally be `this`
+    let recv = f.child_by_field_name("object").or_else(|| ctx.children(f).into_iter().next());
+    recv.is_some_and(|r| ctx.text(r).trim() == "this")
+}
+
 pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
     let grammar = grammar_for(file)?;
     let ctx = Ctx::parse(text, grammar)?;
@@ -359,39 +379,32 @@ pub fn defs_in_file_treesitter(file: &str, text: &str) -> Option<Vec<Def>> {
                 let dk = if enclosing.is_empty() { "function" } else { "method" };
                 out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
             }
-        } else if OBJ_PROPERTY.contains(kind) {
-            // AN OBJECT-VALUED PROPERTY — `select: { … }` in a descriptor, `handlers = { … }`. The regex path
-            // indexed these as kind `property` and the tree-sitter path did not, so moving TS onto it would
-            // have SILENTLY dropped them. Descriptor objects are how route tables, config maps and handler
-            // registries are written, and the def table feeds the embedding field, where a named region is
-            // real signal — `locate_is_addressable.test.ts` pins that they are kept and labelled `property`,
-            // and it is what caught this.
-            let is_obj = n
-                .child_by_field_name("value")
-                .map(|v| v.kind().contains("object") && !FN_VALUES.contains(v.kind()))
-                .unwrap_or(false);
-            if is_obj {
-                if let Some(name) = field_name(ctx, n).or_else(|| ts_pair_key(ctx, n)) {
-                    out.push(Def { name, kind: "property".into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
-                }
-            }
-        } else if FIELD_HOLDERS.contains(kind) {
-            // A CLASS PROPERTY HOLDING A FUNCTION — `public makeUpdateRequest = <T,…>({…}) => {…}`. Not a
-            // `method_definition`, so CALLABLE misses it, and not a `lexical_declaration`, so ARROW_HOLDERS
-            // missed it too. It is how a TS class exposes a callable member, and the regex path could not see
-            // it either: `ARROW_RE` requires `const`/`let` and `METHOD_RE` requires `name(…)`.
+        } else if OBJ_PROPERTY.contains(kind) || FIELD_HOLDERS.contains(kind) {
+            // ONE BRANCH for a class/object property, because the two sets overlap on `public_field_definition`
+            // and an `else if` chain let whichever came first SWALLOW the node — the object test would fail and
+            // the function test never ran. Split by what the VALUE is instead:
             //
-            // MEASURED (keycloak admin client). `--locate makeUpdateRequest` answered "No definition found …
-            // grep is the right next step" for a symbol declared at resource.ts:30 — a confident false
-            // negative, and the one failure `--locate` must not have. Only 5 such members exist in that
-            // library, but they are `makeRequest`/`makeUpdateRequest`, the delegation hub every one of ~40
-            // resource classes routes through: 5 invisible defs severed the whole library's call graph, and
-            // with it the TypeScript half of every cross-stack flow through it.
+            //   a function literal, or a delegation call on `this`  -> a callable member (`method`)
+            //   an object literal                                   -> a named region (`property`)
+            //
+            // FUNCTION-VALUED: `public makeUpdateRequest = <T,…>(…) => {…}` and `public update =
+            // this.makeUpdateRequest({…})`. The second is how a TS API-client class declares its surface; the
+            // member is dispatched like a method (`adminClient.realms.update(...)`) though its initializer is a
+            // call. Narrow on purpose — only a call on `this` — so `public count = items.length` stays out and
+            // `--locate` never offers an address `--center` cannot resolve.
+            //
+            // OBJECT-VALUED: kept as `property` for the embedding field (descriptor objects are how route
+            // tables and config maps are written), and filtered out of `--locate`'s anchor list there.
             if let Some(v) = n.child_by_field_name("value") {
-                if FN_VALUES.contains(v.kind()) {
-                    if let Some(name) = field_name(ctx, n) {
-                        // a class property is only callable-as-a-member, so it is a `method` when enclosed
-                        let dk = if enclosing.is_empty() { "function" } else { "method" };
+                let callable = FN_VALUES.contains(v.kind()) || is_self_delegation_call(ctx, v);
+                let objectish = v.kind().contains("object") && !FN_VALUES.contains(v.kind());
+                if callable || objectish {
+                    if let Some(name) = field_name(ctx, n).or_else(|| ts_pair_key(ctx, n)) {
+                        let dk = if callable {
+                            if enclosing.is_empty() { "function" } else { "method" }
+                        } else {
+                            "property"
+                        };
                         out.push(Def { name, kind: dk.into(), file: String::new(), line: n.start_position().row, signature: sig_line(lines, n.start_position().row), enclosing: enclosing.to_string(), doc: preceding_doc(n.start_position().row), body: Some(body_window(lines, n.start_position().row as isize)) });
                     }
                 }
