@@ -26,7 +26,12 @@ const QUERY_HELP: Record<string, { answers: string; needs: string }> = {
   neighborhood: { answers: "the subsystem around this symbol — cohesion and the boundary cut", needs: "--center <file>#<symbol> [--depth <n>]" },
   reaches: { answers: "can A reach B? — a verdict plus the witness path", needs: "--center <file>#<symbol> --to-symbol <t> [--to-file <f>]" },
   writers: { answers: "who WRITES the state this symbol reads (reverse data coupling)", needs: "--center <file>#<symbol>" },
-  coupling: { answers: "the shared keys (db tables / routes / events) this symbol touches", needs: "--center <file>#<symbol>" },
+  // NAMED BY THE QUESTION, not by the mechanism. "the shared keys this symbol touches" is what it computes;
+  // "which endpoints does this class serve" is what a caller asks, and the old wording answered neither
+  // recognisably. Measured (bench/grep-vs-seam, keycloak): 11 of 28 search attempts in six seam-arm runs were
+  // `grep -n "@GET\|@Path\|@PUT" <one Java file>` — this shape prints exactly that, with handler and code,
+  // and the agent never reached for it.
+  coupling: { answers: "which HTTP endpoints a class SERVES (@GET/@Path + handler + line), and the db tables / events / routes this symbol touches", needs: "--center <file>#<symbol>" },
   brief: { answers: "EVERYTHING structural about one symbol in ONE call — direct consumers + transitive impact\n                       + dependencies + boundary contract. Start here; reach for a single shape to go deeper", needs: "--center <file>#<symbol>" },
   refactor: { answers: "the same bundle as `brief` (kept for compatibility)", needs: "--center <file>#<symbol>" },
   compare: { answers: "how two symbols differ structurally", needs: "--center <f>#<s> --to-file <f2> --to-symbol <s2>" },

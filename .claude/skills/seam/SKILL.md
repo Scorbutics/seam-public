@@ -30,8 +30,10 @@ description: >-
   breaks if you change X (`--query impact`), the FACTS to refactor X (`--query refactor` =
   impact+dependencies+contract; the PLAN stays yours), can A reach B + a witness path
   (`--query reaches`), a module's boundary (`--query contract`), the cohesive subsystem around X
-  (`--query neighborhood`), how A and B differ (`--query compare`), **where X touches the DATABASE or any
-  cross-stack shared key** (`--query coupling`), **who WRITES the state X reads** (`--query writers`), or
+  (`--query neighborhood`), how A and B differ (`--query compare`), **which HTTP ENDPOINTS a class serves —
+  every `@GET`/`@POST`/`@Path` with its handler method, line and code — or where X touches the DATABASE or
+  any cross-stack shared key** (`--query coupling`; ask it of the CLASS, it widens to the file when the
+  routes are declared at class level), **who WRITES the state X reads** (`--query writers`), or
   EVERYTHING structural about ONE SYMBOL in one call (`--query brief` — start here when the question is
   about one symbol; for a PATH question use the flow grow above, not this);
   or `--ask "<question>"` (§E)
@@ -284,6 +286,11 @@ step, not an option:
       - /admin/realms
           serves   services/.../admin/AdminRoot.java:232
           fetches  js/libs/keycloak-admin-client/src/resources/realms.ts:409
+
+  **AND DO NOT GREP FOR `@GET` / `@Path` TO FIND WHICH METHOD SERVES WHAT.** `--query coupling --center
+  <file>#<Class>` prints the class's whole route surface — every path with its handler method, line and
+  source. Measured on the same runs: ELEVEN of 28 search attempts were `grep -n "@GET\|@Path\|@PUT" <one
+  Java file>`, asking exactly that. The shape already answered it; nothing named the question.
 
   Do NOT try to derive that hop by hand. Measured 2026-08-04 (bench/grep-vs-seam, keycloak): an agent spent
   **16 of its 20 tool calls** working out which Java class serves `PUT /admin/realms/{realm}` — sed on
