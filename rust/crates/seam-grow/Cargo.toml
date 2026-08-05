@@ -17,3 +17,4 @@ seam-fs = { path = "../seam-fs" }
 serde = { workspace = true }
 rayon = { workspace = true }
 seam-cache = { path = "../seam-cache" }
+bincode = { workspace = true }

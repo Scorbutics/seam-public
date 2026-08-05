@@ -15,6 +15,7 @@ pub mod graph_ir;
 pub mod center_repo;
 pub mod warm;
 pub mod intent_rank;
+pub mod landmarks;
 pub mod grow_index;
 pub mod orchestrate;
 pub mod roles;
