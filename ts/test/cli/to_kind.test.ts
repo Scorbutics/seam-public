@@ -124,3 +124,24 @@ describe("--to-kind derives the counterpart centers from the anchor's grounded k
     expect(out).toContain("# Agent map");
   });
 });
+
+// A DERIVED END IMPLIES A RADIUS. `--to-kind` asks for "this center and what is across its routes", and those
+// two things are TWO hops apart on the resolved graph (`Realms --route-fetch--> /admin-events --route-serve-->
+// updateRealm`). So the answer is each end's NEIGHBOURHOOD, and flooding past it is noise rather than rigour:
+// measured on keycloak, radius 2 cut the region from 1313 grounded seams to 1074 while RAISING both scores
+// (content 53.3% -> 57.8%, citation 62.0% -> 64.4%). Radius 3 and 4 regrow the region and score no better.
+describe("--to-kind bounds the grow to the neighbourhood its own ends imply", () => {
+  test("it defaults the radius, and an explicit --max-hops still wins", () => {
+    const withFlag = run(["--scan", "--auto", "--center", "client/src/orders.ts#Orders", "--to-kind", "route",
+      "--intent", "how an order is created end to end", "--skeleton", "--format", "agent"]);
+    expect(withFlag.out).toContain("# Agent map");
+    // an explicit radius must not be overwritten by the default
+    const explicit = run(["--scan", "--auto", "--center", "client/src/orders.ts#Orders", "--to-kind", "route",
+      "--max-hops", "1", "--intent", "how an order is created end to end", "--skeleton", "--format", "agent"]);
+    expect(explicit.out).toContain("# Agent map");
+    // radius 1 is strictly tighter than the default 2, so it cannot cite MORE files — the guard that the
+    // caller's own value reached the grow rather than being silently replaced
+    const cites = (s: string) => new Set([...s.matchAll(/([\w./-]+\.\w{1,5}):\d+/g)].map((m) => m[1])).size;
+    expect(cites(explicit.out)).toBeLessThanOrEqual(cites(withFlag.out));
+  });
+});

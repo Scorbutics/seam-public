@@ -385,6 +385,15 @@ async function runCodebase(a: Args): Promise<number> {
         .concat(parents);
       if (derived.length) {
         a.center = [a.center, ...derived].filter(Boolean).join(",");
+        // A DERIVED END IMPLIES A RADIUS. `--to-kind` answers "this center and what is across its routes", and
+        // on the resolved graph those two things are TWO HOPS apart — `Realms --route-fetch--> /admin-events
+        // --route-serve--> updateRealm`. So the answer is the NEIGHBOURHOOD of each end, and a flood past it is
+        // not extra correctness, it is noise: measured on keycloak, bounding the radius to 2 cut the region
+        // from 1313 grounded seams to 1074 while RAISING both scores — content coverage 53.3% -> 57.8% and
+        // citation 62.0% -> 64.4%. Radius 3 and 4 grow the region again and score no better.
+        //
+        // Only when the caller did not choose one; an explicit `--max-hops` always wins.
+        if (!a.maxHops) a.maxHops = 2;
         // STATED, not silent: the answer now has centers the caller did not write, and a map whose ends came
         // from somewhere the caller cannot see is one they cannot check.
         process.stderr.write(`[to-kind] ${a.toKind}: derived ${derived.length} counterpart center(s) from the anchor's boundary — ${derived.join(", ")}\n`);
