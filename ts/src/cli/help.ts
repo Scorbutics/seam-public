@@ -58,12 +58,17 @@ USAGE
   seam --scan --repo <repo> --query <shape> --center <file>[#<symbol>]     a resolved SHAPE (no LLM)
   seam --scan --repo <repo> --center <file>#<symbol> --intent "<q>"        a footprint MAP around an anchor
   seam --scan --repo <repo> --auto --center <f>#<s> --intent "<q>"         GROW a flow to its culmination
+  seam --scan ... --auto --center <f>#<s> --to-kind route --intent "<q>"   GROW both sides of a CROSS-STACK flow
   seam --git <range> --repo <repo>                                        decompose a DIFF into review seams
 
 WHEN TO REACH FOR WHICH
   A single fact, one symbol, a string literal        -> use grep. Seam is overkill and slower.
   Anything structural about ONE symbol                -> --query brief. One call, four answers. START HERE.
   "who calls X", "what breaks if I change X"         -> a SHAPE (--query, list below). Deterministic, no LLM.
+  A flow that CROSSES the stack (UI -> HTTP -> server) -> --to-kind route. Name the end you know; the other
+                                                        side of every route the center touches is derived from
+                                                        the coupling floor and pinned as a center. Also
+                                                        table / queue / egress for data and message boundaries.
   "how does X work / flow end to end"               -> a GROW (--auto --intent), which follows the path.
   "what does this module expose and how is it used" -> --query contract.
   "what does this diff do"                          -> diff mode (--git / --file).

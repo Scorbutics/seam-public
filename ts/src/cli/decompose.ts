@@ -299,6 +299,66 @@ async function runCodebase(a: Args): Promise<number> {
   // into the concern path, which then failed with "--intent is what finds the mechanism": 8 of the gate's
   // paths went from a one-line answer to an error. An unchosen default must never change what a command DOES.
   if (a.scan && !a.auto && !a.growFrom && (a.intent || (_MAP_FMT.has(a.format) && a.formatExplicit))) a.auto = true;
+  // ── `--to-kind <medium>` — DERIVE the far centers from the anchor's own boundary ─────────────────────────
+  //
+  // THE ASK IT ANSWERS: "this center, plus everything on the other side of its HTTP routes". A cross-stack
+  // question names one end and a KIND, not two addresses — the caller knows the admin client is the source and
+  // that the answer is across HTTP, but not that `RealmAdminResource#getEvents` is where it lands. Deriving the
+  // far end is the half of "the caller names the ends" that the caller genuinely cannot supply.
+  //
+  // NO SEARCH IS INVOLVED, which is why this ships while A* does not. The coupling floor already grounds every
+  // key with BOTH sides, so the other end of a route is a LOOKUP: 25 grounded `http-route` keys on keycloak's
+  // `Realms`, each naming the exact Java symbol and file that serves it. The corridor between the two ends is
+  // one hop through the key, so there is no path to find.
+  //
+  // MEASURED on keycloak (`--center realms.ts#Realms --to-kind route`): 7 counterpart files carrying 21.2% of
+  // measured read demand — `RealmAdminResource` (172 opens), `AdminExtResource` (45), `AdminRoot` (43) — none
+  // of which the caller had to name, and 7 files rather than the 611 a flood touches.
+  //
+  // RANKED BY FAN and capped: the file serving the MOST of the anchor's keys is its principal counterpart
+  // (RealmAdminResource serves 17 of the 25). One center per FILE, because 17 centers in one file is 17 grows
+  // of the same neighbourhood.
+  if (a.scan && a.repo && a.anchorFile && a.toKind) {
+    const _KIND_ALIAS: Record<string, string[]> = {
+      route: ["route", "http-route"], table: ["table", "db-table"], queue: ["queue", "topic"], egress: ["egress", "egress-call"],
+    };
+    const want = new Set(_KIND_ALIAS[a.toKind] ?? [a.toKind]);
+    const _CAP = 6;
+    try {
+      const { loadAddon } = await import("../codebase/rust_core.js");
+      const cp: any = (loadAddon() as any).projectCoupling(a.repo, a.anchorFile, a.symbol ?? undefined);
+      const byFile = new Map<string, { symbol: string; keys: Set<string> }>();
+      for (const k of (cp?.keys ?? [])) {
+        if (!want.has(k.kind)) continue;
+        for (const side of (k.sides ?? [])) {
+          if (!side.file || side.file === a.anchorFile || !side.symbol) continue;
+          const e = byFile.get(side.file) ?? { symbol: side.symbol, keys: new Set<string>() };
+          e.keys.add(k.value);
+          byFile.set(side.file, e);
+        }
+      }
+      const derived = [...byFile.entries()]
+        .sort((x, y) => y[1].keys.size - x[1].keys.size || x[0].localeCompare(y[0]))
+        .slice(0, _CAP)
+        .map(([file, e]) => `${file}#${e.symbol}`);
+      if (derived.length) {
+        a.center = [a.center, ...derived].filter(Boolean).join(",");
+        // STATED, not silent: the answer now has centers the caller did not write, and a map whose ends came
+        // from somewhere the caller cannot see is one they cannot check.
+        process.stderr.write(`[to-kind] ${a.toKind}: derived ${derived.length} counterpart center(s) from the anchor's boundary — ${derived.join(", ")}\n`);
+      } else {
+        // A WARNING, not a `[to-kind]` diagnostic, and the distinction is the point: success is already visible
+        // in the map (every derived center is named in the header and shown as a PINNED CENTER), but a request
+        // that derived NOTHING is invisible in the answer — the map would look exactly like one that had
+        // honoured it. `installQuietFilter` drops lowercase `[tag]` lines, so a diagnostic here would be
+        // swallowed in the very mode an agent runs in.
+        process.stderr.write(`warning: --to-kind ${a.toKind}: the anchor's boundary grounds no ${a.toKind} key with a resolved other side — growing the named center(s) only.\n`);
+      }
+    } catch (e) {
+      process.stderr.write(`warning: --to-kind: could not read the anchor's boundary (${e}) — growing the named center(s) only.\n`);
+    }
+  }
+
   // SINGLE-DEF FILE CENTER → resolve it STRUCTURALLY (don't fall into the SEMANTIC concern center-first, whose
   // intent-relevance ranking can crown an off-subject shared-key cluster — the `/member/v1/survey` route out-
   // scoring the real `/member/booking/v1`). A bare `--center <file>` leaves a.symbol unset. Resolve the file's

@@ -20,6 +20,9 @@ export interface Args {
   /// flooding to the node budget. The one-center form of "grow toward a target".
   until?: string;
   maxHops?: number;
+  /// `--to-kind route|table|queue|egress` — derive the far centers from the anchor's own grounded keys of that
+  /// medium, instead of making the caller address them. See the block in decompose.ts.
+  toKind?: string;
   center?: string;     // --center <file>[#<symbol>][,<file>[#<symbol>]…]: the universal node address (supersedes --anchor-file/--symbol). file-only = module anchor; comma-separated = multi-center concern star
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
@@ -108,6 +111,7 @@ export function parseArgs(argv: string[]): Args {
       case "--concern": a.concern = true; break;
       case "--auto-route": a.autoRoute = true; break;   // route a non-flow intent (blast-radius/find-usages) to its --query shape instead of a flow grow
       case "--until": a.until = next(); break;
+      case "--to-kind": a.toKind = (next() ?? "").trim().toLowerCase() || undefined; break;
       case "--max-hops": a.maxHops = Math.max(0, parseInt(next() ?? "0", 10) || 0); break;   // `crossing` — grow until the flow crosses a boundary
       case "--center": a.center = next(); break;   // universal node address: file | file#symbol | comma-list; expanded to the anchor below, read as a list by the concern grow
       // --anchor-file / --symbol are the LEGACY node address, superseded by --center (kept for back-compat + internal use).
