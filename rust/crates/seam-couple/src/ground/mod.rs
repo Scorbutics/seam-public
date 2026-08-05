@@ -134,12 +134,24 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     if !epoch.is_empty() {
         let dir = format!("{}/rust/floor-indices-v1", seam_fs::seam_dir(repo));
         let _ = std::fs::create_dir_all(&dir);
-        // Sweep shards for OTHER epochs, but keep this epoch's other env variants — they are all still valid,
-        // and deleting them would make an alternating (adapters on / off) run rebuild the floor every time.
+        // Sweep shards for OTHER epochs, and this epoch's shards from a DIFFERENT CORE — keeping only this
+        // epoch's other ENV variants, which are all still valid (an alternating adapters-on/off run must not
+        // rebuild the floor every time).
+        //
+        // The core-stamp half was missing, and stale core shards are strictly unusable: the stamp exists
+        // precisely because a floor computed by a previous core must never be reused (a dropped WRITE_VERB
+        // still answered "2 write sites" from a warm cache). So they can never be hit again, and nothing was
+        // deleting them — 57 shards / 62 MB accumulated in one day of rebuilds here, one per `cargo build`,
+        // growing without bound for anyone who builds the engine.
+        let stamp = core_stamp_tag();
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if !name.starts_with(&format!("{epoch}")) {
+                let other_epoch = !name.starts_with(&format!("{epoch}"));
+                // an unstamped caller keeps the old source-only key and must not sweep stamped shards it
+                // cannot reason about; a stamped one drops every shard that is not its own stamp.
+                let other_core = !stamp.is_empty() && !name.ends_with(&format!("{stamp}.bin"));
+                if other_epoch || other_core {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
