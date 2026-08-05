@@ -36,7 +36,7 @@ import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
 import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
-import { emit, emitTimingSummary, timingOn, addStage, resetStages, stageSummary } from "../core/progress.js";
+import { emit, emitTimingSummary, timingOn, addStage, resetStages, stageSummary, debugOn } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 import { type Args, parseArgs, parseCenters, resolveEngines } from "./args.js";
@@ -324,6 +324,7 @@ async function runCodebase(a: Args): Promise<number> {
     };
     const want = new Set(_KIND_ALIAS[a.toKind] ?? [a.toKind]);
     const _CAP = 6;
+    const _tk0 = Date.now();
     try {
       const { loadAddon } = await import("../codebase/rust_core.js");
       const cp: any = (loadAddon() as any).projectCoupling(a.repo, a.anchorFile, a.symbol ?? undefined);
@@ -351,18 +352,22 @@ async function runCodebase(a: Args): Promise<number> {
       // The anchor's degenerate `/*` key is skipped: it matches every route and grounds no side of its own.
       const parentFiles = new Map<string, number>();
       if (want.has("route")) {
-        const locate = (q: string) => ((loadAddon() as any).locateRoutes?.(a.repo, q, 60) ?? []) as any[];
+        // THE WHOLE ROUTE TABLE, ONCE. This ran one `locateRoutes` per anchor key and then one per derived
+        // prefix — about thirty lookups at ~334ms each, which MEASURED as 9.3s of an 18.2s warm run: half the
+        // cost of a fully cached answer, spent re-scanning the same table. Fetching all 960 routes costs one
+        // 0.4s call and the matching is a string compare in memory.
+        const all = ((loadAddon() as any).locateRoutes?.(a.repo, "", 20000) ?? []) as any[];
         const prefixes = new Set<string>();
         for (const v of new Set((cp?.keys ?? []).filter((k: any) => want.has(k.kind)).map((k: any) => k.value))) {
           if (!v || v === "/*") continue;
-          for (const r of locate(v as string)) {
+          for (const r of all) {
             if (!r.route?.endsWith(v as string)) continue;
             const pre = r.route.slice(0, r.route.length - (v as string).length);
             if (pre && pre !== "/") prefixes.add(pre);
           }
         }
         for (const pre of prefixes) {
-          for (const r of locate(pre)) {
+          for (const r of all) {
             if (r.route !== pre) continue;                 // the PREFIX as a route, not everything under it
             for (const sv of (r.servers ?? [])) {
               if (!sv.file || sv.file === a.anchorFile) continue;
@@ -399,6 +404,9 @@ async function runCodebase(a: Args): Promise<number> {
         if (a.maxHops === undefined) a.maxHops = 2;
         // STATED, not silent: the answer now has centers the caller did not write, and a map whose ends came
         // from somewhere the caller cannot see is one they cannot check.
+        // Written to fd 2 directly, as the Rust `[perf]` lines are: `installQuietFilter` drops lowercase
+        // `[tag]` stderr, and a profile the profiler cannot see is what let this block hide 9.3s.
+        if (debugOn("perf")) require("fs").writeSync(2, `[perf] to-kind derive ${Date.now() - _tk0}ms\n`);
         process.stderr.write(`[to-kind] ${a.toKind}: derived ${derived.length} counterpart center(s) from the anchor's boundary — ${derived.join(", ")}\n`);
       } else {
         // A WARNING, not a `[to-kind]` diagnostic, and the distinction is the point: success is already visible
