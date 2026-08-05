@@ -2199,6 +2199,10 @@ pub struct DefDto {
     pub enclosing: String,
     pub doc: String,
     pub body: Option<String>,
+    /// 0-BASED declaration row. Present on `seam_scan::Def` since --locate needed to cite one, but absent from
+    /// this wire shape — so a caller asking "which symbol serves line N" got `undefined` for every def and
+    /// silently resolved nothing. Kept 0-based to match the core; callers convert at their own boundary.
+    pub line: u32,
 }
 
 /// enumerate_defs — the repo's declaration candidate table (or a file-scoped subset). Parity surface for
@@ -2207,7 +2211,7 @@ pub struct DefDto {
 pub fn enumerate_defs(repo: String, limit: Option<u32>, files: Option<Vec<String>>, module_defs: Option<bool>) -> Vec<DefDto> {
     let lim = limit.map(|l| l as usize).unwrap_or(4000);
     let defs = seam_scan::def_table::enumerate_defs(&repo, lim, files.as_deref(), module_defs.unwrap_or(false));
-    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body, line: d.line as u32 }).collect()
 }
 
 /// defsInFile — one file's declarations (regex for TS/JS, tree-sitter otherwise). Parity surface for the
@@ -2222,7 +2226,7 @@ pub fn defs_in_file(rel: String, text: String, module_def: Option<bool>) -> Vec<
     if module_def.unwrap_or(false) {
         defs.push(seam_scan::def_table::module_def(&rel, &text));
     }
-    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body, line: d.line as u32 }).collect()
 }
 
 /// Wire form of a blind-file cluster (Phase 2 parity — cluster_blind_files). rep/members are indices into the
@@ -3118,7 +3122,7 @@ pub fn embed_score_defs(repo: String, intent: String, files: Option<Vec<String>>
     seam_scan::def_embed::embed_score_defs(&repo, &intent, files.as_deref())
         .into_iter()
         .map(|s| ScoredDefDto {
-            def: DefDto { name: s.def.name, kind: s.def.kind, file: s.def.file, signature: s.def.signature, enclosing: s.def.enclosing, doc: s.def.doc, body: s.def.body },
+            def: DefDto { line: s.def.line as u32, name: s.def.name, kind: s.def.kind, file: s.def.file, signature: s.def.signature, enclosing: s.def.enclosing, doc: s.def.doc, body: s.def.body },
             score: s.score as f64,
             vec: s.vec.into_iter().map(|v| v as f64).collect(),
         })
@@ -3157,7 +3161,7 @@ pub fn candidate_source_files(repo: String) -> Vec<String> {
 #[napi]
 pub fn defs_in_file_treesitter(rel: String, text: String) -> Option<Vec<DefDto>> {
     seam_scan::def_table::defs_in_file_treesitter(&rel, &text).map(|defs| {
-        defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+        defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body, line: d.line as u32 }).collect()
     })
 }
 
