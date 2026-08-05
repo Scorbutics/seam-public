@@ -49,7 +49,7 @@ export { renderLlmContext } from "./render/region_views.js";
 /// cross-language boundary, 39 `.java` / 43 `.ts` against 47/48 at 8000).
 const AGENT_INLINE_CEILING = 28_000;
 
-export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[] } = {}): string {
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[]; callers?: { file: string; line: number; symbol: string }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -696,6 +696,33 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       `  (these are the anchor's OWN accesses, not counterparts — for the other side of each key run`,
       `   \`--query coupling --center ${rows[0].file}\`.)`];
   };
+  // ── WHO CALLS THIS, cited but NOT grown ─────────────────────────────────────────────────────────────────
+  //
+  // The measured shape of the last gap. The admin-UI files whose only link to the realm flow is
+  // `adminClient.realms.<m>(...)` — RealmSettingsTabs.tsx (123 of keycloak's 1232 opens), RealmContext.tsx
+  // (55), LoginTab.tsx (9) — are ~27% of read demand, and they are behind an END, so no corridor and no radius
+  // reaches them. Pinning them as CENTERS was tried and measured WORSE (57.8% -> 53.3%): each is a leaf that
+  // drags an unrelated neighbourhood in with it.
+  //
+  // But the map does not need their neighbourhoods. It needs the ONE line where they enter the flow. Citing the
+  // call site with its own snippet is what stops an agent re-opening the file, at ~150 B a row against a region
+  // that costs kilobytes — the answer to "who triggers this" without paying for a grow that answers more.
+  const callersSection = (): string[] => {
+    const cs = (opts.callers ?? []).filter((c) => c.file && c.line);
+    if (!cs.length) return [];
+    const seen = new Set<string>();
+    const rows = cs.filter((c) => { const k = `${c.file}:${c.line}`; if (seen.has(k)) return false; seen.add(k); return true; });
+    const CALLER_CAP = 8;
+    return ["", "## Callers (who invokes this flow — cited, not grown; their own regions are not in this map)",
+      ...(rows.length > CALLER_CAP ? [`  (showing ${CALLER_CAP} of ${rows.length}, most intent-relevant first)`] : []),
+      ...rows.slice(0, CALLER_CAP).map((c) =>
+        `  → ${c.symbol} (${at(c.file, c.line)})`
+        // DEPTH 1, not the default window: what closes the read is the ONE line where the caller enters the
+        // flow (`await adminClient.realms.del({ realm })`), and this section is exempt from the degrade ladder,
+        // so its size is the one thing standing between a fitting map and a spilled one. Eight rows at ±1 is
+        // ~1.4 kB against ~2.4 kB at ±2, on a map that lands 27.3 kB into a 28 kB transport ceiling.
+        + (opts.snippet ? (opts.snippet(c.file, c.line, "        ", { depth: 1 }) ?? []).map((l) => `\n${l}`).join("") : ""))];
+  };
   const spineSection = (): string[] => {
     if (!hasSpine) {
       if (!opts.intent) return [];   // no intent → no flow question → stay silent (region-by-shell speaks for itself)
@@ -1123,7 +1150,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // through. Set here rather than threaded through nine section closures: the flag is a property of the RUNG
     // being assembled, and each rung reassembles the whole render from scratch.
     ((_snipOn = snippets !== false && !!opts.snippet),
-     (_snipLeft = typeof snippets === "number" ? snippets : Infinity), (_snipSkipped = 0), [...header(), ...anchorAccessSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting),
+     (_snipLeft = typeof snippets === "number" ? snippets : Infinity), (_snipSkipped = 0), [...header(), ...anchorAccessSection(), ...callersSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting),
      // THE DIAGNOSTIC SECTIONS YIELD BEFORE THE CODE DOES — measured, not assumed. On keycloak these three
      // are 9,193 B of a 27,267 B map (34%) and carry ZERO `file:line` citations between them: they report
      // what static resolution could not see and what the grow declined to expand. Valuable, but they are

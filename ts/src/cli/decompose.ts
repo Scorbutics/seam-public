@@ -53,7 +53,7 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
   // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
   // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
-  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a), anchorAccess: anchorAccessOf(a) }); },
+  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a), anchorAccess: anchorAccessOf(a), callers: _callerCites }); },
 };
 
 /// THE ANCHOR'S OWN DATA ACCESS, for the agent map — the lines INSIDE the anchor that touch a shared key.
@@ -92,6 +92,9 @@ function anchorAccessOf(a: Args): { kind: string; value: string; role: string; f
 
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
 // consumers/dependencies additionally need the `scan` module (a footprint build), the rest just `a`.
+// The call sites of the flow's callers, cited in the agent map without growing them — see `callersSection`.
+let _callerCites: { file: string; line: number; symbol: string }[] = [];
+
 const QUERY_HANDLERS: Record<string, (a: Args) => Promise<number>> = {
   consumers: runConsumerSet, dependencies: runDependencySet, writers: runWritersSet, coupling: runCouplingSet, impact: runImpact, refactor: runRefactorFacts,
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
@@ -447,6 +450,32 @@ async function runCodebase(a: Args): Promise<number> {
     try {
       const { loadAddon, syncEnv } = await import("../codebase/rust_core.js");
       const addon: any = loadAddon();
+      // THE WIDENED FAN, for CITATION ONLY. `SEAM_MEMBER_FIELDS` resolves `adminClient.realms.<m>(...)` and
+      // finds 108 caller files where the plain scan finds 1. Those files carry ~27% of read demand and CANNOT
+      // be centers — measured 57.8% -> 53.3%, each one a leaf dragging its own neighbourhood in. Cited with
+      // their call-site line, they cost ~150 B each and need no grow at all. Ranked by intent because nothing
+      // structural separates them (call count puts test files first; a lexical filter matches 100 of 108).
+      try {
+        process.env.SEAM_MEMBER_FIELDS = "1";
+        syncEnv(addon);
+        const wide: any = addon.projectConsumerSet(a.repo, a.anchorFile, a.symbol, true, false);
+        const mem = ((wide?.members ?? []) as any[]).filter((m) => m.file && m.file !== a.anchorFile && !m.isTest && m.kind !== "test");
+        const wfiles = [...new Set(mem.map((m) => m.file))];
+        if (wfiles.length) {
+          const best = new Map<string, number>();
+          for (const { def, score } of (addon.embedScoreDefs(a.repo, a.intent ?? "", wfiles) as any[])) {
+            if (!(best.get(def.file)! >= score)) best.set(def.file, score);
+          }
+          const order = [...best.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([f]) => f);
+          const firstIn = new Map<string, any>();
+          for (const m of mem) if (!firstIn.has(m.file)) firstIn.set(m.file, m);
+          _callerCites = order.filter((f) => firstIn.has(f)).slice(0, 8)
+            .map((f) => ({ file: f, line: firstIn.get(f).line, symbol: firstIn.get(f).symbol ?? "caller" }));
+        }
+      } finally {
+        if (prev === undefined) delete process.env.SEAM_MEMBER_FIELDS; else process.env.SEAM_MEMBER_FIELDS = prev;
+        syncEnv(addon);
+      }
       // RESOLVED CONSUMERS ONLY — deliberately NOT the SEAM_MEMBER_FIELDS fan.
       //
       // Widening the scan finds far more: 108 caller files instead of 1, including the admin-UI components that
