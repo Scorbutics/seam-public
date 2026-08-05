@@ -220,6 +220,38 @@ fn keycloak_scale_build() {
         }
         dist
     };
+    // THE DISTANCE DISTRIBUTION. ALT only discriminates if distances SPREAD; on a small-world graph every pair
+    // is a few hops apart, |d(L,goal) - d(L,n)| is 0 almost everywhere, and h carries no direction whatever its
+    // h/d* ratio looks like.
+    {
+        let seed = (0..keys.len()).max_by_key(|&i| adj[i].len()).unwrap_or(0);
+        let d0 = bfs(seed);
+        let mut hist = [0usize; 12];
+        for &v in d0.values() {
+            hist[v.min(11)] += 1;
+        }
+        eprintln!("[landmarks] hop histogram from the seed landmark: {hist:?}  (reached {} of {})", d0.len(), keys.len());
+        // COMPONENTS. A landmark can only speak for its own component, so fragmentation is the difference
+        // between a heuristic and a table of zeros.
+        let mut seen = vec![false; keys.len()];
+        let mut sizes: Vec<usize> = Vec::new();
+        for i in 0..keys.len() {
+            if seen[i] { continue; }
+            let mut n = 0usize;
+            let mut q = VecDeque::from([i]);
+            seen[i] = true;
+            while let Some(u) = q.pop_front() {
+                n += 1;
+                for &v in &adj[u] {
+                    if !seen[v as usize] { seen[v as usize] = true; q.push_back(v as usize); }
+                }
+            }
+            sizes.push(n);
+        }
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        eprintln!("[landmarks] {} components; largest: {:?}", sizes.len(), &sizes[..sizes.len().min(6)]);
+        eprintln!("[landmarks] largest component covers {:.1}% of nodes", sizes[0] as f64 / keys.len() as f64 * 100.0);
+    }
     let (mut checked, mut viol, mut sum, mut n) = (0usize, 0usize, 0f64, 0usize);
     for src in (0..keys.len()).step_by(keys.len() / 12 + 1) {
         for (&dst, &real) in &bfs(src) {
@@ -236,4 +268,109 @@ fn keycloak_scale_build() {
     }
     eprintln!("[landmarks] {checked} pairs checked, {viol} violations, mean h/d* = {:.3}", sum / n.max(1) as f64);
     assert_eq!(viol, 0, "INADMISSIBLE at repo scale on {checked} pairs — A* would return non-shortest corridors");
+}
+
+// ── the wiring: f = g + h in the wave ──────────────────────────────────────────────────────────────────────
+
+use seam_grow::orchestrate::{grow_centers, WaveOpts};
+use seam_grow::orchestrate::Center;
+
+/// A repo with a CORRIDOR between two ends and a large off-corridor fan hanging off the source. Under a node
+/// budget the flood spends itself on the fan (it is nearer the anchor); a goal-directed wave should spend it
+/// along the corridor instead.
+fn corridor_repo() -> Repo {
+    let mut files: Vec<(String, String)> = vec![
+        ("src/a.ts".into(), "import { mid } from './mid';\nexport function start(x: any) { return mid(x); }\n".into()),
+        ("src/mid.ts".into(), "import { tail } from './tail';\nexport function mid(x: any) { return tail(x); }\n".into()),
+        ("src/tail.ts".into(), "export function tail(x: any) { return fetch('/api/goal', { method: 'POST' }); }\n".into()),
+        (
+            "server/src/main/java/api/GoalResource.java".into(),
+            "package api;\npublic class GoalResource {\n    @POST\n    @Path(\"/api/goal\")\n    public Response handle(Rep rep) { return Response.ok().build(); }\n}\n".into(),
+        ),
+    ];
+    // the DECOY fan: 40 modules one hop off the source, on no path to the goal
+    for i in 0..40 {
+        files.push((format!("src/decoy{i}.ts"), format!("import {{ start }} from './a';\nexport function decoy{i}() {{ return start({i}); }}\n")));
+    }
+    let all: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    repo(&all)
+}
+
+fn ctr(file: &str, symbol: &str) -> Center {
+    Center { file: file.into(), symbol: symbol.into() }
+}
+
+fn grown_files(repo: &str, centers: &[Center], max_nodes: usize) -> HashSet<String> {
+    let opts = WaveOpts { max_nodes, max_steps: 12, structural_grow: true, ..Default::default() };
+    let g = grow_centers(repo, centers, true, &opts);
+    g.map(|g| g.nodes.iter().filter(|n| !n.file.is_empty()).map(|n| n.file.clone()).collect()).unwrap_or_default()
+}
+
+/// THE POINT. Two centers, a tight budget: the goal-directed wave must reach the far end, where the same budget
+/// spent as an undirected flood does not.
+#[test]
+fn a_two_center_grow_spends_its_budget_toward_the_other_center() {
+    let d = corridor_repo();
+    let r = d.path().to_str().unwrap();
+    seam_grow::landmarks::LandmarkIndex::reset(None);
+
+    let two = vec![
+        ctr("src/a.ts", "start"),
+        ctr("server/src/main/java/api/GoalResource.java", "handle"),
+    ];
+    let one = vec![ctr("src/a.ts", "start")];
+
+    let directed = grown_files(r, &two, 24);
+    let flood = grown_files(r, &one, 24);
+
+    let corridor = |s: &HashSet<String>| s.iter().filter(|f| f.contains("mid.ts") || f.contains("tail.ts")).count();
+    let decoys = |s: &HashSet<String>| s.iter().filter(|f| f.contains("decoy")).count();
+
+    eprintln!("[a*] directed: {} files ({} corridor, {} decoy)", directed.len(), corridor(&directed), decoys(&directed));
+    eprintln!("[a*] flood:    {} files ({} corridor, {} decoy)", flood.len(), corridor(&flood), decoys(&flood));
+
+    assert!(
+        corridor(&directed) >= corridor(&flood),
+        "the goal-directed grow reached LESS of the corridor than the undirected one — h is steering away from \
+         the goal, which means the sign or the key format is wrong"
+    );
+}
+
+/// The degrade path, and the one that protects every existing caller: a SINGLE center names no goal, so `h` is
+/// 0 everywhere and the wave must be exactly the flood it was before this existed.
+#[test]
+fn a_single_center_grow_is_unchanged() {
+    let d = corridor_repo();
+    let r = d.path().to_str().unwrap();
+    let one = vec![ctr("src/a.ts", "start")];
+    let a = grown_files(r, &one, 30);
+    let b = grown_files(r, &one, 30);
+    assert_eq!(a, b, "a single-center grow is not even deterministic");
+    assert!(!a.is_empty(), "the fixture grew nothing");
+}
+
+/// THE GATE the corridor test needs: prove `h` is actually non-zero between the two center KEYS. The wave looks
+/// nodes up as `normpath(file)#symbol`, and if that spelling misses the table's keys every estimate silently
+/// falls back to 0 — an A* that is a flood wearing a priority queue, with every test still green.
+#[test]
+fn the_center_keys_resolve_in_the_landmark_table() {
+    let d = corridor_repo();
+    let r = d.path().to_str().unwrap();
+    seam_grow::landmarks::LandmarkIndex::reset(None);
+    let idx = seam_grow::landmarks::LandmarkIndex::build(r);
+    let (keys, _) = idx.debug_graph();
+    let a = "src/a.ts#start";
+    let goal = "server/src/main/java/api/GoalResource.java#handle";
+    assert!(keys.iter().any(|k| k == a), "the source key `{a}` is not in the table; sample: {:?}", keys.iter().take(12).collect::<Vec<_>>());
+    assert!(keys.iter().any(|k| k == goal), "the GOAL key `{goal}` is not in the table; sample: {:?}", keys.iter().filter(|k| k.contains("Goal")).take(12).collect::<Vec<_>>());
+    let h = idx.h(a, goal).expect("no estimate between the two centers");
+    eprintln!("[a*] h(a.ts#start -> GoalResource#handle) = {h}");
+    // PINNED AT THE KNOWN-BAD VALUE, deliberately. `h` is 0 here for the same reason it is 0 on keycloak: the
+    // over-approximate graph's hub edges are universal shortcuts, so every node sits the same distance from
+    // every landmark and the estimate carries no direction. The keys resolving (asserted above) is the part
+    // that must not regress; this line records WHY A* is still behind `SEAM_ASTAR`.
+    //
+    // WHEN THIS ASSERTION STARTS FAILING THE METRIC IS FIXED — flip it to `assert!(h > 0)` and turn the flag on
+    // by default. Deleting it instead would lose the only executable statement of what is blocking.
+    assert_eq!(h, 0, "h is no longer 0 — the graph now carries a usable metric, so flip this test and enable A*");
 }

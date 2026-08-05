@@ -193,6 +193,12 @@ impl LandmarkIndex {
         (self.graph_keys.clone(), self.graph_adj.clone())
     }
 
+    /// Whether a node key is in the table at all — the diagnostic that separates "no path" from "the caller
+    /// spelled the key differently", which are indistinguishable from `h` returning `None`.
+    pub fn contains(&self, key: &str) -> bool {
+        self.ids.contains_key(key)
+    }
+
     pub fn len(&self) -> usize {
         self.ids.len()
     }

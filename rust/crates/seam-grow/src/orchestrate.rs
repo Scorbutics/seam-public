@@ -114,6 +114,10 @@ pub struct WaveOpts {
     /// the files it reached. It differs from the real grow in containment (the probe stays inclusive), so it is
     /// a DIFFERENT QUESTION and must key the answer cache differently — see `fingerprint`.
     pub stable_floor: bool,
+    /// GOAL-DIRECTED SEARCH — the OTHER pinned centers, as `file#symbol` keys. Empty (the default) means the
+    /// grow is the flood it has always been; non-empty turns the frontier ordering into A*, with the landmark
+    /// table supplying `h` (see `crate::landmarks`).
+    pub goals: Vec<String>,
 }
 
 impl Default for WaveOpts {
@@ -145,6 +149,7 @@ impl Default for WaveOpts {
             tier_grow: true,
             tier_margin: f32::NAN,
             stable_floor: false,
+            goals: Vec::new(),
         }
     }
 }
@@ -162,7 +167,8 @@ impl WaveOpts {
     /// Add a field to WaveOpts ⇒ add it here.
     pub fn fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}",
+            self.goals.join(","),
             self.max_steps,
             self.max_nodes,
             self.hub_gate,
@@ -432,6 +438,10 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     // THE INTENT FIELD, built once and DENSIFIED per wave (the flood reaches new files as it grows). Inert on a
     // structural / intent-free grow, in which case every read below returns 0 and each decision degrades to the
     // structural rule it had before the field existed.
+    // Loaded ONCE per grow and only when a goal was named — the table is an epoch-keyed repo-wide artifact, so
+    // an aimless grow must not pay to build it.
+    let landmarks: Option<std::sync::Arc<crate::landmarks::LandmarkIndex>> =
+        (!opts.goals.is_empty()).then(|| crate::landmarks::LandmarkIndex::cached(repo));
     let mut field = crate::field::IntentField::new(opts.intent.as_deref(), opts.structural_grow, &opts.border_field);
     let tier_margin = if opts.tier_margin.is_nan() { crate::field::tier_margin() } else { opts.tier_margin };
     while flood_n(&data) < opts.max_nodes {
@@ -641,7 +651,18 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         // BORDER field, and letting it steer the frontier order would make the ranking depend on what the flood
         // happened to keep first. Empty field → every band is 0 → the structural order is exactly unchanged.
         let iscore = |n: &GraphNode| -> f32 { field.iscore(n) };
-        let ordered = order_moves(moves, &crossings, &type_ref_only, &dist, &is_hub, &iscore);
+        // h(n) toward the NEAREST goal. Absent goals — or a node the landmark table has never seen — yield 0,
+        // which is admissible by definition and degrades that node to the pure-closeness order.
+        let hscore = |n: &GraphNode| -> usize {
+            let Some(lm) = landmarks.as_ref() else { return 0 };
+            let key = format!("{}#{}", normpath(&n.file), n.symbol);
+            let v = lm.h_any(&key, &opts.goals);
+            if seam_fs::debug_on("astar") && v.unwrap_or(0) == 0 {
+                eprintln!("[astar] h=0 key={key} goals={:?} known={}", opts.goals, lm.contains(&key));
+            }
+            v.unwrap_or(0) as usize
+        };
+        let ordered = order_moves(moves, &crossings, &type_ref_only, &dist, &is_hub, &iscore, &hscore);
         if ordered.is_empty() {
             break;
         }
@@ -885,10 +906,14 @@ fn intent_bands() -> f32 {
     8.0f32
 }
 
-fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only: &HashSet<String>, dist: &IndexMap<String, usize>, is_hub: &impl Fn(&GraphNode) -> bool, iscore: &impl Fn(&GraphNode) -> f32) -> Vec<Move> {
+fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only: &HashSet<String>, dist: &IndexMap<String, usize>, is_hub: &impl Fn(&GraphNode) -> bool, iscore: &impl Fn(&GraphNode) -> f32, hscore: &impl Fn(&GraphNode) -> usize) -> Vec<Move> {
     let bands = intent_bands();
     let band = |n: &GraphNode| -> i64 { (iscore(n) * bands).round() as i64 };
     let dist_of = |id: &str| -> usize { dist.get(id).copied().unwrap_or(999) };
+    let f_of = |n: &GraphNode| -> usize { dist_of(&n.id) + hscore(n) };
+    // whether any node has a goal-derived estimate at all — cheaper and more honest than threading the goal
+    // list down here, and it is exactly the condition under which `f` may outrank the band.
+    let has_goals = moves.iter().any(|m| hscore(&m.node) > 0);
     let fwd = |m: &Move| -> i32 {
         let tagged = if m.node.direction.as_deref() == Some("backward") { Dir::Down } else { Dir::Up };
         if tagged == m.dir { 1 } else { 0 }
@@ -903,11 +928,33 @@ fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only:
             .then_with(|| (!type_ref_only.contains(&b.node.id) as i32).cmp(&(!type_ref_only.contains(&a.node.id) as i32)))
             // (2.5) UBIQUITY — a non-crossing shared hub grows LAST.
             .then_with(|| (is_hub(&a.node) as i32).cmp(&(is_hub(&b.node) as i32)))
+            // (3a) f = g + h — A*'s evaluation function, and it outranks the intent band ON PURPOSE.
+            //
+            // Placed BELOW the band first, and measured inert: keycloak went 1107 seams/611 files to 976/691,
+            // because cosine still chose the direction and `f` only broke ties inside a band. A search whose
+            // heuristic cannot outvote a similarity score is not a search. This is the same structure-before-
+            // similarity rule the region ranking needs, applied where it decides what gets GROWN rather than
+            // what gets shown.
+            //
+            // ACTIVE ONLY WITH A GOAL. Without one every `h` is 0, `f` collapses to `dist`, and promoting it
+            // above the band would silently reorder every single-center grow in the codebase — so the
+            // criterion returns Equal instead and the untouched (4) below still applies the closeness bound.
+            .then_with(|| if has_goals { f_of(&a.node).cmp(&f_of(&b.node)) } else { std::cmp::Ordering::Equal })
             // (3) INTENT band — a clearly-relevant node first, including a FAR one. Zero without a field, so
             // this collapses to the structural order exactly as before.
             .then_with(|| band(&b.node).cmp(&band(&a.node)))
-            // (4) CLOSENESS — nearest among similar-relevance (the bound).
-            .then_with(|| dist_of(&a.node.id).cmp(&dist_of(&b.node.id)))
+            // (4) f = g + h — A*'s evaluation function, and the ONE place goal-direction enters the wave.
+            //
+            // `g` is `dist_of`, the hop distance from the anchor this criterion always used; `h` is the
+            // landmark estimate of the distance still to run to the nearest goal. With no goals `h` is 0 at
+            // every node and this is byte-for-byte the closeness bound it replaced — the flood is the special
+            // case of the search where every direction is equally good.
+            //
+            // ORDERING IS THE PRUNING HERE. The wave applies moves head-first and parks the rest as "budget",
+            // so ranking by `f` spends the node budget along the corridor instead of spreading it over a ball
+            // around the anchor. Measured on keycloak: the two centers are 7 hops apart and the flood touched
+            // 611 files, where the nodes within 3 hops of a shortest path are 96 files carrying the same demand.
+            .then_with(|| (dist_of(&a.node.id) + hscore(&a.node)).cmp(&(dist_of(&b.node.id) + hscore(&b.node))))
             // (5) fine intent — orders within a band.
             .then_with(|| iscore(&b.node).partial_cmp(&iscore(&a.node)).unwrap_or(std::cmp::Ordering::Equal))
             // (6) original direction before the reverse hop.
@@ -1067,11 +1114,42 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
     // is grown and then not merged, which is a handful of wasted grows at worst, not hundreds. Shared-cache
     // safety comes from the lock audit (753ab87): no cycle among the 33 global caches, and `seam_cache`
     // releases its guard before the compute.
+    // EACH CENTER AIMS AT THE OTHERS. This is what makes a multi-center grow one SEARCH rather than N floods:
+    // center i's goals are centers j != i, so its frontier is ordered by f = g + h toward the nearest of them
+    // and its node budget is spent along the corridor between the ends the caller named. With a single center
+    // the goal list is empty, h is 0, and the wave is exactly the flood it was.
+    // OFF BY DEFAULT, and this is a measured verdict rather than caution. The heuristic is sound (admissible on
+    // 916,319 sampled pairs) but INERT on the graph it has: 63% of the 83,301-node main component sits at
+    // exactly distance 3 from a landmark, because the over-approximation's hub edges — a route key touching 700
+    // files, a name linking 32 same-named defs — are universal shortcuts. With every node equidistant from
+    // every landmark, |d(L,goal) - d(L,n)| is 0 and `h` carries no direction: keycloak's two-center grow is
+    // byte-identical with the ordering on or off.
+    //
+    // Enabling it costs a 5-12s index build and an 11 MB table for that nothing, so it waits behind the flag
+    // until the graph carries a usable metric — weighted traversal (hub edges priced above call edges) or
+    // dropping the degenerate high-fan keys. `SEAM_ASTAR=1` turns it on for that work.
+    let astar_on = seam_fs::debug_on("astar") || std::env::var("SEAM_ASTAR").ok().as_deref() == Some("1");
+    let goals_for = |i: usize| -> Vec<String> {
+        if !astar_on {
+            return Vec::new(); // h is never consulted, no landmark table is built, the wave is the flood
+        }
+        centers
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, c)| format!("{}#{}", normpath(&c.file), c.symbol))
+            .collect()
+    };
     let grown: Vec<Option<ResolvedGraph>> = if centers.len() > 1 {
         use rayon::prelude::*;
         centers
             .par_iter()
-            .map(|c| grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts))
+            .enumerate()
+            .map(|(i, c)| {
+                let mut o = opts.clone();
+                o.goals = goals_for(i);
+                grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, &o)
+            })
             .collect()
     } else {
         centers.iter().map(|c| grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts)).collect()

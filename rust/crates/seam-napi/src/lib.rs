@@ -566,6 +566,9 @@ impl GrowOptsDto {
     fn to_wave_opts(self) -> seam_grow::orchestrate::WaveOpts {
         let d = seam_grow::orchestrate::WaveOpts::default();
         seam_grow::orchestrate::WaveOpts {
+            // NOT settable from the DTO: goals are derived inside `grow_centers` from the center list, which
+            // is where the "other centers" the search aims at are actually known.
+            goals: d.goals.clone(),
             max_steps: self.max_steps.map(|v| v as usize).unwrap_or(d.max_steps),
             max_nodes: self.max_nodes.map(|v| v as usize).unwrap_or(d.max_nodes),
             hub_gate: self.hub_gate.unwrap_or(d.hub_gate),
