@@ -1,0 +1,50 @@
+# GROUND TRUTH — keycloak-cross-language
+# "How does the admin UI read and update a realm — trace it from the TypeScript admin client to the Java
+#  server side."
+#
+# ESTABLISHED INDEPENDENTLY OF BOTH TOOLS (2026-08-01), by reading the source directly with grep/read only.
+# Neither Seam nor either arm's output was consulted while building it — a truth set derived from the thing
+# under test is not a control. Every line below was located by following the call/annotation chain by hand and
+# is cited with the line that justifies it.
+#
+# HONESTLY PARTIAL, exactly as cases.json declares. The TS->Java hop is a REST call: no symbol edge links
+# `realms.ts#update` to `RealmAdminResource#updateRealm`, and no static tool can resolve it by symbol. It is
+# listed here because a correct ANSWER must state it; it is not evidence that either tool could have derived
+# it structurally. Scoring must not reward a tool for a hop the case declares unresolvable.
+#
+# ── TypeScript: the caller ────────────────────────────────────────────────────────────────────────────────
+js/apps/admin-ui/src/**#<any adminClient.realms.update caller>
+# ^ ANY of the ~20 UI callers counts — LoginTab.tsx:38, CibaPolicy.tsx:50, EventsTab.tsx:106, BindFlowDialog
+#   .tsx:35 and others all call `adminClient.realms.update(...)`. Naming ONE of them as the truth would score
+#   an arm on which example it happened to pick, which is the prose-style scoring defect run 4 had to fix.
+js/libs/keycloak-admin-client/src/resources/realms.ts#update
+# ^ :50  `public update = this.makeUpdateRequest<...>`
+js/libs/keycloak-admin-client/src/resources/realms.ts#findOne
+# ^ :40  the READ half of the question
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeUpdateRequest
+# ^ :30  builds the request
+js/libs/keycloak-admin-client/src/resources/agent.ts#request
+# ^ :75  issues the HTTP call — the last TypeScript frame
+#
+# ── the REST hop (NOT symbol-resolvable — declared blindspot) ─────────────────────────────────────────────
+# PUT/GET /admin/realms/{realm}
+#
+# ── Java: the server ──────────────────────────────────────────────────────────────────────────────────────
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+# ^ :209 @Path("{realm}") — routes {realm} to the resource below
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+# ^ :429 the READ endpoint
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+# ^ :474 the WRITE endpoint
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#updateRealm
+# ^ called at RealmAdminResource:525 — representation -> model
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+# ^ called at RealmAdminResource:431 — model -> representation
+#
+# ── the admin-ui-ext variant (a SECOND, real path) ────────────────────────────────────────────────────────
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#updateRealm
+# ^ :71, delegating to RealmAdminResource#updateRealm at :72
+#
+# ── persistence ───────────────────────────────────────────────────────────────────────────────────────────
+model/jpa/src/main/java/org/keycloak/models/jpa/RealmAdapter.java#RealmAdapter
+# ^ :104 the JPA-backed RealmModel the update ultimately mutates

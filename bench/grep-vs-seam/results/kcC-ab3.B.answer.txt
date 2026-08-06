@@ -1,0 +1,74 @@
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#RealmSettingsHeader
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#onSubmit
+js/apps/admin-ui/src/authentication/policies/WebauthnPolicy.tsx#onSubmit
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/realms.ts#findOne
+js/libs/keycloak-admin-client/src/resources/realms.ts#update
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#request
+js/libs/keycloak-admin-client/src/resources/agent.ts#updateRequest
+js/libs/keycloak-admin-client/src/defs/realmRepresentation.ts#RealmRepresentation
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+core/src/main/java/org/keycloak/representations/idm/RealmRepresentation.java#RealmRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#RepresentationToModel
+services/src/main/java/org/keycloak/services/managers/RealmManager.java#RealmManager
+model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java#getRealm
+integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java#RealmsResource
+The full chain is resolved. Here's the trace:
+
+## The flow
+
+**1. React UI (admin console)** — reads the realm through a context provider, writes it from settings forms:
+- `RealmContext.tsx:47` — `useFetch(() => adminClient.realms.findOne({ realm }), setRealmRepresentation)` — this is the read that every realm-settings screen consumes.
+- `RealmSettingsTabs.tsx`, `OtpPolicy.tsx:86` (`adminClient.realms.update({ realm: realmName }, formValues)`), `WebauthnPolicy.tsx:154` — the writes. They call `update` then re-`findOne` to refresh the context.
+
+**2. Admin client library** (`js/libs/keycloak-admin-client`):
+- `client.ts#KeycloakAdminClient` exposes `public realms: Realms`.
+- `realms.ts#findOne` (line 40) is `makeRequest({ method: "GET", path: "/{realm}", catchNotFound: true })`; `realms.ts#update` (line 50) is `makeUpdateRequest({ method: "PUT", path: "/{realm}" })`. The class's `basePath` is `/admin/realms` (line 409).
+- `resource.ts#makeRequest` / `#makeUpdateRequest` are the declarative factories; they delegate to `agent.ts#request` (75) and `agent.ts#updateRequest` (136), which do the URL templating, bearer token and `fetch`.
+
+**3. JAX-RS mount chain (Java)** — three hops, none of them a leaf route:
+- `AdminRoot.java:232#getRealmsAdmin` — `@Path("realms")` under the class-level `@Path("/admin")`, returns `RealmsAdminResource`.
+- `RealmsAdminResource.java:208#getRealmAdmin` — `@Path("{realm}")` sub-resource locator; resolves the realm by name, checks admin auth, returns `RealmAdminResource`.
+- `RealmAdminResource.java:420#getRealm` — the `@GET` handler; `RealmAdminResource.java:461#updateRealm` — the `@PUT` handler taking a `RealmRepresentation`.
+
+**4. Model boundary**:
+- Read: `ModelToRepresentation#toRepresentation(RealmModel)` converts the persisted realm into the `RealmRepresentation` JSON the TS side types as `RealmRepresentation`.
+- Write: `updateRealm` validates then applies via `RepresentationToModel`, with `RealmManager` for the lifecycle bits, and fires an `AdminEventBuilder` audit event.
+- Persistence: `JpaRealmProvider#getRealm` / the `RealmEntity` JPA mapping.
+
+The DTO is shared by convention, not by codegen — `core/.../RealmRepresentation.java` and `js/libs/keycloak-admin-client/src/defs/realmRepresentation.ts` are hand-kept mirrors, which is the one place a change can silently drift.
+
+Two notes on confidence: `integration/admin-client/.../RealmsResource.java` is the *Java* admin client (the `@Path("/admin/realms")` interface used by Java callers and the test suite), not the server — I list it because it's the third participant on the same route, but it is not on the TS→server path. And `RealmsAdminResource` serves no leaf route itself; it only locates the sub-resource, which is why route-grep for `@GET`/`@PUT` never surfaces it.
+
+## ANSWER
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#RealmSettingsHeader
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#onSubmit
+js/apps/admin-ui/src/authentication/policies/WebauthnPolicy.tsx#onSubmit
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/realms.ts#findOne
+js/libs/keycloak-admin-client/src/resources/realms.ts#update
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#request
+js/libs/keycloak-admin-client/src/resources/agent.ts#updateRequest
+js/libs/keycloak-admin-client/src/defs/realmRepresentation.ts#RealmRepresentation
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+core/src/main/java/org/keycloak/representations/idm/RealmRepresentation.java#RealmRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#RepresentationToModel
+services/src/main/java/org/keycloak/services/managers/RealmManager.java#RealmManager
+model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java#getRealm
+integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java#RealmsResource

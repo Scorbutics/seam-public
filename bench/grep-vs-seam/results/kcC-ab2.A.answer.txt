@@ -1,0 +1,87 @@
+js/apps/admin-ui/src/admin-client.tsx#AdminClientProvider
+js/apps/admin-ui/src/admin-client.tsx#useAdminClient
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#useRealm
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#save
+js/apps/admin-ui/src/realm-settings/LoginTab.tsx#addUserFederatedSaml
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#OtpPolicy
+js/apps/admin-ui/src/authentication/policies/WebauthnPolicy.tsx#WebauthnPolicy
+js/apps/admin-ui/src/sessions/RevocationModal.tsx#RevocationModal
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.findOne
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.update
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.find
+js/libs/keycloak-admin-client/src/resources/resource.ts#Resource.makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#Resource.makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#Agent.request
+js/libs/keycloak-admin-client/src/resources/agent.ts#Agent.updateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#requestWithParams
+js/libs/keycloak-admin-client/src/defs/realmRepresentation.ts#RealmRepresentation
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealms
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#extension
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtProvider.java#getResource
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtResource.java#realm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#updateRealm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/model/UIRealmRepresentation.java#UIRealmRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#updateRealm
+model/storage-private/src/main/java/org/keycloak/storage/datastore/DefaultExportImportManager.java#updateRealm
+## Trace
+
+**Client construction.** `admin-client.tsx:27` builds a `KeycloakAdminClient` and points `baseUrl` at `environment.adminBaseUrl`. `client.ts:98` instantiates `Realms`, whose constructor (`realms.ts`, bottom) fixes the base path `/admin/realms`.
+
+**Declarative endpoints.** `Realms.findOne` = `GET /{realm}` (`catchNotFound`), `Realms.update` = `PUT /{realm}`. Both are built by `Resource.makeRequest` / `Resource.makeUpdateRequest`, which delegate to `Agent.request` / `Agent.updateRequest`. Those split payload into URL params / query params / body and hand off to the private `#requestWithParams`, which attaches `Bearer <accessToken>` and does the `fetch`.
+
+**UI read path.** `RealmContextProvider` (`RealmContext.tsx:47`) calls `adminClient.realms.findOne({ realm })` via `useFetch` and exposes the `RealmRepresentation` through `useRealm()` — this is what every realm-settings tab renders from.
+
+**UI write path — two variants.**
+- Targeted writes (login flow, OTP/WebAuthn/CIBA/password policies, revocation, events) call `adminClient.realms.update(...)` directly → plain `PUT /admin/realms/{realm}`.
+- The main Realm Settings form does **not** use the admin client: `RealmSettingsTabs.tsx:229` `save()` merges the form values over the current realm and `fetchWithError`s `PUT admin/realms/{realm}/ui-ext` — the admin-console-only decorated endpoint, because it must persist the user-profile config (`upConfig`) in the same round trip.
+
+**Server routing.** `AdminRoot.getRealmsAdmin` (`@Path("realms")`) → `RealmsAdminResource`; `RealmsAdminResource.getRealmAdmin` (`@Path("{realm}")`) → `RealmAdminResource`. `RealmsAdminResource.getRealms` serves the client's `Realms.find`.
+
+**Server handlers.** `RealmAdminResource.getRealm` (`@GET`) checks `canViewRealm` and returns `ModelToRepresentation.toRepresentation(session, realm, false)`, else a trimmed name-list-only representation. `RealmAdminResource.updateRealm` (`@PUT`) requires `manageRealm`, runs `ReservedCharValidator` / SMTP / keypair / lifespan validation, then `RepresentationToModel.updateRealm(rep, realm, session)` → `DatastoreProvider.getExportImportManager().updateRealm(...)`, implemented by `DefaultExportImportManager.updateRealm` (rename, attributes, then field-by-field model writes). It fires `StoreSyncEvent` and an `OperationType.UPDATE` admin event, returning 204.
+
+**The ui-ext leg.** `RealmAdminResource.extension` (`@Path("{extension}")`) resolves an `AdminRealmResourceProvider` by id; `AdminExtProvider.getId()` returns `"ui-ext"` and `getResource` returns `AdminExtResource`, whose `@Path("/") realm()` returns `UIRealmResource`. `UIRealmResource.updateRealm` delegates to a `RealmAdminResource` instance and, on 2xx, additionally applies `rep.getUpConfig()` via `UserProfileResource.setAndGetConfiguration`. So the console's save is exactly the standard realm update *plus* user-profile config.
+
+Entries I'm least certain about: `AdminRoot#getRealmsAdmin` (I confirmed the `@Path("realms")` annotation and the `getRealmsAdmin` reference at line 223, not the full method body), and `Agent#requestWithParams` is a private `#`-prefixed member — I list it as `requestWithParams`.
+
+## ANSWER
+js/apps/admin-ui/src/admin-client.tsx#AdminClientProvider
+js/apps/admin-ui/src/admin-client.tsx#useAdminClient
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#useRealm
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#save
+js/apps/admin-ui/src/realm-settings/LoginTab.tsx#addUserFederatedSaml
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#OtpPolicy
+js/apps/admin-ui/src/authentication/policies/WebauthnPolicy.tsx#WebauthnPolicy
+js/apps/admin-ui/src/sessions/RevocationModal.tsx#RevocationModal
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.findOne
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.update
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms.find
+js/libs/keycloak-admin-client/src/resources/resource.ts#Resource.makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#Resource.makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#Agent.request
+js/libs/keycloak-admin-client/src/resources/agent.ts#Agent.updateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#requestWithParams
+js/libs/keycloak-admin-client/src/defs/realmRepresentation.ts#RealmRepresentation
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealms
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#extension
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtProvider.java#getResource
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtResource.java#realm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#updateRealm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/model/UIRealmRepresentation.java#UIRealmRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#updateRealm
+model/storage-private/src/main/java/org/keycloak/storage/datastore/DefaultExportImportManager.java#updateRealm

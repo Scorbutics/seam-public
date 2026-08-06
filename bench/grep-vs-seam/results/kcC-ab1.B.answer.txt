@@ -1,0 +1,69 @@
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#RealmSettingsHeader
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#onSubmit
+js/apps/admin-ui/src/context/auth/admin-ui-endpoint.ts#fetchRealmInfo
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#request
+js/libs/keycloak-admin-client/src/resources/agent.ts#updateRequest
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealms
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#updateRealm
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java#getRealm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#getInfo
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#updateRealm
+Traced end to end in 4 calls. Here's the flow.
+
+**Browser → TS admin client**
+
+The admin UI never speaks HTTP directly; it goes through `KeycloakAdminClient`, which exposes `realms` (`client.ts:45`). Call sites the map cited verbatim:
+- read — `RealmContext.tsx:47`: `adminClient.realms.findOne({ realm })`
+- update — `OtpPolicy.tsx:86`: `adminClient.realms.update({ realm: realmName }, formValues)`
+- delete — `RealmSettingsTabs.tsx:106` / `RealmSection.tsx:172`: `adminClient.realms.del(...)`
+
+**The client-side request builders**
+
+`Realms` (`realms.ts:22`) is declarative: each method is a `makeRequest`/`makeUpdateRequest` descriptor. `findOne` is `{ method: "GET", path: "/{realm}", catchNotFound: true }` (realms.ts:43–47); `update` is a `makeUpdateRequest` at :50. Those funnel through `Resource.makeRequest`/`makeUpdateRequest` (`resource.ts:20/30`) into `Agent.request`/`updateRequest` (`agent.ts:75/136`), which issue the fetch against the base path `/admin/realms`.
+
+**The hop** — Seam resolved both sides of `/admin/realms` from the coupling floor: fetched at `realms.ts:409`, served at `AdminRoot.java:232`.
+
+**Java server side**
+
+`AdminRoot` (`@Path("/admin")`) mounts `getRealmsAdmin()` at `@Path("realms")` → `RealmsAdminResource`, whose `getRealmAdmin(@PathParam("realm"))` (`@Path("{realm}")`, line 208) is the sub-resource locator that resolves the realm and hands off to `RealmAdminResource`. That mount parent serves no leaf route itself, which is why it's easy to miss by grepping annotations. There:
+- `getRealm()` — `@GET` at `RealmAdminResource.java:420`, returns a `RealmRepresentation` built by `ModelToRepresentation.toRepresentation`
+- `updateRealm(RealmRepresentation rep)` — `@PUT` at `RealmAdminResource.java:461`, applies it via `RepresentationToModel.updateRealm`
+- `RealmsAdminResource.getRealms()` — `@GET` list at line 112
+
+**Persistence** — `RepresentationToModel.updateRealm` mutates the `RealmModel`, backed by `JpaRealmProvider.getRealm`/`createRealm` and `RealmAdapter` over the `RealmEntity` table (Seam's `## Region` surfaced these as the DB-coupled tail of the same flow).
+
+**Admin-UI-specific extension** — `rest/admin-ui-ext` adds `UIRealmResource`: `getInfo()` (`@GET ui-ext/info`, coupled by Seam to `fetchRealmInfo` in `admin-ui-endpoint.ts:64`) and `updateRealm()` (`@PUT`, line 68), a console-only realm update that wraps the core one. I list the PUT with slightly lower confidence than the rest — its TS counterpart didn't resolve as a route key (the admin UI reaches ui-ext through the generic `fetchAdminUI` helper, an opaque template path), so the annotation confirms it exists but the calling component isn't structurally pinned.
+
+There is also a *Java* admin client (`integration/admin-client/.../RealmsResource.java`, `RealmResource.java`) mirroring the same routes — that's the Java SDK, not the UI path, so I've left it out of the answer block.
+
+## ANSWER
+js/apps/admin-ui/src/context/realm-context/RealmContext.tsx#RealmContextProvider
+js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx#RealmSettingsHeader
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx#onSubmit
+js/apps/admin-ui/src/context/auth/admin-ui-endpoint.ts#fetchRealmInfo
+js/libs/keycloak-admin-client/src/client.ts#KeycloakAdminClient
+js/libs/keycloak-admin-client/src/resources/realms.ts#Realms
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeRequest
+js/libs/keycloak-admin-client/src/resources/resource.ts#makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts#request
+js/libs/keycloak-admin-client/src/resources/agent.ts#updateRequest
+services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealmAdmin
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#getRealms
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#getRealm
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java#updateRealm
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java#getRealm
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#getInfo
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#updateRealm
