@@ -66,14 +66,66 @@ pub fn vendored_grammars() -> &'static [&'static str] {
 
 /// A parsed file — an immutable AST + its source, with the small read-only query surface the AST scans use
 /// (port of the TS `Ctx`). Owns the tree; nodes borrow from it, so a `Ctx` is self-contained.
+#[derive(Clone)]
 pub struct Ctx {
     source: String,
     tree: tree_sitter::Tree,
 }
 
+pub static PARSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PARSE_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// THE PARSE MEMO — keyed on (source hash, grammar), which is exactly what a parse is a function of.
+///
+/// MEASURED on a cold keycloak run before this existed: 110,321 tree-sitter parses over 5,462 DISTINCT files —
+/// twenty parses per file — taking 289.5s of the 468s the wave spends building footprints. The engine reads the
+/// same file 8.7 times and re-parses it every time, because a `Ctx` is built per (build, pass) and dropped.
+/// A compiler parses each file once; this is the gap that made a cold grow slower than a full `mvn install`.
+///
+/// Cloning a hit is a `ts_tree_copy` (a refcounted handle) plus a memcpy of the source: ~10µs against the
+/// ~2.6ms average parse it replaces.
+///
+/// BOUNDED BY SOURCE BYTES, not entries. Trees run several times their source, and an unbounded map over a
+/// monorepo is a memory leak with a good excuse; past the budget it simply stops inserting and the engine
+/// degrades to what it did before.
+const PARSE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
+static PARSE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PARSE_CACHE: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<(u64, String), Ctx>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn source_key(source: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    h.finish()
+}
+pub static PARSE_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Ctx {
     /// Parse `source` with `lang`'s grammar. `None` if the grammar isn't vendored or parsing fails.
+    /// PARSE CENSUS (SEAM_DEBUG=perf). Each `read` is followed by one of these, and the engine reads the same
+    /// file many times over — the question is whether re-parsing is what a cold run actually spends itself on.
     pub fn parse(source: &str, lang: &str) -> Option<Ctx> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let key = (source_key(source), lang.to_string());
+        if let Some(c) = PARSE_CACHE.lock().unwrap().get(&key) {
+            PARSE_HITS.fetch_add(1, Relaxed);
+            return Some(c.clone());
+        }
+        let _t = std::time::Instant::now();
+        let r = Self::parse_inner(source, lang);
+        PARSES.fetch_add(1, Relaxed);
+        PARSE_US.fetch_add(_t.elapsed().as_micros() as u64, Relaxed);
+        if let Some(c) = &r {
+            if PARSE_BYTES.load(Relaxed) + source.len() <= PARSE_BUDGET_BYTES {
+                PARSE_BYTES.fetch_add(source.len(), Relaxed);
+                PARSE_CACHE.lock().unwrap().insert(key, c.clone());
+            }
+        }
+        r
+    }
+
+    fn parse_inner(source: &str, lang: &str) -> Option<Ctx> {
         let language = language(lang)?;
         let mut parser = Parser::new();
         parser.set_language(&language).ok()?;

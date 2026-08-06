@@ -691,15 +691,16 @@ fn data_coupling_pass(s: &mut DepScan, anchor_src: &str, arange: (usize, usize))
 
 /// PER-PASS ACCUMULATORS (SEAM_DEBUG=perf). A cold keycloak run spends ~784s of CPU in 1038 of these builds,
 /// ~755ms each, and the build was a single number — eleven passes with no way to see which one it is.
-pub static PASS_US: [std::sync::atomic::AtomicU64; 12] = [
+pub static PASS_US: [std::sync::atomic::AtomicU64; 14] = [
     std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
     std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
     std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
     std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
 ];
-pub const PASS_NAMES: [&str; 12] = ["parse+units", "import", "file_ref", "type_methods", "same_package",
+pub const PASS_NAMES: [&str; 14] = ["parse+units", "import", "file_ref", "type_methods", "same_package",
     "intra_file_callee", "self_member", "inherited_member", "qualified_callee", "provider_factory",
-    "interface_impl", "external_libs"];
+    "interface_impl", "external_libs", "DOWN-BUILD-TOTAL", "down:scan-setup"];
 
 macro_rules! pass {
     ($i:expr, $e:expr) => {{
@@ -711,6 +712,7 @@ macro_rules! pass {
 }
 
 pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &DepOpts) -> ResolvedGraph {
+    let _tall = std::time::Instant::now();
     let _tp0 = std::time::Instant::now();
     let src = read(repo, anchor_file);
     let (actx, aunits) = match &src {
@@ -748,6 +750,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
     if let (Some(_), Some((anchor_src, _))) = (&actx, &src) {
         let is_type = actx.as_ref().is_some_and(|c| c.collect(c.root(), |k| nk::is_class_kind(k) || nk::is_interface(k)).into_iter().any(|x| ast::name_of(c, x).as_deref() == Some(symbol)));
         let called_types = actx.as_ref().map(ast::called_types).unwrap_or_default();
+        let _tsetup = std::time::Instant::now();
         let mut s = DepScan {
             repo: repo.to_string(),
             anchor_file: anchor_file.to_string(),
@@ -766,6 +769,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
             ws: Workspace::cached(repo),
             idx: InterfaceIndex::cached(repo),
         };
+        PASS_US[13].fetch_add(_tsetup.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
         pass!(1, s.import_pass(anchor_src));
         pass!(2, s.file_ref_pass());
         if is_type {
@@ -790,12 +794,14 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         nodes = s.nodes;
         blindspots = s.blindspots;
         let mut g = make_graph(("n1".into(), symbol.into(), anchor_file.into(), arange), graph_lang, nodes, s.edges);
+        PASS_US[12].fetch_add(_tall.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
         g.blindspots = blindspots;
         g.anchors = vec!["n1".into()];
         return g;
     }
 
     let mut g = make_graph(("n1".into(), symbol.into(), anchor_file.into(), arange), graph_lang, nodes, Vec::new());
+    PASS_US[12].fetch_add(_tall.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     g.blindspots = blindspots;
     g.anchors = vec!["n1".into()];
     g

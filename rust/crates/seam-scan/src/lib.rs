@@ -18,7 +18,7 @@ pub mod merge;
 pub mod module_graph;
 pub mod name_consumers;
 pub mod string_coupling;
-mod util;
+pub mod util;
 
 pub use callsite_graph::{build_callsite_graph, CallsiteOpts};
 pub use class_graph::build_class_graph;

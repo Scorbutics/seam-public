@@ -42,7 +42,26 @@ impl Default for ConsumersOpts {
 
 /// The import-scan core: anchor node + import-resolved consumers + same-file callers. A CLASS anchor is
 /// forwarded to build_class_graph. Port of `build_resolved_graph` (structural core).
+/// UP-PATH ACCUMULATORS (SEAM_DEBUG=perf). This runs BEFORE the instrumented region of
+/// `build_consumers_graph`, so it sat in the ~160s of a cold run that the pass timers could not see.
+pub static UP_US: [std::sync::atomic::AtomicU64; 4] = [
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+];
+/// Adds the elapsed time to `slot` when the returned guard drops — the default-importer block has several
+/// early exits and a timer that only fires on the happy path would understate it.
+fn scopeguard_like(slot: &'static std::sync::atomic::AtomicU64, t: std::time::Instant) -> impl Drop {
+    struct G(&'static std::sync::atomic::AtomicU64, std::time::Instant);
+    impl Drop for G {
+        fn drop(&mut self) { self.0.fetch_add(self.1.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); }
+    }
+    G(slot, t)
+}
+
+pub const UP_NAMES: [&str; 4] = ["up:parse+units", "up:import_consumers", "up:file_referencers", "up:default_importers"];
+
 pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &ConsumersOpts) -> Option<ResolvedGraph> {
+    let _tu0 = std::time::Instant::now();
     let src = read(repo, anchor_file);
     let (actx, aunits) = match &src {
         Some((text, lang)) => match Ctx::parse(text, lang) {
@@ -79,16 +98,22 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         String::new()
     };
     let lang = provider_for(anchor_file).map(|p| p.name().to_string()).unwrap_or_default();
+    UP_US[0].fetch_add(_tu0.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     let mut b = GraphBuilder::new(symbol, &kind, anchor_file, range, &enclosing, &lang);
 
+    let _tu1 = std::time::Instant::now();
     add_import_consumers(&mut b, repo, anchor_file, symbol);
+    UP_US[1].fetch_add(_tu1.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     // REVERSE FILE-PATH REFERENCE — source files that name THIS file by a path LITERAL (a component's
     // styleUrls, a `require('./x.css')`) are its consumers, so a template/asset anchor reaches its owner.
     // Gated to NON-SOURCE anchors (a code file's users come through the import scan above). Port of the
     // `fileReferencers` block in build_resolved_graph.
     if seam_lang::provider_for(anchor_file).is_none() {
         let anchor_norm = seam_fs::normpath(anchor_file);
-        for (file, line) in seam_resolve::file_ref::file_referencers(repo, anchor_file) {
+        let _tu2 = std::time::Instant::now();
+        let _refs = seam_resolve::file_ref::file_referencers(repo, anchor_file);
+        UP_US[2].fetch_add(_tu2.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+        for (file, line) in _refs {
             if seam_fs::normpath(&file) == anchor_norm {
                 continue;
             }
@@ -107,7 +132,9 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
     // here can carry. Reported only when the anchor otherwise has ZERO edges — exactly where the render would
     // say "Nothing in the repo calls this symbol". Port of the consumers_graph.ts opaque-default block.
     if !b.has_edges() {
+        let _tu3 = std::time::Instant::now();
         let ws = Workspace::cached(repo);
+        let _g3 = scopeguard_like(&UP_US[3], _tu3);
         if let Some(expr) = ws.opaque_default_slot(anchor_file) {
             let imps = ws.default_importers(anchor_file);
             if !imps.is_empty() {

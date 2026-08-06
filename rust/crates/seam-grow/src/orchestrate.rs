@@ -861,8 +861,22 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         // …and WHICH pass inside the build, which is where the compute actually goes.
         let mut per: Vec<(f64, &str)> = seam_scan::dependency_graph::PASS_NAMES.iter().enumerate()
             .map(|(i, nm)| (seam_scan::dependency_graph::PASS_US[i].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, *nm))
+            .chain(seam_scan::consumers_graph::UP_NAMES.iter().enumerate()
+                .map(|(i, nm)| (seam_scan::consumers_graph::UP_US[i].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, *nm)))
             .filter(|(v, _)| *v > 0.05).collect();
         per.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let (n, mb, secs) = (seam_scan::util::READS.load(Relaxed),
+                seam_scan::util::READ_BYTES.load(Relaxed) as f64 / 1e6,
+                seam_scan::util::READ_US.load(Relaxed) as f64 / 1e6);
+            let d = seam_scan::util::DISTINCT.lock().unwrap().len();
+            eprintln!("[perf]     source reads: {n} over {d} distinct file(s) = {:.1}x, {mb:.0} MB, {secs:.1}s", n as f64 / d.max(1) as f64);
+            eprintln!("[perf]     tree-sitter parses: {} taking {:.1}s ({} memo hit(s))",
+                seam_lang::treesitter::PARSES.load(Relaxed),
+                seam_lang::treesitter::PARSE_US.load(Relaxed) as f64 / 1e6,
+                seam_lang::treesitter::PARSE_HITS.load(Relaxed));
+        }
         let (hit_s, n_hit, load_s) = seam_cache::hit_census();
         eprintln!("[perf]     footprint cache: {n_hit} hit(s) deserialising {hit_s:.1}s, shard loads {load_s:.1}s");
         eprintln!("[perf]     build passes: {}", per.iter().map(|(v, nm)| format!("{nm}={v:.1}s")).collect::<Vec<_>>().join(" "));
