@@ -863,6 +863,8 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             .map(|(i, nm)| (seam_scan::dependency_graph::PASS_US[i].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, *nm))
             .filter(|(v, _)| *v > 0.05).collect();
         per.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+        let (hit_s, n_hit, load_s) = seam_cache::hit_census();
+        eprintln!("[perf]     footprint cache: {n_hit} hit(s) deserialising {hit_s:.1}s, shard loads {load_s:.1}s");
         eprintln!("[perf]     build passes: {}", per.iter().map(|(v, nm)| format!("{nm}={v:.1}s")).collect::<Vec<_>>().join(" "));
     }
     data
