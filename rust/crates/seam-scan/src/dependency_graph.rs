@@ -689,7 +689,29 @@ fn data_coupling_pass(s: &mut DepScan, anchor_src: &str, arange: (usize, usize))
     s.counter = crate::attach::chain_route_consumers(&s.repo, &mut s.nodes, &mut s.edges, s.counter, &s.ws);
 }
 
+/// PER-PASS ACCUMULATORS (SEAM_DEBUG=perf). A cold keycloak run spends ~784s of CPU in 1038 of these builds,
+/// ~755ms each, and the build was a single number — eleven passes with no way to see which one it is.
+pub static PASS_US: [std::sync::atomic::AtomicU64; 12] = [
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+];
+pub const PASS_NAMES: [&str; 12] = ["parse+units", "import", "file_ref", "type_methods", "same_package",
+    "intra_file_callee", "self_member", "inherited_member", "qualified_callee", "provider_factory",
+    "interface_impl", "external_libs"];
+
+macro_rules! pass {
+    ($i:expr, $e:expr) => {{
+        let _t = std::time::Instant::now();
+        let r = $e;
+        PASS_US[$i].fetch_add(_t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+        r
+    }};
+}
+
 pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &DepOpts) -> ResolvedGraph {
+    let _tp0 = std::time::Instant::now();
     let src = read(repo, anchor_file);
     let (actx, aunits) = match &src {
         Some((t, l)) => match Ctx::parse(t, l) {
@@ -702,6 +724,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         None => (None, Vec::new()),
     };
 
+    PASS_US[0].fetch_add(_tp0.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     // anchor node
     let (mut arange, mut akind) = ((0usize, 0usize), "symbol".to_string());
     if let Some(c) = &actx {
@@ -743,23 +766,23 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
             ws: Workspace::cached(repo),
             idx: InterfaceIndex::cached(repo),
         };
-        s.import_pass(anchor_src);
-        s.file_ref_pass();
+        pass!(1, s.import_pass(anchor_src));
+        pass!(2, s.file_ref_pass());
         if is_type {
-            s.type_methods_pass(opts.caller_files.as_deref());
+            pass!(3, s.type_methods_pass(opts.caller_files.as_deref()));
             // a CLASS anchor never reached self_member_pass, so its field initializers' `this.m` refs — the
             // whole delegation chain of an API-client class — were invisible. See inherited_member_pass.
-            s.inherited_member_pass(anchor_src);
+            pass!(7, s.inherited_member_pass(anchor_src));
         } else {
-            s.same_package_pass();
-            s.intra_file_callee_pass(anchor_src);
-            s.self_member_pass();
-            s.inherited_member_pass(anchor_src);
-            s.qualified_callee_pass();
+            pass!(4, s.same_package_pass());
+            pass!(5, s.intra_file_callee_pass(anchor_src));
+            pass!(6, s.self_member_pass());
+            pass!(7, s.inherited_member_pass(anchor_src));
+            pass!(8, s.qualified_callee_pass());
         }
-        s.provider_factory_pass();
-        s.interface_impl_pass();
-        s.external_libs_blindspot();
+        pass!(9, s.provider_factory_pass());
+        pass!(10, s.interface_impl_pass());
+        pass!(11, s.external_libs_blindspot());
         s.string_dispatch_pass(arange.0, arange.1);
         if opts.data_coupling {
             data_coupling_pass(&mut s, anchor_src, arange);

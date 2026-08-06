@@ -858,6 +858,12 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         let (c, a, n) = _move_split();
         eprintln!("[perf]     wave moves={n} compute={:.1}s apply={:.1}s deps={:.1}s",
             c as f64 / 1e6, a as f64 / 1e6, _T_DEPS_US.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6);
+        // …and WHICH pass inside the build, which is where the compute actually goes.
+        let mut per: Vec<(f64, &str)> = seam_scan::dependency_graph::PASS_NAMES.iter().enumerate()
+            .map(|(i, nm)| (seam_scan::dependency_graph::PASS_US[i].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, *nm))
+            .filter(|(v, _)| *v > 0.05).collect();
+        per.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap_or(std::cmp::Ordering::Equal));
+        eprintln!("[perf]     build passes: {}", per.iter().map(|(v, nm)| format!("{nm}={v:.1}s")).collect::<Vec<_>>().join(" "));
     }
     data
 }
