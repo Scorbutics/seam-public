@@ -1072,7 +1072,20 @@ impl From<seam_shapes::ConsumerSet> for ConsumerSetDto {
 /// `members`). The import-based floor is thin/absent for Ruby (global constants) and C/C++ (no #include
 /// parser), where callers still use the exact symbol name; this recovers them deterministically.
 pub fn project_consumer_set(repo: String, anchor_file: String, symbol: String, data_coupling: Option<bool>, recall: Option<bool>) -> ConsumerSetDto {
-    let mut set = match seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "up", data_coupling.unwrap_or(false)) {
+    // CACHED FOOTPRINT. This up-build is the whole cost of a consumer scan, and it is a pure function of
+    // (repo source, anchor, direction, coupling, member-fields). Every agent invocation is a FRESH PROCESS, so
+    // without a disk cache each one repeats it: measured on keycloak, 3.0s of the 4.5s `--with-consumers`
+    // spends, itself ~20% of a 14.7s warm grow — and the benchmark issues eight grows.
+    //
+    // The member-fields flag is IN THE KEY because it changes the answer, not just the cost: it takes this scan
+    // from 1 resolved edge to 212 (see ast::field_fn_members).
+    let dc = data_coupling.unwrap_or(false);
+    let ck = format!("up|{symbol}|{dc}|{}|{}", recall.unwrap_or(false), seam_lang::ast::member_fields_on());
+    let epoch = seam_cache::epoch_of(&repo);
+    let built = seam_cache::cached::<Option<seam_scan::graph::ResolvedGraph>, _>(
+        &repo, "consumer-set-v1", &anchor_file, &ck, &epoch,
+        || seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "up", dc));
+    let mut set = match built {
         Some(g) => seam_shapes::project_consumer_set(&g),
         None => seam_shapes::ConsumerSet {
             shape: "set".to_string(),
