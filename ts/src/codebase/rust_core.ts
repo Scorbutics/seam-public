@@ -201,10 +201,19 @@ export function toGraphDto(g: any): any {
 // per call) and a cache hazard (seam_env_snapshot keys the answer cache on those same vars). Cheap enough to do
 // unconditionally: it is a few dozen string compares, and skipping it when "nothing changed" would require
 // tracking exactly the state this exists to distrust.
+/// Seam's own checkout root, from this module's location — NOT the cwd. The core searches for the embedding
+/// model by walking up from the working directory, and an agent runs Seam from the repo it is analysing, so
+/// that walk never finds `<seam>/ts/node_modules`. Shipping the root across is what makes the model reachable
+/// from anywhere; see the note on `model_dir` in seam-embed.
+function pkgRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
 export function syncEnv(addon: any): void {
   // The core keys its floor-index shard on this, so a rebuilt addon cannot load a floor the previous one
   // computed. Set here (the one place the boundary is crossed) rather than at every call site.
   if (!process.env.SEAM_CORE_STAMP) process.env.SEAM_CORE_STAMP = _coreStamp();
+  if (!process.env.SEAM_PKG_ROOT) process.env.SEAM_PKG_ROOT = pkgRoot();
   addon.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
 }
 

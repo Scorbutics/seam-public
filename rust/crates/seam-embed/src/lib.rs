@@ -52,6 +52,19 @@ fn model_dir() -> Option<PathBuf> {
             p = d.parent();
         }
     }
+    // THE PACKAGE ROOT, shipped by the TS composition root (`SEAM_PKG_ROOT`, set from `import.meta.url`).
+    //
+    // MEASURED BUG: the walk above starts at the CURRENT WORKING DIRECTORY, and an agent runs Seam from the
+    // repo it is analysing, not from Seam's own. Walking up from `~/dev/keycloak` never reaches
+    // `~/seam-phase0/ts/node_modules`, so the model was NOT FOUND and every grow ran with `intent field: OFF`.
+    // Silent in the answer and loud in the diagnostics: it degrades ranking, tiering and centre selection,
+    // makes `embedScoreDefs` return nothing (so `--with-consumers` finds no callers and the `## Callers`
+    // section is empty), and emits a warning long enough to push the map past the inline ceiling into a spill.
+    // Five of six benchmark rounds ran that way without anyone noticing, because the CLI works when run from
+    // Seam's own checkout — which is how it is always tested.
+    if let Ok(root) = std::env::var("SEAM_PKG_ROOT") {
+        bases.push(PathBuf::from(root));
+    }
     if let Some(h) = home.clone() {
         bases.push(h);
     }
