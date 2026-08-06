@@ -103,6 +103,16 @@ Use a scratch dir for intermediates: `OUT=$(mktemp -d)`. **This applies to the D
 > (~16KB) and `--token-budget N` shrinks it. It is sized to be read in one go — you do not need to spool it,
 > page it, `head`/`tail` it, or `wc -l` it first.
 >
+> **`| head -N` ON A MAP IS THE MOST EXPENSIVE THING YOU CAN DO WITH THIS TOOL.** Measured 2026-08-06
+> (bench/grep-vs-seam, keycloak): an agent ran the right command, piped it through `head -200` on a 321-line
+> map, and cut `## Cross-stack` — the section that names the OTHER side of the boundary, which is the whole
+> question on a cross-language trace. It then spent **27 of its 31 tool calls** rediscovering by hand what it
+> had already been given and thrown away: eleven `python3` file walks and three greps.
+>
+> The map is ordered anchor-first, so a truncation always keeps the part you could have guessed and drops the
+> part you could not. If it feels too long, lower `--token-budget` — that CROPS HONESTLY and says what it
+> dropped. `head` does not.
+>
 > **And `$OUT` will not survive.** Each Bash call is a FRESH SHELL, so `OUT=$(mktemp -d)` set in one call is
 > EMPTY in the next — `> "$OUT/out.txt"` then writes to `/out.txt` and is denied. Measured 2026-07-31
 > (bench/grep-vs-seam, clean-r1/r2/r3): **4, 4 and 5 of each run's 7-9 Seam calls were this** — redirect,
@@ -300,6 +310,25 @@ step, not an option:
   (bench/grep-vs-seam, cal-ab3/ab4): an agent following the old wording spent **10 of its 19-32 tool calls**
   on `find`/`ls` orientation — the single largest block in its budget, and more than twice what the actual
   analysis cost. `--locate` answers the same question in one call and ~0.8s on a 10k-file monorepo.
+
+  **NAME ONE END AND LET SEAM DERIVE THE OTHER — `--to-kind route`.** You know the client; you do not know
+  which Java class serves it. Say so, and Seam reads the anchor's own grounded route keys and pins the far side
+  as centers of its own — including the JAX-RS **mount parents** that serve no leaf route but locate the
+  sub-resource that does (`RealmsAdminResource`, the 4th most-opened file on this case, which no counterpart
+  list names):
+
+      seam --scan --auto --center js/libs/keycloak-admin-client/src/resources/realms.ts#Realms \
+           --to-kind route --with-consumers 2 --intent "how the admin UI reads and updates a realm"
+
+  `--with-consumers N` adds the center's own resolved CALLERS as centers, and the map gains a `## Callers`
+  section citing the exact line where each caller enters the flow (`await adminClient.realms.del({ realm })`)
+  **without growing their regions** — the citation is what stops you re-opening the file; their neighbourhoods
+  are not the answer.
+
+  MEASURED on this case, one named center against two hand-picked ones: the map went from citing 50.0% of what
+  an agent actually opens to **74.4%**, and from showing code for 47.2% to **72.2%**. `--to-kind` also defaults
+  the radius to 2, because the two ends of a cross-stack hop are two hops apart — flooding past that is noise,
+  not rigour (measured: 18% fewer seams AND higher coverage).
 
 - **GIVE THE GROW A DIRECTION.** A grow with no end in sight floods: measured on keycloak, 824 of the 846
   files it produced are never opened by any agent. Say where it should stop, and it stops there:
