@@ -851,6 +851,14 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     {
         data.history = history;
     }
+    // THE WAVE'S OWN SPLIT. `_move_split` has always accumulated it and nothing ever printed it, so
+    // `phase_expand` was a single number with ~70% of a cold run inside it and no way to see what.
+    // COMPUTE = deciding + BUILDING the moved node's footprint; APPLY = merging it into the graph.
+    if seam_fs::debug_on("perf") {
+        let (c, a, n) = _move_split();
+        eprintln!("[perf]     wave moves={n} compute={:.1}s apply={:.1}s deps={:.1}s",
+            c as f64 / 1e6, a as f64 / 1e6, _T_DEPS_US.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6);
+    }
     data
 }
 

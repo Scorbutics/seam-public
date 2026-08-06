@@ -233,11 +233,14 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     // TS's `probe` path does. Without it a boundary the flywheel discovered is absent from the graph — measured:
     // `egress stripe` on cal.com's teams/api/create/route.ts (learned as `route-egress`) was in the TS ball and
     // not in Rust's. `llm: false` = CACHE ONLY: this is the warm replay path and must never spend a call.
+    let _tq = std::time::Instant::now();
     let proposed = crate::learn::anchor_proposed_keys(repo, anchor_file, anchor_text, false, None, None);
+    let proposed_s = _tq.elapsed().as_secs_f64();
+    let _tr = std::time::Instant::now();
     // CHAIN_DEPTH = 1 (chain the data-flow boundary one hop past the anchor: reader → its http-route).
     run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &carrier_accs, &proposed);
     if _perf {
-        eprintln!("[perf]           resolve: merge_grounding(floor∪learned)={:.2}s run_pipeline={:.2}s", merge_s, _tp.elapsed().as_secs_f64());
+        eprintln!("[perf]           resolve: merge_grounding(floor∪learned)={:.3}s proposed_keys={:.3}s run_pipeline={:.3}s", merge_s, proposed_s, _tr.elapsed().as_secs_f64());
     }
     CouplingResult { counter: state.graph.counter(), nodes: state.graph.nodes, edges: state.graph.edges, blindspots: state.graph.blindspots }
 }
