@@ -53,7 +53,7 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
   // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
   // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
-  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a), anchorAccess: anchorAccessOf(a), callers: _callerCites }); },
+  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a), anchorAccess: anchorAccessOf(a), callers: _callerCites, routes: routesOf(a) }); },
 };
 
 /// THE ANCHOR'S OWN DATA ACCESS, for the agent map — the lines INSIDE the anchor that touch a shared key.
@@ -77,6 +77,82 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
 /// Reuses `projectCoupling`'s `own_sites` unchanged rather than re-deriving: same helper, same 1-based lines,
 /// same `tx.`-receiver handling, already regression-tested (coupling_own_sites.test.ts). A second derivation is
 /// how the two renders would come to disagree about where the anchor writes.
+// THE FLOW'S HTTP SURFACE — each route the anchor touches, paired with the handler that serves it.
+//
+// Both halves were already in the map and never side by side, so an agent derived the pairing by hand: across
+// three A/B rounds it was the dominant use of every post-grow call (11 of 18, 9 of 13, and eight consecutive
+// `--query coupling` calls). This assembles it from the coupling floor, which grounded it already.
+//
+// THE DEGENERATE KEY IS RESOLVED HERE TOO. A typed client builds paths against a base URL, so `Realms#update`
+// declares `path: "/{realm}"` and grounds `/*` — a wildcard the floor correctly refuses to give sides to, which
+// is why `updateRealm` is a counterpart of NO key and never appeared. The mount prefix its sibling keys
+// establish disambiguates it: `/admin/realms` + `/*` is `/admin/realms/*`, a real route serving
+// RealmAdminResource.java:474. Used ONLY to name the pairing — never to add or re-aim a center, which was
+// measured worse (74.4%/72.2% -> 62.0%/58.2%).
+function routesOf(a: Args): { path: string; role: string; client: string; servers: string[] }[] {
+  if (!a.repo || !a.anchorFile) return [];
+  try {
+    const { loadAddon } = require("../codebase/rust_core.js");
+    const addon: any = loadAddon();
+    const cp: any = addon.projectCoupling(a.repo, a.anchorFile, a.symbol ?? undefined);
+    const keys = ((cp?.keys ?? []) as any[]).filter((k) => k.kind === "route" || k.kind === "http-route");
+    if (!keys.length) return [];
+    const all = (addon.locateRoutes?.(a.repo, "", 20000) ?? []) as any[];
+    // the mount prefixes the NON-degenerate keys establish, reused to resolve the degenerate ones
+    // THE MOUNT PREFIX IS THE ONE MOST KEYS AGREE ON, not any that composes. A client class's keys are all
+    // relative to one base URL, so the prefix that the most of them compose with IS that base — here
+    // `/admin/realms`, established by 23 of 25 keys. Picking "any" resolved the realm's own root to
+    // `/admin/realms/*/clients/*`, and picking the SHORTEST resolved it to `/clients/*`: both are real routes
+    // and neither is the anchor's. Frequency is what separates the mount point from a coincidence.
+    const prefixCount = new Map<string, number>();
+    for (const k of keys) {
+      if (!k.value || k.value === "/*") continue;
+      const seen = new Set<string>();
+      for (const r of all) if (r.route?.endsWith(k.value)) {
+        const pre = r.route.slice(0, r.route.length - k.value.length);
+        if (pre && pre !== "/" && !seen.has(pre)) { seen.add(pre); prefixCount.set(pre, (prefixCount.get(pre) ?? 0) + 1); }
+      }
+    }
+    const prefixes = [...prefixCount.entries()].sort((x, y) => y[1] - x[1]).slice(0, 1).map(([p]) => p);
+    const defs = new Map<string, any[]>();
+    const symAt = (file: string, line: number): string => {
+      if (!defs.has(file)) { try { defs.set(file, (addon.enumerateDefs(a.repo, 4000, [file], false) ?? []) as any[]); } catch { defs.set(file, []); } }
+      return defs.get(file)!.filter((d) => d.line + 1 <= line).sort((x, y) => y.line - x.line)[0]?.name ?? "?";
+    };
+    const short = (f: string, l: number, sym: string) => `${f.split("/").slice(-1)[0]}:${l}#${sym}`;
+    const out: { path: string; role: string; client: string; servers: string[] }[] = [];
+    for (const k of keys) {
+      const own = (k.ownSites ?? [])[0];
+      const client = own ? `${a.anchorFile.split("/").slice(-1)[0]}:${own.line}` : "(anchor)";
+      let servers = ((k.sides ?? []) as any[]).filter((s) => s.file && s.symbol)
+        .map((s) => short(s.file, s.line, s.symbol));
+      let path = k.value;
+      if (!servers.length) {
+        // THE SHORTEST resolution wins, not the last one matched. `/*` composes with EVERY prefix the sibling
+        // keys establish, and `/admin/realms/*/clients` is one of them — taking the last match resolved the
+        // realm's own root path to `/admin/realms/*/clients/*`, i.e. to a sub-resource of the thing asked
+        // about. The most general composition is the resource's own route.
+        for (const pre of prefixes) {
+          for (const r of all) {
+            if (r.route !== `${pre}${k.value}`) continue;
+            path = r.route;
+            servers = ((r.servers ?? []) as any[]).filter((sv) => sv.file).map((sv) => short(sv.file, sv.line, symAt(sv.file, sv.line)));
+          }
+        }
+      }
+      if (servers.length) out.push({ path, role: k.anchorRole ?? "", client, servers, base: k.value === "/*" });
+    }
+    // THE RESOURCE'S OWN BASE ROUTE LEADS. `/*` is the key a typed client grounds for its root path
+    // (`path: "/{realm}"`), so it IS the realm — `GET`/`PUT /admin/realms/{realm}`, which is what "read and
+    // update a realm" means. Everything else on the class is a sub-resource.
+    //
+    // Ranking by path LENGTH was tried twice and reads wrong both ways: descending buried it behind
+    // `/*/client-registration-policy/providers`, ascending left it one character outside a six-row cap. Length
+    // is not relevance; being the anchor's own root is.
+    return out.sort((x, y) => Number(y.base) - Number(x.base) || x.path.length - y.path.length || x.path.localeCompare(y.path));
+  } catch { return []; }
+}
+
 function anchorAccessOf(a: Args): { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[] {
   if (!a.repo || !a.anchorFile) return [];
   try {

@@ -49,7 +49,7 @@ export { renderLlmContext } from "./render/region_views.js";
 /// cross-language boundary, 39 `.java` / 43 `.ts` against 47/48 at 8000).
 const AGENT_INLINE_CEILING = 28_000;
 
-export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[]; callers?: { file: string; line: number; symbol: string }[] } = {}): string {
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader; anchorAccess?: { kind: string; value: string; role: string; file: string; line: number; columns: string[] }[]; callers?: { file: string; line: number; symbol: string }[]; routes?: { path: string; role: string; client: string; servers: string[]; base?: boolean }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -696,6 +696,37 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       `  (these are the anchor's OWN accesses, not counterparts — for the other side of each key run`,
       `   \`--query coupling --center ${rows[0].file}\`.)`];
   };
+  // ── THE HTTP SURFACE: client path → server handler ──────────────────────────────────────────────────────
+  //
+  // THE ONE QUESTION AN AGENT ASKS OVER AND OVER. Measured across three A/B rounds on the keycloak case, the
+  // dominant use of every post-grow call was "which Java method serves `PUT /admin/realms/{realm}`, and what
+  // mounts it": round 1 spent 11 of 18 calls on it (grep for `@GET|@PUT|@Path`, then the mount chain, then six
+  // reads of RealmsAdminResource), round 2 spent 9 of 13, round 3 issued EIGHT `--query coupling` calls in a
+  // row asking exactly this.
+  //
+  // The map already held both halves and never put them side by side: the anchor's own access sites are in
+  // `## Persists / reads`, and the handlers are centers in the region — but nothing said WHICH handler answers
+  // WHICH path. The agent then derives by hand a mapping the coupling floor has already grounded.
+  const routesSection = (): string[] => {
+    const rs = (opts.routes ?? []).filter((r) => r.path && r.servers.length);
+    if (!rs.length) return [];
+    // SMALL, because this section is exempt from the degrade ladder. At 10 rows the map reached 28,316 B
+    // against a 28,000 B transport ceiling — a spill costs the agent an extra read, which is the exact cost
+    // this section exists to remove.
+    const CAP = 6;
+    return ["", "## HTTP surface (this flow's routes — the client line, and the handler that serves it)",
+      ...(rs.length > CAP ? [`  (showing ${CAP} of ${rs.length}; \`--query coupling\` lists the rest)`] : []),
+      // THE BASE ROUTE GETS MORE HANDLERS SHOWN. A route is often served by several files — on keycloak
+      // `/admin/realms/*` lists the Java admin-CLIENT proxy first and the real resource fourth, so a two-handler
+      // cut showed `RealmResource#update` (a client) and hid `RealmAdminResource#updateRealm` (the server), i.e.
+      // hid the answer behind "+4 more" on the one row that matters.
+      ...rs.slice(0, CAP).map((r) => {
+        const n = r.base ? 5 : 2;
+        return `  ${r.path}  ${r.client}  ──serves──▶  ${r.servers.slice(0, n).join(" , ")}`
+          + (r.servers.length > n ? ` (+${r.servers.length - n} more)` : "");
+      })];
+  };
+
   // ── WHO CALLS THIS, cited but NOT grown ─────────────────────────────────────────────────────────────────
   //
   // The measured shape of the last gap. The admin-UI files whose only link to the realm flow is
@@ -1150,7 +1181,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // through. Set here rather than threaded through nine section closures: the flag is a property of the RUNG
     // being assembled, and each rung reassembles the whole render from scratch.
     ((_snipOn = snippets !== false && !!opts.snippet),
-     (_snipLeft = typeof snippets === "number" ? snippets : Infinity), (_snipSkipped = 0), [...header(), ...anchorAccessSection(), ...callersSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting),
+     (_snipLeft = typeof snippets === "number" ? snippets : Infinity), (_snipSkipped = 0), [...header(), ...anchorAccessSection(), ...routesSection(), ...callersSection(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting),
      // THE DIAGNOSTIC SECTIONS YIELD BEFORE THE CODE DOES — measured, not assumed. On keycloak these three
      // are 9,193 B of a 27,267 B map (34%) and carry ZERO `file:line` citations between them: they report
      // what static resolution could not see and what the grow declined to expand. Valuable, but they are

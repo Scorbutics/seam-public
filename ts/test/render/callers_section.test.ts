@@ -55,3 +55,45 @@ describe("the Callers section cites without growing", () => {
     expect(out.match(/RealmSettingsTabs\.tsx:106/g)?.length).toBe(1);
   });
 });
+
+// The `## HTTP surface` section — client path → the handler that serves it.
+//
+// THE QUESTION AN AGENT ASKS OVER AND OVER. Measured across three A/B rounds on the keycloak case, the dominant
+// use of every post-grow call was "which Java method serves `PUT /admin/realms/{realm}`, and what mounts it":
+// 11 of 18 post-grow calls in round 1, 9 of 13 in round 2, and eight consecutive `--query coupling` calls in
+// round 3. The map held both halves — the anchor's access sites, and the handlers as centers — and never put
+// them side by side, so the agent derived by hand a pairing the coupling floor had already grounded.
+describe("the HTTP surface section pairs a route with its handler", () => {
+  const model = () => ({
+    mode: "codebase",
+    clusters: [{ id: "c1", seams: [{ id: "s1", label: "Realms", hunks: [{ id: "h1", file: "src/realms.ts", start: 1, role: "core", relevance: 0.5 }], primary: { file: "src/realms.ts", line: 1 } }] }],
+    anchor: { id: "h1", file: "src/realms.ts", symbol: "Realms" },
+  });
+  const routes = [{ path: "/admin/realms/*", role: "reads", client: "realms.ts:45",
+    servers: ["RealmAdminResource.java:429#getRealm", "RealmAdminResource.java:474#updateRealm"], base: true }];
+
+  test("the route, the client line and the handler appear together", () => {
+    const out = renderAgent(model() as any, { routes } as any);
+    expect(out).toContain("## HTTP surface");
+    expect(out).toContain("/admin/realms/*");
+    expect(out).toContain("realms.ts:45");
+    expect(out).toContain("RealmAdminResource.java:474#updateRealm");
+  });
+
+  /// The BASE route shows more handlers than the rest. A route is often served by several files, and on
+  /// keycloak the Java admin-CLIENT proxy sorts before the real resource — a two-handler cut hid
+  /// `#updateRealm` behind "+N more" on the one row that answers the question.
+  test("the base route shows more handlers than a sub-resource route", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `F${i}.java:${i}#m${i}`);
+    const out = renderAgent(model() as any, { routes: [
+      { path: "/base", role: "reads", client: "c.ts:1", servers: many(6), base: true },
+      { path: "/base/sub/thing", role: "reads", client: "c.ts:2", servers: many(6) },
+    ] } as any);
+    expect(out).toContain("F4.java:4#m4");            // 5th handler of the base route is shown
+    expect(out).toMatch(/\/base\/sub\/thing.*\(\+4 more\)/);   // the sub-resource still cuts at 2
+  });
+
+  test("no routes means no heading", () => {
+    expect(renderAgent(model() as any, {} as any)).not.toContain("## HTTP surface");
+  });
+});
