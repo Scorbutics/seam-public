@@ -107,7 +107,13 @@ describe("the agent map fits the TRANSPORT, not just the token budget", () => {
 
   test("both bounds are consulted, not just the token one", () => {
     const src = readFileSync(join(import.meta.dir, "..", "..", "src", "codebase", "llm_context.ts"), "utf-8");
-    expect(src).toMatch(/tok\(out\) <= budget && bytes\(out\) <= AGENT_INLINE_CEILING/);
+    // Matched on the PREDICATE, not on its call site: the ladder now starts mid-way and walks (it was a linear
+    // scan), so pinning the literal `if` broke on a change that preserved the rule exactly. What must hold is
+    // that a rung has to satisfy the token budget AND the transport ceiling — enforcing only the first is the
+    // regression this guards, and it reads the same wherever the check lives.
+    expect(src).toMatch(/tok\([a-z]+\) <= budget && bytes\([a-z]+\) <= AGENT_INLINE_CEILING/);
+    // …and that every rung goes through it, rather than one path skipping the check.
+    expect(src).toMatch(/const fits = /);
   });
 });
 

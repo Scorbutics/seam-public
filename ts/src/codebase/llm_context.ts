@@ -1211,10 +1211,46 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // cannot do this job, and why this only became enforceable once the exempt sections were capped.
   const bytes = (lines: string[]) => lines.join("\n").length;
   let out: string[] = [], fitted = false;
-  for (const step of steps) {
-    out = assemble(step[0], step[1], step[2], step[3], step[4], step[5], step[6]);
-    if (tok(out) <= budget && bytes(out) <= AGENT_INLINE_CEILING) { fitted = true; break; }
+  const _tLad = Date.now(); let _rungs = 0;
+  const fits = (l: string[]) => tok(l) <= budget && bytes(l) <= AGENT_INLINE_CEILING;
+  const build = (i: number): string[] => {
+    _rungs++;
+    const st = steps[i];
+    const r = assemble(st[0], st[1], st[2], st[3], st[4], st[5], st[6]);
+    return r;
+  };
+  // START MID-LADDER, then walk. The rungs shrink monotonically, and the top ones are enormous on a real repo:
+  // measured on keycloak, rung 1 assembles 204,857 B and rung 2 164,346 B against a 28,000 B ceiling — two
+  // full renders of a map seven times too large, built only to discover they do not fit. Six assemblies cost
+  // 1,043 ms of a 14.7 s warm run.
+  //
+  // THE SAME RUNG IS CHOSEN: if the start rung fits we walk BACKWARD to the largest one that still fits (never
+  // under-delivering), and if it does not we walk forward exactly as before.
+  //
+  // THE OUTPUT IS NOT BYTE-IDENTICAL, AND THAT IS THE POINT — I expected it to be and was wrong. The snippet
+  // reader carries a `spent` budget across re-renders (idempotent per CITATION, so one line costs once however
+  // often it is drawn). The rungs that are DISCARDED still spend it: rung 1 cites the files of a 204 kB map,
+  // and by the time the rung that actually ships is assembled, budget is gone on files it does not even
+  // contain. Skipping those rungs hands that budget back to the render that survives — three more code
+  // snippets here, and content coverage 72.2% -> 72.5% with citation 74.4% -> 74.6%.
+  //
+  // So the old behaviour made the answer depend on how much work was thrown away. This does not.
+  const START = Math.min(2, steps.length - 1);
+  out = build(START);
+  if (fits(out)) {
+    fitted = true;
+    for (let i = START - 1; i >= 0; i--) {
+      const bigger = build(i);
+      if (!fits(bigger)) break;
+      out = bigger;
+    }
+  } else {
+    for (let i = START + 1; i < steps.length; i++) {
+      out = build(i);
+      if (fits(out)) { fitted = true; break; }
+    }
   }
+  if (process.env.SEAM_DEBUG?.includes("perf")) require("fs").writeSync(2, `[perf]   render ladder: ${_rungs} assembly/assemblies in ${Date.now() - _tLad}ms (fitted=${fitted})\n`);
   // NOTHING fits: the sections that are EXEMPT from cropping already exceed the budget on their own. At that
   // point dropping the caller's EXPLICITLY requested snippets bought no fit — the render overruns either way and
   // the mechanism cap is EXEMPT_N in both — so withholding them is pure loss, not a saving. Give the caller what

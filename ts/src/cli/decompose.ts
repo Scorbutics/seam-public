@@ -458,12 +458,17 @@ async function runCodebase(a: Args): Promise<number> {
       try {
         process.env.SEAM_MEMBER_FIELDS = "1";
         syncEnv(addon);
+        const _t1 = Date.now();
         const wide: any = addon.projectConsumerSet(a.repo, a.anchorFile, a.symbol, true, false);
+        if (debugOn("perf")) require("fs").writeSync(2, `[perf]   wc: widened consumer scan ${Date.now() - _t1}ms\n`);
         const mem = ((wide?.members ?? []) as any[]).filter((m) => m.file && m.file !== a.anchorFile && !m.isTest && m.kind !== "test");
         const wfiles = [...new Set(mem.map((m) => m.file))];
         if (wfiles.length) {
           const best = new Map<string, number>();
-          for (const { def, score } of (addon.embedScoreDefs(a.repo, a.intent ?? "", wfiles) as any[])) {
+          const _t2 = Date.now();
+          const _scored = addon.embedScoreDefs(a.repo, a.intent ?? "", wfiles) as any[];
+          if (debugOn("perf")) require("fs").writeSync(2, `[perf]   wc: embedScoreDefs over ${wfiles.length} file(s) ${Date.now() - _t2}ms\n`);
+          for (const { def, score } of _scored) {
             if (!(best.get(def.file)! >= score)) best.set(def.file, score);
           }
           const order = [...best.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([f]) => f);
@@ -487,7 +492,9 @@ async function runCodebase(a: Args): Promise<number> {
       // an unrelated neighbourhood in. A resolved consumer edge is evidence of structure; the widened fan is
       // name-based recall, and recall without structure is what the region budget cannot afford.
       const _unused = syncEnv;
+      const _t0 = Date.now();
       const set: any = addon.projectConsumerSet(a.repo, a.anchorFile, a.symbol, true, false);
+      if (debugOn("perf")) require("fs").writeSync(2, `[perf]   wc: resolved consumer scan ${Date.now() - _t0}ms\n`);
       const files = [...new Set(((set?.members ?? []) as any[]).map((m) => m.file).filter(Boolean))]
         .filter((f) => f !== a.anchorFile);
       let picked: string[] = [];
