@@ -1,0 +1,1 @@
+### CMD: bun /home/scorbutics/seam-phase0/ts/src/cli/decompose.ts --repo /home/scorbutics/dev/keycloak --scan --auto --center "js/libs/keycloak-admin-client/src/resources/realms.ts#Realms" --to-kind route --with-consumers 2 --intent "how the admin UI reads and updates a realm, from the TypeScript admin client to the Java server side" --skeleton --format agent 2>/dev/null

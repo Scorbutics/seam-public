@@ -1,0 +1,80 @@
+# Coupling of RealmAdminResource (cross-stack data boundary)
+anchor: RealmAdminResource | shape: coupling | shared keys: 40 | counterpart sites: 57
+
+> WIDENED TO THE MODULE: 'RealmAdminResource' has no shared key inside its own span, but this FILE does.
+> Keys declared at class/file level (a JAX-RS `@Path`, a shared client, a table constant) are outside any
+> one method, so the boundary below belongs to the module — check which entries are reachable from
+> 'RealmAdminResource' before treating them as its own.
+
+## http-route "/*"  — anchor writes
+  ● extension (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:657)  [method, writes /*]  — THE ANCHOR'S OWN ACCESS
+        655│ }
+        656│ 
+        657> @Path("{extension}")
+        658│ public Object extension(@PathParam("extension") String extension) {
+        659│     AdminRealmResourceProvider provider = session.getProvider(AdminRealmResourceProvider.class, extension);
+  (no counterpart — the anchor is the only side of this key in the repo)
+
+## http-route "/admin-events"  — anchor writes
+  ● getEvents (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:995)  [method, writes /admin-events]  — THE ANCHOR'S OWN ACCESS
+        993│  * @return
+        994│  */
+        995> @Path("admin-events")
+        996│ @GET
+        997│ @NoCache
+  → Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:182)  [class, reads /admin-events]
+        180│ public clearAdminEvents = this.makeRequest<{ realm: string }, void>({
+        181│   method: "DELETE",
+        182>   path: "/{realm}/admin-events",
+        183│   urlParamKeys: ["realm"],
+        184│ });
+
+## http-route "/attack-detection"  — anchor writes
+  ● getAttackDetection (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:199)  [method, writes /attack-detection]  — THE ANCHOR'S OWN ACCESS
+        197│  * @return
+        198│  */
+        199> @Path("attack-detection")
+        200│ public AttackDetectionResource getAttackDetection() {
+        201│     return new AttackDetectionResource(session, auth, adminEvent);
+  → constructor (js/libs/keycloak-admin-client/src/resources/attackDetection.ts:28)  [method, reads /attack-detection]
+        26│ constructor(client: KeycloakAdminClient) {
+        27│   super(client, {
+        28>     path: "/admin/realms/{realm}/attack-detection/brute-force",
+        29│     getUrlParams: () => ({
+        30│       realm: client.realmName,
+
+## http-route "/authentication"  — anchor writes
+  ● flows (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:670)  [method, writes /authentication]  — THE ANCHOR'S OWN ACCESS
+        668│ }
+        669│ 
+        670> @Path("authentication")
+        671│ public AuthenticationManagementResource flows() {
+        672│     return new AuthenticationManagementResource(session, auth, adminEvent);
+  → constructor (js/libs/keycloak-admin-client/src/resources/authenticationManagement.ts:319)  [method, reads /authentication]
+        317│ constructor(client: KeycloakAdminClient) {
+        318│   super(client, {
+        319>     path: "/admin/realms/{realm}/authentication",
+        320│     getUrlParams: () => ({
+        321│       realm: client.realmName,
+
+## http-route "/client-description-converter"  — anchor writes
+  ● convertClientDescription (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:168)  [method, writes /client-description-converter]  — THE ANCHOR'S OWN ACCESS
+        166│  * @return
+        167│  */
+        168> @Path("client-description-converter")
+        169│ @Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML, MediaType.TEXT_PLAIN })
+        170│ @POST
+  (no counterpart — the anchor is the only side of this key in the repo)
+
+## http-route "/client-policies/policies"  — anchor writes
+  ● getClientPoliciesResource (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:1431)  [method, writes /client-policies/policies]  — THE ANCHOR'S OWN ACCESS
+        1429│ }
+        1430│ 
+        1431> @Path("client-policies/policies")
+        1432│ public ClientPoliciesResource getClientPoliciesResource() {
+        1433│     ProfileHelper.requireFeature(Profile.Feature.CLIENT_POLICIES);
+  → ClientPolicies (js/libs/keycloak-admin-client/src/resources/clientPolicies.ts:46)  [class, reads /client-policies/policies]
+        44│ >({
+        45│   method: "GET",
+        46>   path: "/policies",
+        47│   queryParamKeys: ["include-global-policies"],

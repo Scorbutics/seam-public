@@ -1,0 +1,1 @@
+### CMD: bun /home/scorbutics/seam-phase0/ts/src/cli/decompose.ts --repo . --locate "getRealm,updateRealm,getRealmAdmin,findOne,update,RealmsAdminResource" 2>/dev/null | head -80

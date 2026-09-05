@@ -1,0 +1,22 @@
+=== round r1 start 14:39:33 ===
+  arm order: ACB
+  arm A: 99s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r1.A.jsonl
+  arm C: 115s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r1.C.jsonl
+  arm B: 123s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r1.B.jsonl
+round done: r1
+=== round r1 done  14:46:02 ===
+=== round r2 start 14:46:02 ===
+  arm order: ABC
+  arm A: 88s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r2.A.jsonl
+  arm B: 105s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r2.B.jsonl
+  arm C: 97s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r2.C.jsonl
+round done: r2
+=== round r2 done  14:51:57 ===
+=== round r3 start 14:51:57 ===
+  arm order: ACB
+  arm A: 104s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r3.A.jsonl
+  arm C: 105s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r3.C.jsonl
+  arm B: 93s -> /home/scorbutics/dev/code-review-sort/bench/replay-ceiling/results/r3.B.jsonl
+round done: r3
+=== round r3 done  14:57:47 ===
+=== round r4 start 14:57:47 ===

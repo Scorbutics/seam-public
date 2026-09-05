@@ -1,0 +1,40 @@
+# Locate: 2 name(s)
+2 resolved, 0 not found — YOU choose which answers your question.
+
+## updateRealm — 1 definition(s)
+- server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java:285#updateRealm   [method]  in RepresentationToModel
+    public static void updateRealm(RealmRepresentation rep, RealmModel realm, KeycloakSession session) {
+
+## toRepresentation — 25 definition(s) of 48 — narrow with `--in <path-prefix>`
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:230#toRepresentation   [method]  in ModelToRepresentation
+    public static GroupRepresentation toRepresentation(GroupModel group, boolean full) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:306#toRepresentation   [method]  in ModelToRepresentation
+    public static UserRepresentation toRepresentation(KeycloakSession session, RealmModel realm, UserModel user) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:310#toRepresentation   [method]  in ModelToRepresentation
+    public static UserRepresentation toRepresentation(KeycloakSession session, RealmModel realm, UserModel user, UserRepresentation rep, boolean setUserAttributes) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:356#toRepresentation   [method]  in ModelToRepresentation
+    public static UserRepresentation toRepresentation(KeycloakSession session, UserModel user, boolean brief) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:409#toRepresentation   [method]  in ModelToRepresentation
+    public static EventRepresentation toRepresentation(Event event) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:424#toRepresentation   [method]  in ModelToRepresentation
+    public static AdminEventRepresentation toRepresentation(AdminEvent adminEvent) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:444#toRepresentation   [method]  in ModelToRepresentation
+    public static AuthDetailsRepresentation toRepresentation(AuthDetails authDetails) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:453#toRepresentation   [method]  in ModelToRepresentation
+    public static RoleRepresentation toRepresentation(RoleModel role) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:486#toRepresentation   [method]  in ModelToRepresentation
+    public static RealmRepresentation toRepresentation(KeycloakSession session, RealmModel realm, boolean internal) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:490#toRepresentation   [method]  in ModelToRepresentation
+    public static RealmRepresentation toRepresentation(KeycloakSession session, RealmModel realm, boolean internal, boolean export) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:788#toRepresentation   [method]  in ModelToRepresentation
+    public static CredentialRepresentation toRepresentation(UserCredentialModel cred) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:795#toRepresentation   [method]  in ModelToRepresentation
+    public static CredentialRepresentation toRepresentation(CredentialModel cred) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:817#toRepresentation   [method]  in ModelToRepresentation
+    public static CredentialMetadataRepresentation toRepresentation(CredentialMetadata credentialMetadata) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:832#toRepresentation   [method]  in ModelToRepresentation
+    public static FederatedIdentityRepresentation toRepresentation(FederatedIdentityModel socialLink) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:840#toRepresentation   [method]  in ModelToRepresentation
+    public static UserSessionRepresentation toRepresentation(UserSessionModel session) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:857#toRepresentation   [method]  in ModelToRepresentation
+    public static ClientScopeRepresentation toRepresentation(ClientScopeModel clientScopeModel) {

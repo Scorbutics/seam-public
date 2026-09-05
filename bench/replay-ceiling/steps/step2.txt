@@ -1,0 +1,319 @@
+# Agent map — the region to read instead of a grep loop
+anchor: Realms | intent: how the admin UI reads and updates a realm, from the TypeScript admin client to the Java server side | centers: js/libs/keycloak-admin-client/src/resources/realms.ts:22#Realms · integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmResource.java:181#clearAdminEvents · services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:893#getEvents · rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtResource.java:24#sessions · integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java:35#RealmsResource · services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:67#AdminRoot · services/src/main/java/org/keycloak/services/resources/RealmsResource.java:67#RealmsResource · js/libs/keycloak-admin-client/src/client.ts:45#js/libs/keycloak-admin-client/src/client.ts | resolution: FULL | edges: 956 grounded + 678 shared-key crossing(s) | unresolved: 0 | blindspots: 357 actionable (+254 ambient) (+21 hub table(s))
+  Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:22) — PINNED CENTER
+      20│ import type { ClientSessionStat } from "../defs/clientSessionStat.js";
+      21│ 
+      22> export class Realms extends Resource {
+      23│   /**
+      24│    * Realm
+  clearAdminEvents (integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmResource.java:181) — PINNED CENTER
+      179│         @QueryParam("direction") String direction);
+      180│ 
+      181> @DELETE
+      182│ @Path("admin-events")
+      183│ void clearAdminEvents();
+  getEvents (services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:893) — PINNED CENTER
+      891│  * @return
+      892│  */
+      893> @Path("events")
+      894│ @GET
+      895│ @NoCache
+  sessions (rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtResource.java:24) — PINNED CENTER
+      22│ 
+      23│ @Path("/authentication-management")
+      24> public AuthenticationManagementResource authenticationManagement() {
+      25│     return new AuthenticationManagementResource(session, realm, auth);
+      26│ }
+  RealmsResource (integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java:35) — PINNED CENTER
+      33│  * @author rodrigo.sasaki@icarros.com.br
+      34│  */
+      35> @Path("/admin/realms")
+      36│ @Consumes(MediaType.APPLICATION_JSON)
+      37│ public interface RealmsResource {
+  AdminRoot (services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:67) — PINNED CENTER
+      65│  * @version $Revision: 1 $
+      66│  */
+      67> @Provider
+      68│ @Path("/admin")
+      69│ public class AdminRoot {
+  RealmsResource (services/src/main/java/org/keycloak/services/resources/RealmsResource.java:67) — PINNED CENTER
+      65│  * @version $Revision: 1 $
+      66│  */
+      67> @Provider
+      68│ @Path("/realms")
+      69│ public class RealmsResource {
+  js/libs/keycloak-admin-client/src/client.ts (js/libs/keycloak-admin-client/src/client.ts:45) — PINNED CENTER
+      43│ const MIN_VALIDITY = 5; // in seconds
+      44│ 
+      45> export class KeycloakAdminClient {
+      46│   // Resources
+      47│   public users: Users;
+
+## Persists / reads (the ANCHOR'S OWN data access — the lines inside it that touch a shared key)
+  (showing 6 of 25 access site(s), nearest the top of the anchor first — `--query coupling --center js/libs/keycloak-admin-client/src/resources/realms.ts` lists them all.)
+  ● reads http-route "/*"  (js/libs/keycloak-admin-client/src/resources/realms.ts:45)
+        43│ >({
+        44│   method: "GET",
+        45>   path: "/{realm}",
+        46│   urlParamKeys: ["realm"],
+        47│   catchNotFound: true,
+  ● reads http-route "/*/partialImport"  (js/libs/keycloak-admin-client/src/resources/realms.ts:74)
+        72│ >({
+        73│   method: "POST",
+        74>   path: "/{realm}/partialImport",
+        75│   urlParamKeys: ["realm"],
+        76│   payloadKey: "rep",
+  ● reads http-route "/*/partial-export"  (js/libs/keycloak-admin-client/src/resources/realms.ts:88)
+        86│ >({
+        87│   method: "POST",
+        88>   path: "/{realm}/partial-export",
+        89│   urlParamKeys: ["realm"],
+        90│   queryParamKeys: ["exportClients", "exportGroupsAndRoles"],
+  ● reads http-route "/*/default-groups"  (js/libs/keycloak-admin-client/src/resources/realms.ts:98)
+         96│ >({
+         97│   method: "GET",
+         98>   path: "/{realm}/default-groups",
+         99│   urlParamKeys: ["realm"],
+        100│ });
+  ● reads http-route "/*/default-groups/*"  (js/libs/keycloak-admin-client/src/resources/realms.ts:104)
+        102│ public addDefaultGroup = this.makeRequest<{ realm: string; id: string }>({
+        103│   method: "PUT",
+        104>   path: "/{realm}/default-groups/{id}",
+        105│   urlParamKeys: ["realm", "id"],
+        106│ });
+  ● reads http-route "/*/group-by-path/*"  (js/libs/keycloak-admin-client/src/resources/realms.ts:119)
+        117│ >({
+        118│   method: "GET",
+        119>   path: "/{realm}/group-by-path/{path}",
+        120│   urlParamKeys: ["realm", "path"],
+        121│ });
+  (these are the anchor's OWN accesses, not counterparts — for the other side of each key run
+   `--query coupling --center js/libs/keycloak-admin-client/src/resources/realms.ts`.)
+
+## HTTP surface (this flow's routes — the client line, and the handler that serves it)
+  (showing 6 of 23; `--query coupling` lists the rest)
+  /*/keys  realms.ts:338  ──serves──▶  RealmResource.java:406#keys , RealmAdminResource.java:1408#keys
+  /*/events  realms.ts:141  ──serves──▶  RealmResource.java:113#clearEvents , RealmAdminResource.java:893#getEvents (+5 more)
+  /*/logout-all  realms.ts:309  ──serves──▶  RealmResource.java:383#logoutAll , RealmAdminResource.java:712#logoutAll
+  /*/sessions/*  realms.ts:231  ──serves──▶  RealmResource.java:395#deleteSession , AdminExtResource.java:63#sessions (+1 more)
+  /admin/realms  realms.ts:409  ──serves──▶  RealmsResource.java:35#RealmsResource , AdminExtResource.java:68#realms (+5 more)
+  /*/admin-events  realms.ts:182  ──serves──▶  RealmResource.java:182#clearAdminEvents , RealmAdminResource.java:995#getEvents
+
+## Callers (who invokes this flow — cited, not grown; their own regions are not in this map)
+  → setupForm (js/apps/admin-ui/src/realm-settings/ExecutorForm.tsx:70)
+        69│ const profile = profiles.find((profile) => profile.name === profileName);
+        70> const executor = profile?.executors?.find(
+        71│   (executor) => executor.executor === executorName,
+  → fetchLocalizationTexts (js/apps/admin-ui/src/realm-settings/localization/RealmOverrides.tsx:117)
+        116│ try {
+        117>   let result = await adminClient.realms.getRealmLocalizationTexts({
+        118│     first,
+  → onSubmit (js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx:86)
+        85│ try {
+        86>   await adminClient.realms.update({ realm: realmName }, formValues);
+        87│   const updatedRealm = await adminClient.realms.findOne({
+  → NewClientPolicy (js/apps/admin-ui/src/realm-settings/NewClientPolicy.tsx:130)
+        129│ ({ policies, profiles }) => {
+        130>   let currentPolicy = policies.policies?.find(
+        131│     (item) => item.name === policyName,
+  → findOneByName (js/libs/keycloak-admin-client/src/resources/clientScopes.ts:300)
+        299│   });
+        300>   return allScopes.find((item) => item.name === payload.name);
+        301│ }
+  → RealmSettingsHeader (js/apps/admin-ui/src/realm-settings/RealmSettingsTabs.tsx:106)
+        105│ try {
+        106>   await adminClient.realms.del({ realm: realmName });
+        107│   addAlert(t("deletedSuccessRealmSetting"), AlertVariant.success);
+  → RealmContextProvider (js/apps/admin-ui/src/context/realm-context/RealmContext.tsx:47)
+        46│ useFetch(
+        47>   () => adminClient.realms.findOne({ realm }),
+        48│   setRealmRepresentation,
+  → RealmSection (js/apps/admin-ui/src/realm/RealmSection.tsx:172)
+        171│ filtered.map(({ name: realmName }) =>
+        172>   adminClient.realms.del({ realm: realmName }),
+        173│ ),
+
+## Spine (the primary path, anchor → … → outcome)
+  1. realms.Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:22) — core,link — via HTTP route from /ldap-server-capabilities, via HTTP route from /testLDAPConnection
+      20│ import type { ClientSessionStat } from "../defs/clientSessionStat.js";
+      21│ 
+      22> export class Realms extends Resource {
+      23│   /**
+      24│    * Realm
+       ↳ js/libs/keycloak-admin-client/src/client.ts:45 ──reference──▶ Realms
+  2. client.KeycloakAdminClient (js/libs/keycloak-admin-client/src/client.ts:45) — core,link — typed by Realms, typed by findAdminEvents
+      43│ const MIN_VALIDITY = 5; // in seconds
+      44│ 
+      45> export class KeycloakAdminClient {
+      46│   // Resources
+      47│   public users: Users;
+       ↳ js/libs/keycloak-admin-client/src/client.ts:45 ──reference──▶ Clients
+  3. clients.Clients (js/libs/keycloak-admin-client/src/resources/clients.ts:57) — core,link — via HTTP route from /resources, via HTTP route from /associatedPolicies
+      57> export class Clients extends Resource<{ realm?: string }> {
+       ↳ integration/admin-client/src/main/java/org/keycloak/admin/client/resource/ClientAttributeCertificateResource.java:74 ──route-fetch──▶ Clients
+  4. ClientAttributeCertificateResource./upload-certificate (integration/admin-client/src/main/java/org/keycloak/admin/client/resource/ClientAttributeCertificateResource.java:74) — link — via HTTP route from uploadJksCertificate, via HTTP route from constructor
+      74> @Path("upload-certificate")
+       ↳ js/libs/keycloak-admin-client/src/resources/whoAmI.ts:74 ──route-serve──▶ /upload-certificate
+  5. whoAmI.constructor (js/libs/keycloak-admin-client/src/resources/whoAmI.ts:6) — link,environment — via HTTP route from /*/console, via HTTP route from /admin/serverinfo
+      6> constructor(client: KeycloakAdminClient) {
+       ↳ rest/admin-v2/api/src/main/java/org/keycloak/admin/api/AdminRootV2.java:13 ──route-fetch──▶ constructor
+  6. AdminRootV2./admin/api/* (rest/admin-v2/api/src/main/java/org/keycloak/admin/api/AdminRootV2.java:13) — link — via HTTP route from adminApi, via HTTP route from ScopeEntity
+      13> @Path("{realmName}")
+       ↳ model/jpa/src/main/java/org/keycloak/authorization/jpa/store/JPAResourceServerStore.java:13 ──route-serve──▶ /admin/api/*
+  7. JPAResourceServerStore.ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/JPAResourceServerStore.java:121) — link — sharing a DB table with delete, sharing a DB table with ScopeEntity
+      121> entityManager.remove(entityManager.getReference(ScopeEntity.class, scopeId));
+
+## In (what TRIGGERS this region — the upstream entry surface; entry ──crossing──▶ ●)
+  AdminRoot.getAdminConsole (services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:168) [spine] ──▶ ●  (via AdminRoot.getAdminConsole)   grow: services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getAdminConsole
+  AdminRoot.getRealmsAdmin (services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:232) [spine] ──▶ ●  (via AdminRoot.getRealmsAdmin)   grow: services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java#getRealmsAdmin
+  KeycloakAdminClient.constructor (js/libs/keycloak-admin-client/src/client.ts:81) [spine] ──▶ ●  (via KeycloakAdminClient.constructor, KeycloakAdminClient)   grow: js/libs/keycloak-admin-client/src/client.ts#constructor
+  ModelToRepresentation.toRepresentation (server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:1021) [spine] ──▶ ●  (via ModelToRepresentation.toRepresentation)   grow: server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+  ModelToRepresentation.toRepresentation (server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:857) [spine] ──▶ ●  (via ModelToRepresentation.toRepresentation)   grow: server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java#toRepresentation
+  AbstractLoginProtocolFactory.addDefaultClientScopes (server-spi-private/src/main/java/org/keycloak/protocol/AbstractLoginProtocolFactory.java:80) [spine] ──▶ ●  (via AbstractLoginProtocolFactory.addDefaultClientScopes)   grow: server-spi-private/src/main/java/org/keycloak/protocol/AbstractLoginProtocolFactory.java#addDefaultClientScopes
+  RealmRoleTabs.onSubmit (js/apps/admin-ui/src/realm-roles/RealmRoleTabs.tsx:126) [spine] ──db "roles"──▶ ●   grow: js/apps/admin-ui/src/realm-roles/RealmRoleTabs.tsx#onSubmit
+  JpaUserCredentialStore.getStoredCredentialEntities (model/jpa/src/main/java/org/keycloak/models/jpa/JpaUserCredentialStore.java:123) [spine] ──db "UserEntity"──▶ ●   grow: model/jpa/src/main/java/org/keycloak/models/jpa/JpaUserCredentialStore.java#getStoredCredentialEntities
+  (+365 more way(s) in — raise --token-budget)
+  …and behind those, the grounded callers upstream of them (each is itself a way in — deepen with --grow-from):
+    ClientScopes (js/libs/keycloak-admin-client/src/resources/clientScopes.ts:8) [spine]
+    Components (js/libs/keycloak-admin-client/src/resources/components.ts:13) [spine]
+    Roles (js/libs/keycloak-admin-client/src/resources/roles.ts:14) [spine]
+    AuthenticationManagement (js/libs/keycloak-admin-client/src/resources/authenticationManagement.ts:13) [spine]
+    Users (js/libs/keycloak-admin-client/src/resources/users.ts:43) [spine]
+    DetailOrganization (js/apps/admin-ui/src/organizations/DetailOrganization.tsx:44) [spine]
+    WhoAmI (js/libs/keycloak-admin-client/src/resources/whoAmI.ts:5) [spine]
+    UserStorageProvider (js/libs/keycloak-admin-client/src/resources/userStorageProvider.ts:12) [spine]
+    AttackDetection (js/libs/keycloak-admin-client/src/resources/attackDetection.ts:4) [spine]
+    ClientPolicies (js/libs/keycloak-admin-client/src/resources/clientPolicies.ts:9) [spine]
+    ServerInfo (js/libs/keycloak-admin-client/src/resources/serverInfo.ts:14) [spine]
+    Members (js/apps/admin-ui/src/organizations/Members.tsx:38) [spine]
+    GroupTable (js/apps/admin-ui/src/groups/GroupTable.tsx:26) [spine]
+    GroupTree (js/apps/admin-ui/src/groups/components/GroupTree.tsx:170) [spine]
+    GroupComponent (js/apps/admin-ui/src/components/dynamic/GroupComponent.tsx:24) [spine]
+    ResourcesPolicySelect (js/apps/admin-ui/src/clients/authorization/ResourcesPolicySelect.tsx:59) [spine]
+    ResourcesPolicySelect (js/apps/admin-ui/src/clients/authorization/ResourcesPolicySelect.tsx:61) [spine]
+    MoveDialog.moveToRoot (js/apps/admin-ui/src/groups/components/MoveDialog.tsx:14) [spine]
+    GroupTree.GroupTreeContextMenu (js/apps/admin-ui/src/groups/components/GroupTree.tsx:63) [spine]
+    GroupsModal.duplicateGroup (js/apps/admin-ui/src/groups/GroupsModal.tsx:111) [spine]
+    (+36 more upstream caller(s) — raise FLOW_ENTRY_CHAIN)
+
+## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)
+  1. makeRequest (js/libs/keycloak-admin-client/src/resources/resource.ts:20)   [called at realms.ts:28]
+       18│ }
+       19│ 
+       20> public makeRequest = <PayloadType = any, ResponseType = any>(
+       21│   args: RequestArgs,
+       22│ ): ((
+  2. request (js/libs/keycloak-admin-client/src/resources/agent.ts:75)   [called at resource.ts:26]
+       73│ }
+       74│ 
+       75> public request({
+       76│   method,
+       77│   path = "",
+  3. makeUpdateRequest (js/libs/keycloak-admin-client/src/resources/resource.ts:30)   [called at realms.ts:50]
+       28│ 
+       29│ // update request will take three types: query, payload and response
+       30> public makeUpdateRequest = <
+       31│   QueryType = any,
+       32│   PayloadType = any,
+  4. updateRequest (js/libs/keycloak-admin-client/src/resources/agent.ts:136)   [called at resource.ts:40]
+       134│ }
+       135│ 
+       136> public updateRequest({
+       137│   method,
+       138│   path = "",
+
+## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)
+  ResourceAdapter.ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/ResourceAdapter.java:174) — link,environment — sharing a DB table with ScopeEntity, sharing a DB table with delete
+      174> entity.getScopes().add(em.getReference(ScopeEntity.class, addId));
+  ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/entities/ScopeEntity.java:45) — link — sharing a DB table with ScopeEntity, sharing a DB table with create
+      45> @NamedQuery(name="deleteScopeByResourceServer", query="delete from ScopeEntity s where s.resourceServer.id = :serverId")
+  JPAScopeStore.ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/JPAScopeStore.java:74) — link — sharing a DB table with create, sharing a DB table with ScopeEntity
+      74> this.entityManager.persist(entity);
+
+## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)
+  ResourceAdapter.updateScopes (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/ResourceAdapter.java:160) — core,link — sharing a DB table with ScopeEntity, declared in ResourceAdapter
+      160> @Override
+  ScopeAdapter.ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/ScopeAdapter.java:98) — link — sharing a DB table with ScopeEntity, sharing a DB table with delete
+      98> return em.getReference(ScopeEntity.class, scope.getId());
+  ScopeEntity (model/jpa/src/main/java/org/keycloak/authorization/jpa/entities/ScopeEntity.java:37) — link — sharing a DB table with ScopeEntity, used by ResourceAdapter
+      37> @Entity
+  JPAScopeStore.create (model/jpa/src/main/java/org/keycloak/authorization/jpa/store/JPAScopeStore.java:61) — link,environment — sharing a DB table with ScopeEntity
+      61> @Override
+
+## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)
+  NewAttributeSettings.save (js/apps/admin-ui/src/realm-settings/NewAttributeSettings.tsx:194) — environment,link — sharing a DB table with users
+      194> const save = async ({
+  UserProfileContext.save (js/apps/admin-ui/src/realm-settings/user-profile/UserProfileContext.tsx:50) — environment,link — sharing a DB table with users
+      50> const save: SaveCallback = async (updatedConfig, options) => {
+  CreateUser.save (js/apps/admin-ui/src/user/CreateUser.tsx:45) — environment,link — sharing a DB table with users
+      45> const save = async (data: UserFormFields) => {
+  EditUser.save (js/apps/admin-ui/src/user/EditUser.tsx:182) — environment,link — sharing a DB table with users
+      182> const save = async (data: UserFormFields) => {
+  RealmRoleTabs (js/apps/admin-ui/src/realm-roles/RealmRoleTabs.tsx:55) — link,environment — sharing a DB table with roles
+      55> export default function RealmRoleTabs() {
+  WebauthnPolicy.onSubmit (js/apps/admin-ui/src/authentication/policies/WebauthnPolicy.tsx:154) — environment,link — sharing a DB table with realms
+      154> const onSubmit = async (realm: RealmRepresentation) => {
+  EditClientScope (js/apps/admin-ui/src/client-scopes/EditClientScope.tsx:48) — link,environment — sharing a DB table with clientScopes
+      48> export default function EditClientScope() {
+  RealmContext.RealmContextProvider (js/apps/admin-ui/src/context/realm-context/RealmContext.tsx:25) — link,environment — sharing a DB table with realms
+      25> export const RealmContextProvider = ({ children }: PropsWithChildren) => {
+  KeysTab (js/apps/admin-ui/src/realm-settings/keys/KeysTab.tsx:32) — link,environment — sharing a DB table with components
+      32> export const KeysTab = () => {
+  AttributeGeneralSettings (js/apps/admin-ui/src/realm-settings/user-profile/attribute/AttributeGeneralSettings.tsx:45) — link,environment — sharing a DB table with clientScopes
+      45> export const AttributeGeneralSettings = () => {
+  Organizations (js/apps/admin-ui/src/user/Organizations.tsx:40) — core,link — called by GroupsSection, called by AddMapper
+      40> export const Organizations = ({ user }: OrganizationProps) => {
+  KeyProviderForm.save (js/apps/admin-ui/src/realm-settings/keys/key-providers/KeyProviderForm.tsx:47) — link,environment — sharing a DB table with components
+      47> const save = async (component: ComponentRepresentation) => {
+  UserFederationLdapSettings (js/apps/admin-ui/src/user-federation/UserFederationLdapSettings.tsx:36) — link,environment — sharing a DB table with components
+      36> export default function UserFederationLdapSettings() {
+  QuickTheme.saveTheme (js/apps/admin-ui/src/realm-settings/themes/QuickTheme.tsx:29) — environment,link — via HTTP route from /*/login
+      29> const saveTheme = async (realm: ThemeRealmRepresentation) => {
+  KeyProviderForm (js/apps/admin-ui/src/realm-settings/keys/key-providers/KeyProviderForm.tsx:28) — link,environment — sharing a DB table with components
+      28> export const KeyProviderForm = ({
+  UsersInRoleTab.loader (js/apps/admin-ui/src/realm-roles/UsersInRoleTab.tsx:23) — link,environment — sharing a DB table with roles
+      23> const loader = async (first?: number, max?: number) => {
+  (+47 more cross-stack node(s) — raise --token-budget)
+  (+2 off-subject crossing(s) folded over: list ×1, submit ×1 — name a subject as the intent to expand)
+  (+3 co-access(es) of ubiquitous key(s) folded: clients — shared by too many unrelated sites to imply a relationship; FLOW_HUB_CROSSING=1 expands them)
+
+## Region (remaining, by intent relevance)
+supporting (top 10 of 511 by intent relevance — raise --token-budget for the rest):
+  ClientTypesResource.updateClientTypes (services/src/main/java/org/keycloak/services/resources/admin/ClientTypesResource.java:80) — core,link — possibly called by getClientTypes, typed by clearAdminEvents
+      80> @PUT
+  UIRealmResource.getInfo (rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java:81) — core,link — via HTTP route from ui-ext/info
+      81> @GET
+  RealmsResource (integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java:35) — core,link — possibly called by addIdentityProvider, possibly called by addClientScopeToAllClients
+      33│  * @author rodrigo.sasaki@icarros.com.br
+      34│  */
+      35> @Path("/admin/realms")
+      36│ @Consumes(MediaType.APPLICATION_JSON)
+      37│ public interface RealmsResource {
+  AdminRootV2.adminApi (rest/admin-v2/api/src/main/java/org/keycloak/admin/api/AdminRootV2.java:13) — core,link — via HTTP route from /admin/*/console
+      13> @Path("{realmName}")
+  JpaRealmProvider.createRealm (model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java:120) — environment,link — sharing a DB table with RealmEntity, sharing a DB table with ComponentEntity
+      120> @Override
+  JpaRealmProvider.getRealm (model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java:141) — environment,link — sharing a DB table with RealmEntity
+      141> @Override
+  MgmtPermissions (services/src/main/java/org/keycloak/services/resources/admin/fgap/MgmtPermissions.java:60) — core,link — implemented by getEvents, implemented by AdminPermissionEvaluator
+      60> class MgmtPermissions implements AdminPermissionEvaluator, AdminPermissionManagement, RealmsPermissionEvaluator {
+  AdminRealmResourceProvider (services/src/main/java/org/keycloak/services/resources/admin/ext/AdminRealmResourceProvider.java:31) — core,link — used by getEvents
+      31> public interface AdminRealmResourceProvider extends Provider {
+  realmEventsConfigRepresentation.RealmEventsConfigRepresentation (js/libs/keycloak-admin-client/src/defs/realmEventsConfigRepresentation.ts:5) — core,link,environment — referenced by getConfigEvents, typed by Realms
+      5> export interface RealmEventsConfigRepresentation {
+  RealmAdapter.setMasterAdminClient (model/jpa/src/main/java/org/keycloak/models/jpa/RealmAdapter.java:1368) — link,environment — sharing a DB table with ClientEntity
+      1368> @Override
+  (+35 more file(s) folded as shared-key hub crossings over: clients, realms, /resources, /management/permissions, /clients/* — see Blindspots)
+  (+6 off-subject region edge(s) folded over: key ×1, samlconstants ×1, uirealms ×1, signing ×1, balancer ×1, endpoint ×1 — name a subject as the intent to expand)
+off-path (top 4 of 183 by intent relevance — raise --token-budget for the rest):
+  DefaultClientValidationProvider (services/src/main/java/org/keycloak/validation/DefaultClientValidationProvider.java:60) — core,link — implemented by getEvents, implemented by DefaultClientTypeManager
+      60> public class DefaultClientValidationProvider implements ClientValidationProvider {
+  DefaultTokenManager (services/src/main/java/org/keycloak/jose/jws/DefaultTokenManager.java:69) — core,link — implemented by AdminRoot, implemented by getServerInfo
+      69> public class DefaultTokenManager implements TokenManager {
+  UserVerifiableCredentialEntity (model/jpa/src/main/java/org/keycloak/models/jpa/entities/UserVerifiableCredentialEntity.java:17) — link,environment — sharing a DB table with UserEntity, sharing a DB table with UserVerifiableCredentialEntity
+      17> @Entity
+  UserVerifiableCredentialEntity (model/jpa/src/main/java/org/keycloak/models/jpa/entities/UserVerifiableCredentialEntity.java) — link,environment — sharing a DB table with UserVerifiableCredentialEntity
+  (+40 more file(s) folded as shared-key hub crossings over: UserEntity, GroupEntity, request, www.w3.org — see Blindspots)
+  (+4 off-subject region edge(s) folded over: locales ×1, applications ×1, accounts ×1, error ×1 — name a subject as the intent to expand)
+
+(hubs/frontier/blindspots omitted to make room for source text — re-run with --no-snippets to see them)

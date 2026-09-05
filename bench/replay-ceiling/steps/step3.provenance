@@ -1,0 +1,1 @@
+### CMD: bun /home/scorbutics/seam-phase0/ts/src/cli/decompose.ts --repo /home/scorbutics/dev/keycloak --scan --query coupling --center "services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#RealmAdminResource" --format llm-context 2>/dev/null | head -80

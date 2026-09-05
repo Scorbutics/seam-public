@@ -1,0 +1,28 @@
+# Locate route: /admin/realms
+147 route(s) matched; 1 with BOTH sides resolved — the crossing itself, from the coupling floor + composed sub-resource mounts (no grow).
+
+- /admin/realms
+    serves   integration/admin-client/src/main/java/org/keycloak/admin/client/resource/RealmsResource.java:35
+    serves   services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:232
+    fetches  js/libs/keycloak-admin-client/src/resources/realms.ts:409
+- /admin/realms/*/authz/resource-server/permission/*/*
+    fetches  js/libs/keycloak-admin-client/src/resources/clients.ts:891
+    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)
+- /admin/realms/*/authz/resource-server/policy/*/*
+    fetches  js/libs/keycloak-admin-client/src/resources/clients.ts:669
+    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)
+- /admin/realms/*/authz/resource-server/policy/*/associatedPolicies
+    fetches  js/libs/keycloak-admin-client/src/resources/clients.ts:936
+    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)
+- /admin/realms/*/authz/resource-server/policy/*/dependentPolicies
+    fetches  js/libs/keycloak-admin-client/src/resources/clients.ts:708
+    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)
+- /admin/realms/*/authz/resource-server/policy/*/resources
+    fetches  js/libs/keycloak-admin-client/src/resources/clients.ts:927
+    (no server side resolved in this repo — an outbound call, or the handler is not statically declared)
+
+(+141 more one-sided route(s) — narrow the path to see them)
+
+## Next
+--center "<file>#<symbol>" on either side to trace it, or --scan --auto --center on the server
+handler to see what it reaches.

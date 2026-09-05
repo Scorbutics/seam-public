@@ -1,0 +1,1 @@
+### CMD: bun /home/scorbutics/seam-phase0/ts/src/cli/decompose.ts --repo /home/scorbutics/dev/keycloak --locate "updateRealm,toRepresentation" --in server-spi-private/src/main/java/org/keycloak/models/utils/ 2>/dev/null | head -40

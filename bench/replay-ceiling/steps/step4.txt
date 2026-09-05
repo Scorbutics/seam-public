@@ -1,0 +1,80 @@
+# Locate: 6 name(s)
+6 resolved, 0 not found — YOU choose which answers your question.
+
+## getRealm — 25 definition(s) of 207 — narrow with `--in <path-prefix>`
+- core/src/main/java/org/keycloak/KeycloakSecurityContext.java:77#getRealm   [method]  in KeycloakSecurityContext
+    public String getRealm() {
+- core/src/main/java/org/keycloak/representations/adapters/config/BaseRealmConfig.java:50#getRealm   [method]  in BaseRealmConfig
+    public String getRealm() {
+- core/src/main/java/org/keycloak/representations/adapters/config/PolicyEnforcerConfig.java:144#getRealm   [method]  in PolicyEnforcerConfig
+    public String getRealm() {
+- core/src/main/java/org/keycloak/representations/idm/PublishedRealmRepresentation.java:41#getRealm   [method]  in PublishedRealmRepresentation
+    public String getRealm() {
+- core/src/main/java/org/keycloak/representations/idm/RealmRepresentation.java:257#getRealm   [method]  in RealmRepresentation
+    public String getRealm() {
+- core/src/main/java/org/keycloak/representations/idm/RoleRepresentation.java:49#getRealm   [method]  in Composites
+    public Set<String> getRealm() {
+- core/src/main/java/org/keycloak/representations/idm/RolesRepresentation.java:33#getRealm   [method]  in RolesRepresentation
+    public List<RoleRepresentation> getRealm() {
+- federation/kerberos/src/main/java/org/keycloak/federation/kerberos/KerberosPrincipal.java:49#getRealm   [method]  in KerberosPrincipal
+    public String getRealm() {
+- integration/admin-client/src/main/java/org/keycloak/admin/client/Config.java:62#getRealm   [method]  in Config
+    public String getRealm() {
+- integration/client-cli/admin-cli/src/main/java/org/keycloak/client/cli/config/ConfigData.java:66#getRealm   [method]  in ConfigData
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/CachedCount.java:34#getRealm   [method]  in CachedCount
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/CachedExists.java:35#getRealm   [method]  in CachedExists
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/ClientAdapter.java:274#getRealm   [method]  in ClientAdapter
+    public RealmModel getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/ClientScopeAdapter.java:81#getRealm   [method]  in ClientScopeAdapter
+    @Override
+    public RealmModel getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedClient.java:120#getRealm   [method]  in CachedClient
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedClientScope.java:61#getRealm   [method]  in CachedClientScope
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedCompositeRoles.java:42#getRealm   [method]  in CachedCompositeRoles
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedFederatedIdentityLinks.java:43#getRealm   [method]  in CachedFederatedIdentityLinks
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedGroup.java:73#getRealm   [method]  in CachedGroup
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedRole.java:74#getRealm   [method]  in CachedRole
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedUser.java:81#getRealm   [method]  in CachedUser
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedUserConsents.java:50#getRealm   [method]  in CachedUserConsents
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedUserVerifiableCredentials.java:29#getRealm   [method]  in CachedUserVerifiableCredentials
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/ClientListQuery.java:34#getRealm   [method]  in ClientListQuery
+    @Override
+    public String getRealm() {
+- model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/ClientScopeListQuery.java:45#getRealm   [method]  in ClientScopeListQuery
+    @Override
+    public String getRealm() {
+
+## updateRealm — 7 definition(s)
+- model/storage-private/src/main/java/org/keycloak/storage/datastore/DefaultExportImportManager.java:790#updateRealm   [method]  in DefaultExportImportManager
+    @Override
+    public void updateRealm(RealmRepresentation rep, RealmModel realm) {
+- rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java:68#updateRealm   [method]  in UIRealmResource
+    @PUT
+      … 2 line(s) of annotation
+    public Response updateRealm(UIRealmRepresentation rep) {
+- server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java:285#updateRealm   [method]  in RepresentationToModel
+    public static void updateRealm(RealmRepresentation rep, RealmModel realm, KeycloakSession session) {
+- server-spi-private/src/main/java/org/keycloak/storage/ExportImportManager.java:40#updateRealm   [method]  in ExportImportManager
+    void updateRealm(RealmRepresentation rep, RealmModel realm);
+- services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:461#updateRealm   [method]  in RealmAdminResource
+    @PUT

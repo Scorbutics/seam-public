@@ -1,0 +1,26 @@
+bun $SEAM --repo $REPO --locate "/admin/realms"
+bun $SEAM --repo $REPO --scan --auto --center "js/libs/keycloak-admin-client/src/resources/realms.ts#Realms" --to-kind route --with-consumers 2 --intent "how the admin UI reads and updates a realm, from the TypeScript admin client to the Java server side" --skeleton --format agent 2>/dev/null
+bun $SEAM --repo $REPO --scan --query coupling --center "services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#RealmAdminResource" --format llm-context
+bun $SEAM --repo $REPO --locate "updateRealm,getRealm,RealmsAdminResource,updateRealmEventsConfig"
+bun $SEAM --repo $REPO --locate "getRealm,RealmsAdminResource,getRealmAdmin,getRealms" --in services/src/main/java/org/keycloak/services/resources/admin
+bun $SEAM --repo $REPO --scan --query coupling --center "rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java#UIRealmResource" --format llm-context
+bun $SEAM --repo $REPO --locate "getRealm,updateRealm,getRealmAdmin,findOne,update,RealmsAdminResource"
+bun $SEAM --repo $REPO --locate "getRealm,getRealmAdmin,RealmsAdminResource,update,findOne" --in services/src/main/java/org/keycloak/services/resources/admin
+bun $SEAM --repo $REPO --scan --query consumers --center "js/libs/keycloak-admin-client/src/resources/realms.ts#update" --format llm-context
+bun $SEAM --repo $REPO --locate "updateRealm,fetchAdminUI,RealmSettingsSection,useRealm" --in js/apps/admin-ui/src
+bun $SEAM --repo $REPO --scan --query dependencies --center "services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm" --format llm-context
+bun $SEAM --repo $REPO --locate "/admin/realms" 2>/dev/null
+bun $SEAM --repo $REPO --scan --query coupling --center "services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#RealmAdminResource" --format llm-context --token-budget 3000 2>/dev/null
+bun $SEAM --repo $REPO --locate "getRealm,updateRealm,RealmsAdminResource,toRepresentation" --in services/ 2>/dev/null
+bun $SEAM --repo $REPO --scan --query dependencies --center "services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java#updateRealm" --format llm-context --token-budget 2500 2>/dev/null
+bun $SEAM --repo $REPO --locate "findOne,update,getRealmAdmin" --in js/libs/keycloak-admin-client/src/resources/realms.ts
+bun $SEAM --repo $REPO --scan --query coupling --center "services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java#RealmsAdminResource" --format llm-context --token-budget 3000 2>/dev/null
+bun $SEAM --repo $REPO --locate "getRealm,updateRealm,getRealmAdmin,findOne,update" --in services/src/main/java/org/keycloak/services/resources/admin/
+bun $SEAM --repo $REPO --locate "updateRealm,toRepresentation" --in server-spi-private/src/main/java/org/keycloak/models/utils/
+bun $SEAM --repo $REPO --locate "getRealm,updateRealm,RealmsAdminResource,importRealm,RealmRepresentation"
+bun $SEAM --repo $REPO --locate "getRealm" --in services/src/main/java/org/keycloak/services/resources/admin/
+bun $SEAM --repo $REPO --scan --auto --center "js/libs/keycloak-admin-client/src/resources/realms.ts#Realms" --to-kind route --with-consumers 2 --intent "how does the admin UI read and update a realm, from the TypeScript admin client to the Java server side" --skeleton --format agent 2>/dev/null
+bun $SEAM --repo $REPO --locate "getRealm,updateRealm,importRealm,deleteRealm,getRealms,getRealmsAdmin,findOne,update" 2>/dev/null
+bun $SEAM --repo $REPO --locate "getRealm,getRealmAdmin" --in services/src/main/java/org/keycloak/services/resources/admin 2>/dev/null; echo "=== TS ==="; bun $SEAM --repo $REPO --locate "update,create,del,makeRequest,makeUpdateRequest" --in js/libs/keycloak-admin-client/src 2>/dev/null
+bun $SEAM --repo $REPO --locate "toRepresentation" --in server-spi-private/src/main/java/org/keycloak/models/utils 2>/dev/null | grep -A3 -i "RealmRepresentation toRep"
+bun $SEAM --repo $REPO --locate "toRepresentation" --in server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java 2>/dev/null

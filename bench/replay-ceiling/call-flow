@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# A STATIC REPLAY ORACLE — the CEILING arm of the replay-ceiling benchmark.
+#
+# It answers `--step N` from a canned file. Nothing is computed: every step is a VERBATIM tool result that a
+# real Seam run produced on this exact question and this exact repo commit (recorded in bench/grep-vs-seam/
+# results/kcC-ab*.B.jsonl, 2026-08-06). Provenance per step is in steps/stepN.provenance.
+#
+# WHY A REPLAY AND NOT THE REAL TOOL. This arm is not measuring Seam. It is measuring the CEILING of any
+# structural retrieval tool on this question, by removing every way one can lose:
+#   - zero engine latency        (a file read, ~1ms, against Seam's ~3.3s warm per call)
+#   - zero wrong turns           (the step order is the one that worked, fixed in advance)
+#   - zero anchor risk           (no anchor to choose)
+#   - zero discovery cost        (the doc is ~300 bytes, against SKILL.md's 37 KB)
+# The step SELECTION is idealised; the step CONTENT is not — no line here was written for the benchmark, and
+# nothing was added that Seam did not produce. So the arm is an upper bound on Seam, not a proxy for it.
+#
+# THE CLAIM UNDER TEST: if this arm does not beat the grep control on TOKEN COST and WALL CLOCK, then the gap
+# is not retrieval, and no amount of engine work closes it.
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LAST=5
+
+usage () { echo "usage: call-flow --step N   (N = 1..$LAST, in order)" >&2; exit 2; }
+[ "${1:-}" = "--step" ] || usage
+N="${2:-}"
+[[ "$N" =~ ^[0-9]+$ ]] || usage
+
+if [ "$N" -gt "$LAST" ]; then
+  echo "DONE — no further steps. You have everything the trace can give you."
+  exit 0
+fi
+F="$HERE/steps/step$N.txt"
+[ -f "$F" ] || { echo "no such step: $N" >&2; exit 2; }
+echo "=== step $N of $LAST ==="
+cat "$F"
+echo
+if [ "$N" -lt "$LAST" ]; then echo "--- next: call-flow --step $((N+1)) ---"; else echo "--- next: call-flow --step $((N+1)) ---"; fi

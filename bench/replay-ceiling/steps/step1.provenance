@@ -1,0 +1,1 @@
+### CMD: cd /home/scorbutics/dev/keycloak && bun /home/scorbutics/seam-phase0/ts/src/cli/decompose.ts --repo /home/scorbutics/dev/keycloak --locate "/admin/realms" 2>&1 | tail -60
