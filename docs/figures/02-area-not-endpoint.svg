@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 296" width="720" height="296" role="img" aria-labelledby="t d">
+<title id="t">You pay the area, not the endpoint</title>
+<desc id="d">Three rectangles on shared axes: turns wide by context-per-turn tall. GREP is wide and short at 980k tokens, SEAM is narrow and tall at 1293k, REPLAY is wide and mid at 1246k.</desc>
+<style>
+  :root{
+    --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
+    --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
+    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --premium:#C0761F; --premium-soft:#EBD6BA;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
+    --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
+    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
+    --premium:#E29A47; --premium-soft:#4A3820;
+  }}
+  .bg{fill:var(--panel)}
+  .ax{stroke:var(--rule);stroke-width:1;fill:none}
+  .gl{stroke:var(--rule-soft);stroke-width:1;fill:none}
+  .tk{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-faint)}
+  .lb{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;fill:var(--ink);font-weight:500}
+  .lbs{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-soft)}
+  .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
+  .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
+</style>
+<rect class="bg" x="0" y="0" width="720" height="296"/>
+
+  <line class="ax" x1="46" y1="238" x2="704" y2="238"/>
+  <g class="gl">
+    <line x1="46" y1="196" x2="704" y2="196"/><line x1="46" y1="154" x2="704" y2="154"/>
+    <line x1="46" y1="112" x2="704" y2="112"/><line x1="46" y1="70" x2="704" y2="70"/>
+  </g>
+  <g class="tk" text-anchor="end">
+    <text x="40" y="242">0</text><text x="40" y="200">20k</text><text x="40" y="158">40k</text>
+    <text x="40" y="116">60k</text><text x="40" y="74">80k</text>
+  </g>
+  <text class="tk" x="10" y="46">context</text><text class="tk" x="10" y="60">per turn</text>
+
+  <!-- GREP : 23.4 turns x 41,882 -->
+  <rect x="50" y="150" width="176" height="88" class="a" opacity="0.30"/>
+  <rect x="50" y="150" width="176" height="88" fill="none" stroke="var(--arm-a)" stroke-width="1.5"/>
+  <text class="big" x="138" y="196" text-anchor="middle">980k</text>
+  <text class="lb" x="50" y="262">GREP</text>
+  <text class="lbs" x="50" y="279">23.4 turns × 41.9k</text>
+
+  <!-- SEAM : 15.4 turns x 83,955 -->
+  <rect x="280" y="61" width="116" height="177" class="b" opacity="0.30"/>
+  <rect x="280" y="61" width="116" height="177" fill="none" stroke="var(--arm-b)" stroke-width="1.5"/>
+  <text class="big" x="338" y="155" text-anchor="middle">1,293k</text>
+  <text class="lb" x="280" y="262">SEAM</text>
+  <text class="lbs" x="280" y="279">15.4 turns × 84.0k</text>
+
+  <!-- REPLAY : 21.8 turns x 57,152 -->
+  <rect x="510" y="117" width="164" height="121" class="c" opacity="0.30"/>
+  <rect x="510" y="117" width="164" height="121" fill="none" stroke="var(--arm-c)" stroke-width="1.5"/>
+  <text class="big" x="592" y="182" text-anchor="middle">1,246k</text>
+  <text class="lb" x="510" y="262">REPLAY (ideal)</text>
+  <text class="lbs" x="510" y="279">21.8 turns × 57.2k</text>
+
+  <text class="lbs" x="704" y="30" text-anchor="end">width = turns · height = context per turn · AREA = what you pay</text>
+
+</svg>

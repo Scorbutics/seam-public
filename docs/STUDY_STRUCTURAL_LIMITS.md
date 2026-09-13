@@ -227,6 +227,11 @@ which is what makes it a *trade* rather than an engineering target.
 The result the rest of the paper builds to: **at the ceiling, term 1 nets to zero, and term 2 is the
 entire remaining cost.**
 
+![One payload, two bills](figures/01-two-bills.svg)
+
+***Figure 1.** The bytes that let the agent stop early are the same bytes every remaining turn must carry. One payload, two terms, moving in opposite directions.*
+
+
 ### 4.1 The context identity
 
 An LLM is stateless; the whole conversation is re-sent every turn. So the dominant cost term is not the size
@@ -242,6 +247,10 @@ the **sum of its sizes over all turns** — the area under the curve, not its en
 while doubling the size of each one buys exactly nothing. This is the single fact that makes tool-call
 count a bad proxy for cost, and it is why the two axes in §1 can move in opposite directions without
 either being mismeasured.
+
+![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
+
+***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. SEAM's rectangle is the narrowest and also the largest; the ideal arm's is barely smaller than the control's.*
 
 `[AUDIT S4/S8 — 'context_per_turn' is (cache_read + cache_write)/turns; that definition appears nowhere in
 this draft and must be stated. With it substituted, 'turns × context_per_turn ≈ cache_read' reads
@@ -310,6 +319,10 @@ arm C's adjusted cost gap vs GREP, decomposed:
 ```
 
 
+![Where the ideal tool's money goes](figures/05-where-the-money-goes.svg)
+
+***Figure 5.** With the read term at zero on a tool that is optimal by construction, the write premium is not one contributor among several — it is the entire residual.*
+
 A byte written once and read *T* times costs `(10 + 0.5T)/T` per **Mtok-turn** of use:
 
 | turns following the payload | 20 | 10 | 4 | 2 | 1 |
@@ -317,6 +330,10 @@ A byte written once and read *T* times costs `(10 + 0.5T)/T` per **Mtok-turn** o
 | effective $/Mtok-turn | $1.00 | $1.50 | $3.00 | $5.50 | $10.50 |
 
 > **The better a tool gets at collapsing turns, the shorter the window over which its own payload amortises.**
+
+![The amortisation inversion](figures/03-amortisation-inversion.svg)
+
+***Figure 3.** A byte written once and read T times costs (10 + 0.5T)/T per Mtok-turn of use. Collapsing turns slides the tool leftward along this curve — toward the full 20x premium on its own bytes.*
 
 **The analogy that makes this concrete.** A cache write is a **setup cost**, like tooling up a production
 line: you amortise it over the length of the production run. A retrieval tool's production run is the turns
@@ -367,6 +384,11 @@ localises it to the payload.]`
 *checking* that answer — and how many it spends does not depend on how good the answer is. It is a
 *floor* because no improvement to the answer lowers it, which is exactly what makes it invisible to
 every experiment that compares two imperfect tools.
+
+![The verification floor](figures/04-verification-floor.svg)
+
+***Figure 4.** The ideal arm, drawn alone — the control arms have no completion marker, so the quantity is not measurable for them. Six calls reach a provably complete answer; 14.8 follow it, and all 23 refusals across the five rounds land in that second stretch.*
+
 
 `[n=5]` Given a perfect, zero-latency oracle announcing `DONE` on a provably complete answer, the agent made
 **14.8 further calls**, costing **52% of the run**, and finished in **21.8 turns against the control's 23.4** —

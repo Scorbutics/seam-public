@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 302" width="720" height="302" role="img" aria-labelledby="t d">
+<title id="t">Where the ideal tool's money goes</title>
+<desc id="d">A waterfall of the ideal arm's cost gap versus the control: cache write plus thirteen point two cents, cache read minus half a cent, output plus half a cent, total plus thirteen point two cents — the write premium is the entire residual.</desc>
+<style>
+  :root{
+    --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
+    --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
+    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --premium:#C0761F; --premium-soft:#EBD6BA;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
+    --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
+    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
+    --premium:#E29A47; --premium-soft:#4A3820;
+  }}
+  .bg{fill:var(--panel)}
+  .ax{stroke:var(--rule);stroke-width:1;fill:none}
+  .gl{stroke:var(--rule-soft);stroke-width:1;fill:none}
+  .tk{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-faint)}
+  .lb{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;fill:var(--ink);font-weight:500}
+  .lbs{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-soft)}
+  .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
+  .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
+</style>
+<rect class="bg" x="0" y="0" width="720" height="302"/>
+
+  <line class="ax" x1="70" y1="250" x2="700" y2="250"/>
+  <g class="gl">
+    <line x1="70" y1="187" x2="700" y2="187"/><line x1="70" y1="123" x2="700" y2="123"/><line x1="70" y1="60" x2="700" y2="60"/>
+  </g>
+  <g class="tk" text-anchor="end">
+    <text x="64" y="254">$0</text><text x="64" y="191">$0.05</text><text x="64" y="127">$0.10</text><text x="64" y="64">$0.15</text>
+  </g>
+  <text class="tk" x="10" y="34">gap vs</text><text class="tk" x="10" y="48">control</text>
+
+  <rect x="110" y="83" width="104" height="167" class="p" opacity="0.85"/>
+  <text class="big" x="162" y="74" text-anchor="middle">+$0.1321</text>
+  <text class="lb" x="162" y="272" text-anchor="middle">cache WRITE</text>
+  <text class="lbs" x="162" y="289" text-anchor="middle">the premium</text>
+
+  <line x1="214" y1="83" x2="266" y2="83" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
+  <rect x="266" y="83" width="104" height="7" fill="var(--arm-a)"/>
+  <text class="lbs" x="318" y="74" text-anchor="middle">−$0.0051</text>
+  <text class="lb" x="318" y="272" text-anchor="middle">cache read</text>
+  <text class="lbs" x="318" y="289" text-anchor="middle">≈ zero</text>
+
+  <line x1="370" y1="90" x2="422" y2="90" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
+  <rect x="422" y="84" width="104" height="6" fill="var(--arm-c)"/>
+  <text class="lbs" x="474" y="74" text-anchor="middle">+$0.0047</text>
+  <text class="lb" x="474" y="272" text-anchor="middle">output</text>
+  <text class="lbs" x="474" y="289" text-anchor="middle">thinking lives here</text>
+
+  <line x1="526" y1="84" x2="578" y2="84" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
+  <rect x="578" y="84" width="104" height="166" fill="none" stroke="var(--premium)" stroke-width="2"/>
+  <text class="big" x="630" y="74" text-anchor="middle">+$0.1317</text>
+  <text class="lb" x="630" y="272" text-anchor="middle">TOTAL</text>
+  <text class="lbs" x="630" y="289" text-anchor="middle">+13% on $1.001</text>
+
+</svg>
