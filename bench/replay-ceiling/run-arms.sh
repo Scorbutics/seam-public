@@ -15,7 +15,11 @@
 set -u
 ROUND="${1:?usage: run-arms.sh <round-id>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="$HERE/results"; mkdir -p "$OUT"
+# OUT is overridable so a PROBE (a different model, a spike) cannot land in the results directory the
+# paper reads. ARMS likewise: re-running one arm, or running a two-arm probe, should not mean editing
+# this file — an edited harness is a different harness.
+OUT="${OUT:-$HERE/results}"; mkdir -p "$OUT"
+ARMS="${ARMS:-ABC}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 REPO="${REPO:-$HOME/dev/keycloak}"
 SEAM="$ROOT/ts/src/cli/decompose.ts"
@@ -150,7 +154,7 @@ ARM_C () { run_arm C PROMPT_C DENY_C "Bash($HERE/call-flow:*)" "Bash(cat:*)" "Ba
 # and they drift in the SAME direction relative to the arms every time. Shuffling costs nothing and closes
 # the question. The realised order is recorded per round so a reader can check it, and re-check for an
 # order effect after the fact.
-ORDER=$(printf '%s\n' A B C | shuf | tr -d '\n')
+ORDER=$(printf '%s\n' $(echo "$ARMS" | grep -o .) | shuf | tr -d '\n')
 echo "$ORDER" > "$OUT/$ROUND.order"
 echo "  arm order: $ORDER"
 for a in $(echo "$ORDER" | grep -o .); do "ARM_$a"; done
