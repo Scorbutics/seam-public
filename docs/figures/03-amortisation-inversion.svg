@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" width="720" height="330" role="img" aria-labelledby="t d">
+<title id="t">The amortisation inversion</title>
+<desc id="d">A hyperbola showing effective cost per million-token-turn falling from $10.50 at one following turn toward a floor of $0.50 at twenty, with the steep region marked as where a one-call tool lives.</desc>
+<style>
+  :root{
+    --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
+    --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
+    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --premium:#C0761F; --premium-soft:#EBD6BA;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
+    --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
+    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
+    --premium:#E29A47; --premium-soft:#4A3820;
+  }}
+  .bg{fill:var(--panel)}
+  .ax{stroke:var(--rule);stroke-width:1;fill:none}
+  .gl{stroke:var(--rule-soft);stroke-width:1;fill:none}
+  .tk{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-faint)}
+  .lb{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;fill:var(--ink);font-weight:500}
+  .lbs{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-soft)}
+  .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
+  .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
+</style>
+<rect class="bg" x="0" y="0" width="720" height="330"/>
+
+  <line class="ax" x1="80" y1="270" x2="700" y2="270"/>
+  <line class="ax" x1="80" y1="46" x2="80" y2="270"/>
+  <g class="gl">
+    <line x1="80" y1="230" x2="700" y2="230"/><line x1="80" y1="190" x2="700" y2="190"/>
+    <line x1="80" y1="150" x2="700" y2="150"/><line x1="80" y1="110" x2="700" y2="110"/>
+    <line x1="80" y1="70" x2="700" y2="70"/>
+  </g>
+  <g class="tk" text-anchor="end">
+    <text x="74" y="274">$0</text><text x="74" y="234">$2</text><text x="74" y="194">$4</text>
+    <text x="74" y="154">$6</text><text x="74" y="114">$8</text><text x="74" y="74">$10</text>
+  </g>
+  <text class="tk" x="10" y="34">effective</text><text class="tk" x="10" y="48">$/Mtok-turn</text>
+
+  <line x1="80" y1="260" x2="700" y2="260" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="4 4"/>
+  <text class="lbs" x="300" y="256">$0.50 — the bare read price, never reached</text>
+
+  <polyline fill="none" stroke="var(--premium)" stroke-width="2.4" points="80,60 111.6,160 143.2,193.3 174.7,210 206.3,220 237.9,226.7 269.5,231.4 301.1,235 332.6,237.8 364.2,240 395.8,241.8 427.4,243.3 458.9,244.6 490.5,245.7 522.1,246.7 553.7,247.5 585.3,248.2 616.8,248.9 648.4,249.5 680,250"/>
+
+  <g class="p">
+    <circle cx="80" cy="60" r="4.5"/><circle cx="111.6" cy="160" r="4"/><circle cx="174.7" cy="210" r="4"/>
+    <circle cx="364.2" cy="240" r="4"/><circle cx="680" cy="250" r="4"/>
+  </g>
+  <text class="lb" x="92" y="52">$10.50</text>
+  <text class="lbs" x="122" y="155">$5.50</text>
+  <text class="lbs" x="185" y="205">$3.00</text>
+  <text class="lbs" x="374" y="235">$1.50</text>
+  <text class="lbs" x="676" y="243" text-anchor="end">$1.00</text>
+
+  <g class="tk" text-anchor="middle">
+    <text x="80" y="288">1</text><text x="111.6" y="288">2</text><text x="174.7" y="288">4</text>
+    <text x="364.2" y="288">10</text><text x="680" y="288">20</text>
+  </g>
+  <text class="lbs" x="390" y="310" text-anchor="middle">turns following the payload</text>
+
+  <line x1="80" y1="76" x2="80" y2="140" stroke="var(--premium)" stroke-width="1" stroke-dasharray="3 3"/>
+  <text class="lb" x="96" y="96">a one-call tool</text>
+  <text class="lbs" x="96" y="113">lives at the left edge</text>
+  <text class="lbs" x="96" y="130">and pays the full 20×</text>
+
+</svg>

@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 226" width="720" height="226" role="img" aria-labelledby="t d">
+<title id="t">The verification floor</title>
+<desc id="d">A timeline of the ideal arm's twenty point eight tool calls: six reach a provably complete answer, the remaining fourteen point eight are spent verifying it and account for fifty-two percent of run cost.</desc>
+<style>
+  :root{
+    --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
+    --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
+    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --premium:#C0761F; --premium-soft:#EBD6BA;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
+    --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
+    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
+    --premium:#E29A47; --premium-soft:#4A3820;
+  }}
+  .bg{fill:var(--panel)}
+  .ax{stroke:var(--rule);stroke-width:1;fill:none}
+  .gl{stroke:var(--rule-soft);stroke-width:1;fill:none}
+  .tk{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-faint)}
+  .lb{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;fill:var(--ink);font-weight:500}
+  .lbs{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-soft)}
+  .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
+  .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
+</style>
+<rect class="bg" x="0" y="0" width="720" height="226"/>
+
+  <text class="lbs" x="60" y="34">REPLAY (ideal oracle)</text>
+  <text class="lbs" x="680" y="34" text-anchor="end">20.8 tool calls per round · mean of 5</text>
+
+  <rect x="60" y="56" width="179" height="46" class="c" opacity="0.34"/>
+  <rect x="60" y="56" width="179" height="46" fill="none" stroke="var(--arm-c)" stroke-width="1.5"/>
+  <rect x="239" y="56" width="441" height="46" class="p" opacity="0.26"/>
+  <rect x="239" y="56" width="441" height="46" fill="none" stroke="var(--premium)" stroke-width="1.5"/>
+
+  <text class="lb" x="149" y="78" text-anchor="middle">6 calls</text>
+  <text class="lbs" x="149" y="94" text-anchor="middle">reaching the answer</text>
+  <text class="lb" x="459" y="78" text-anchor="middle">14.8 calls — after the oracle said DONE</text>
+  <text class="lbs" x="459" y="94" text-anchor="middle">checking an answer that is already complete, correct, and its own</text>
+
+  <line x1="239" y1="46" x2="239" y2="112" stroke="var(--ink)" stroke-width="1.4"/>
+  <text class="lb" x="239" y="40" text-anchor="middle">DONE</text>
+
+  <line x1="239" y1="124" x2="680" y2="124" stroke="var(--premium)" stroke-width="1"/>
+  <line x1="239" y1="120" x2="239" y2="128" stroke="var(--premium)" stroke-width="1"/>
+  <line x1="680" y1="120" x2="680" y2="128" stroke="var(--premium)" stroke-width="1"/>
+  <text class="lb" x="459" y="142" text-anchor="middle">52% of the run's cost</text>
+
+  <g stroke="var(--premium)" stroke-width="1.6">
+    <line x1="262" y1="164" x2="262" y2="178"/><line x1="280" y1="164" x2="280" y2="178"/>
+    <line x1="298" y1="164" x2="298" y2="178"/><line x1="316" y1="164" x2="316" y2="178"/>
+    <line x1="334" y1="164" x2="334" y2="178"/><line x1="352" y1="164" x2="352" y2="178"/>
+    <line x1="370" y1="164" x2="370" y2="178"/><line x1="388" y1="164" x2="388" y2="178"/>
+    <line x1="406" y1="164" x2="406" y2="178"/><line x1="424" y1="164" x2="424" y2="178"/>
+    <line x1="442" y1="164" x2="442" y2="178"/><line x1="460" y1="164" x2="460" y2="178"/>
+    <line x1="478" y1="164" x2="478" y2="178"/><line x1="496" y1="164" x2="496" y2="178"/>
+    <line x1="514" y1="164" x2="514" y2="178"/><line x1="532" y1="164" x2="532" y2="178"/>
+    <line x1="550" y1="164" x2="550" y2="178"/><line x1="568" y1="164" x2="568" y2="178"/>
+    <line x1="586" y1="164" x2="586" y2="178"/><line x1="604" y1="164" x2="604" y2="178"/>
+    <line x1="622" y1="164" x2="622" y2="178"/><line x1="640" y1="164" x2="640" y2="178"/>
+    <line x1="658" y1="164" x2="658" y2="178"/>
+  </g>
+  <text class="lbs" x="60" y="175">23 refusals</text>
+  <text class="lbs" x="60" y="192">across 5 rounds</text>
+  <text class="lbs" x="262" y="196">every one of them lands here — 23 after DONE, 0 before</text>
+
+</svg>

@@ -131,6 +131,9 @@ injection side.
 One task, one repo commit, three arms back-to-back in a single invocation. Model pinned
 (`claude-opus-5[1m]`). **Arm order randomised per round.** Identical machine-readable output contract.
 Contamination audited from the transcript rather than assumed from the flags — **all five rounds clean**.
+`[AUDIT S6 — an auxiliary model is billed alongside `claude-opus-5[1m]` in 15 of 15 runs, at ~0.54% of run
+cost. "Pinned" needs that footnote, and §3.3's fit is exact against the opus `modelUsage` entry, not against
+`total_cost_usd` (max residual $0.01378) — which is the field the cost figures use.]`
 
 - **A — GREP**: ripgrep + reads. The control.
 - **B — SEAM**: the real CLI with its real `SKILL.md`. The product as shipped.
@@ -149,13 +152,13 @@ tool can lose:
 
 | removed | arm C | arm B |
 |---|---|---|
-| engine latency | ~1 ms (a `cat`) — measured **−1.0s** non-API | **+20.6s** non-API |
+| engine latency | ~1 ms (a `cat`) — non-API time indistinguishable from the control | **+20.6s** non-API |
 | wrong turns, anchor risk | none: order fixed in advance | the agent chooses |
 | documentation cost | ~300 bytes | 42 KB, resident every turn |
 | recall | 100% of ground truth by construction | measured |
 
 The step *selection* is idealised; the step *content* is not. No line was written for the benchmark; the five
-recorded results were chosen because their union covers all ten ground-truth locations.
+recorded results were chosen because their union covers all 12 ground-truth entries (`bench/replay-ceiling/truth.txt`).
 
 **Why this is the right instrument.** Every prior negative result in this project — and every arm in the
 compression literature — compares imperfect systems, so a flat result is always attributable to the tool
@@ -163,9 +166,24 @@ being not-yet-good-enough. That hypothesis is unfalsifiable in the limit: there 
 The oracle makes it falsifiable by *saturating* it. **If arm C cannot beat the control, no engine improvement
 can.** The argument is definitional, not statistical, which is what lets it stand at n=5.
 
+**In one sentence:** if the best imaginable version of a retrieval tool cannot beat the control, then no
+version of it can — and the question stops being *"is this engine good enough yet?"* and becomes a question
+about the whole category. That is why one oracle arm is worth more than another round of engine work, and
+why a result this small in n can carry a claim this large.
+
+Be precise about what "upper bound" does and does not mean. It bounds the class of tools that answer by
+**putting a payload into the agent's context**, which is what every retrieval tool here does. It says
+nothing about a tool that changes the agent's *loop* — one that suppresses re-verification, or that
+persists its payload across conversations (§8.2). Those escape the bound because they are not playing the
+game it saturates.
+
 **Cost to reproduce for any tool-builder:** freeze your tool's outputs on one task, serve them from `cat`,
 write a 300-byte manual. `[Argue this belongs in every agent-tool project's evaluation, before the engine
 investment, not after.]`
+
+`[AUDIT S7 — non-API time is NEGATIVE for the control too (−0.6s): `duration_api_ms` and `duration_ms` are
+not a partition, so neither figure is "engine time". Arm B's +20.6s gap is large enough to survive that;
+arm C's −1.0s is not a measurement of ~1 ms and should not be presented as one.]`
 
 ### 3.3 Cost model
 
@@ -178,7 +196,10 @@ cache write  $10.00 /Mtok    paid ONCE, per new block injected     (1h TTL; 5m T
 output       $25.00 /Mtok
 ```
 
-Exact fit, so every decomposition is arithmetic on billed prices, not an estimate.
+Exact fit — independently reconfirmed at a residual of **$0.0000000** against the opus `modelUsage`
+entry, which is a stronger statement than "zero residual" — so every decomposition is arithmetic on billed
+prices, not an estimate. `[AUDIT S6 — say "against the opus entry"; `total_cost_usd` also carries the
+auxiliary model.]`
 
 ---
 
@@ -186,6 +207,30 @@ Exact fit, so every decomposition is arithmetic on billed prices, not an estimat
 
 `[WRITE — compress hard. This section is BACKGROUND (see §2), not a result. Its job is to make the paper
 self-contained and to state the injection-side form of a known argument. Cite 2607.12161 throughout.]`
+
+### 4.0 In plain terms, before the arithmetic
+
+Injecting a structural payload into an agent's context changes what you pay in **two independent ways**.
+Nearly every confused discussion of "context efficiency" is a failure to separate them, so they are named
+here before any algebra:
+
+1. **The payload inflates every remaining turn.** The conversation is re-sent in full on each turn, so
+   bytes that sit in the context are paid for *again* on every turn that follows. §4.1 is this term.
+2. **The payload is written into the cache once, at twenty times the read price.** A fixed, one-time
+   charge, spread over however many turns follow it. §4.3 is this term.
+
+The difficulty is that **one payload moves both, in opposite directions**. The bytes that let the agent
+stop early are the same bytes every remaining turn has to carry; and the earlier it stops, the fewer turns
+remain to spread the write charge over. A tool cannot tune one of these without giving back the other,
+which is what makes it a *trade* rather than an engineering target.
+
+The result the rest of the paper builds to: **at the ceiling, term 1 nets to zero, and term 2 is the
+entire remaining cost.**
+
+![One payload, two bills](figures/01-two-bills.svg)
+
+***Figure 1.** The bytes that let the agent stop early are the same bytes every remaining turn must carry. One payload, two terms, moving in opposite directions.*
+
 
 ### 4.1 The context identity
 
@@ -195,6 +240,23 @@ of the conversation but the sum of its sizes:
 ```
     cache_read  ≈  turns  ×  context_per_turn
 ```
+
+**Why this, and not "how big did the context get".** An LLM keeps nothing between turns: the whole
+conversation is re-sent every time. So the quantity you are billed for is not the context's final size but
+the **sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns
+while doubling the size of each one buys exactly nothing. This is the single fact that makes tool-call
+count a bad proxy for cost, and it is why the two axes in §1 can move in opposite directions without
+either being mismeasured.
+
+![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
+
+***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. SEAM's rectangle is the narrowest and also the largest; the ideal arm's is barely smaller than the control's.*
+
+`[AUDIT S4/S8 — 'context_per_turn' is (cache_read + cache_write)/turns; that definition appears nowhere in
+this draft and must be stated. With it substituted, 'turns × context_per_turn ≈ cache_read' reads
+'cache_read + cache_write ≈ cache_read', which cannot fail, and the residual reported below as
+approximation error IS the cache write — the term §4.3 calls the entire finding. Drop the word
+'Verified' and present it as a definition. See docs/STUDY_AUDIT.md.]`
 
 `[n=5]` Verified: GREP 23.4 × 41.9k ≈ 980k (actual 943k); SEAM 15.4 × 84.0k ≈ 1,294k (actual 1,230k).
 
@@ -212,8 +274,19 @@ turns is the payload that inflates every remaining turn. It lowers read cost onl
 | REPLAY, raw | 0.93 | 1.36 | 1.27 | loses |
 | **REPLAY, adjusted** | **0.735** | **1.365** | **1.003** | **exactly break-even** |
 
+`[AUDIT S5 — the product turns_ratio × context_ratio is algebraically identical to the TOTAL-context
+ratio: the turns cancel, (t_x/t_A)·((C_x/t_x)/(C_A/t_A)) = C_x/C_A. Verified numerically both ways. The
+adjusted 1.003 is correct and meaningful — it is (C_x − denials·ctx)/C_A, the adjusted total-input-context
+ratio — but it is ONE ratio, not a product of two that annihilate. Report it as such; the narrative above
+is true and should stay.]`
+
 **This is the paper's sharpest number and it was nearly missed.** Corrected for refused turns, the ideal arm's
-excess cache read is **+305 tokens** against the control — not the +252,654 the raw figures show. *An ideal
+excess cache read is **indistinguishable from zero** against the control — not the +252,654 the raw
+figures show. `[AUDIT S3 — the published "+305" is computed with context_per_turn = cache_read/turns,
+contradicting the (read+write)/turns used a few lines above. Under this section's own definition the figure
+is −10,244; on total context, +2,968. All three are ~0 against a ~1M baseline, so the CLAIM survives every
+definition — restate it under one and drop the spurious precision. This also moves §4.3: read term
+−$0.0051 not +$0.0002, total gap $0.1317 not $0.1370, **+13% not +14%**.]` *An ideal
 retrieval tool does not lose the turns x context trade. It draws it.* The shipped tool still loses it (1.182),
 so the trade is winnable in principle and is not being won in practice. `[WRITE: this is the result §4.3 needs
 — with the read term neutralised, the write premium is the ONLY term left, and §4.3 stops being one mechanism
@@ -246,6 +319,10 @@ arm C's adjusted cost gap vs GREP, decomposed:
 ```
 
 
+![Where the ideal tool's money goes](figures/05-where-the-money-goes.svg)
+
+***Figure 5.** With the read term at zero on a tool that is optimal by construction, the write premium is not one contributor among several — it is the entire residual.*
+
 A byte written once and read *T* times costs `(10 + 0.5T)/T` per **Mtok-turn** of use:
 
 | turns following the payload | 20 | 10 | 4 | 2 | 1 |
@@ -253,6 +330,17 @@ A byte written once and read *T* times costs `(10 + 0.5T)/T` per **Mtok-turn** o
 | effective $/Mtok-turn | $1.00 | $1.50 | $3.00 | $5.50 | $10.50 |
 
 > **The better a tool gets at collapsing turns, the shorter the window over which its own payload amortises.**
+
+![The amortisation inversion](figures/03-amortisation-inversion.svg)
+
+***Figure 3.** A byte written once and read T times costs (10 + 0.5T)/T per Mtok-turn of use. Collapsing turns slides the tool leftward along this curve — toward the full 20x premium on its own bytes.*
+
+**The analogy that makes this concrete.** A cache write is a **setup cost**, like tooling up a production
+line: you amortise it over the length of the production run. A retrieval tool's production run is the turns
+that follow its payload — and its whole purpose is to make that run shorter. It is a factory buying more
+expensive tooling in order to produce fewer units. The better it works, the worse that trade gets, and
+there is no setting of the payload size that escapes it: shrink the payload and you give back the turn
+saving that justified it.
 
 The payload cannot be shrunk without giving back the turn saving that justifies it, nor amortised without the
 turns it exists to eliminate. Optimising toward *one call, one complete answer* drives the effective price of
@@ -267,6 +355,12 @@ payload and one turn the write is $0.36 against grep's ~$0.49 of accumulated rea
 that regime is never reached.]`
 
 ### 4.4 Thinking doubles, and is not the cause
+
+`[AUDIT S2 — these figures come from streamed `estimated_tokens`, which sits ~240 tokens BELOW the
+provider's own `usage.output_tokens_details.thinking_tokens` in every arm (870/1940/1890 against
+1108/2177/2145). A near-constant offset subtracted from a small control baseline inflates the RATIO:
+**1.97x / 1.94x** on the authoritative field, not 2.23x / 2.17x. "Roughly doubles" survives; the figure
+does not. The cost SHARES (7% / 10%) are unaffected.]`
 
 `[n=5]` With thinking measured directly (`thinking_delta.estimated_tokens`; the earlier harness stored
 thinking blocks with empty content), reasoning rises **2.23x** in the Seam arm and **2.17x** in the ideal arm —
@@ -286,6 +380,16 @@ localises it to the payload.]`
 
 §4 assumes the turn reduction is real. Arm C tests that assumption at the ceiling.
 
+**The verification floor, in one sentence:** once an agent has an answer, it spends further turns
+*checking* that answer — and how many it spends does not depend on how good the answer is. It is a
+*floor* because no improvement to the answer lowers it, which is exactly what makes it invisible to
+every experiment that compares two imperfect tools.
+
+![The verification floor](figures/04-verification-floor.svg)
+
+***Figure 4.** The ideal arm, drawn alone — the control arms have no completion marker, so the quantity is not measurable for them. Six calls reach a provably complete answer; 14.8 follow it, and all 23 refusals across the five rounds land in that second stretch.*
+
+
 `[n=5]` Given a perfect, zero-latency oracle announcing `DONE` on a provably complete answer, the agent made
 **14.8 further calls**, costing **52% of the run**, and finished in **21.8 turns against the control's 23.4** —
 a 7% reduction, from a tool that had already handed it the entire answer.
@@ -296,7 +400,14 @@ a 7% reduction, from a tool that had already handed it the entire answer.
 | SEAM | 8.4 | 6.8 | 1.6 | 41% |
 | **REPLAY (ideal)** | **14.8** | **10.2** | **4.6** | **52%** |
 
-**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before.** The agent walks the
+`[AUDIT S1 — the GREP and SEAM rows are `total_calls − 6`, the split index borrowed from arm C's oracle;
+measure.py's own docstring says it is "only meaningful for arm C". Those arms have no completion marker, so
+the column as headed is not a measurement for them. Arm C's row IS real and is independently confirmed:
+`DONE` lands at call #6 in all five rounds, so 20.8 − 6 = 14.8 is genuinely "after the answer was
+complete". Restrict the claim to arm C, or define completion for A and B and measure it.]`
+
+**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before.** `[VERIFIED
+independently by tool_use_id position: 23 after, 0 before, 0 unmatched, across all five rounds.]` The agent walks the
 oracle to completion without once trying to go around it, and only then starts reaching for tools it does not
 have. `[WRITE — and note which way the refusals cut: an agent that, having been handed a provably complete
 answer, reaches five more times for a search tool it has been told it lacks is STRONGER evidence of the
@@ -366,13 +477,37 @@ no change to it at all. §5 is the model those results were missing.
      its absolute cost pessimistic under either reading.
 
 ### 6.3 Generality `[WRITE]`
-- One task, one repo, one model version, n=5. §4's identity is arithmetic and generalises (and is corroborated
-  at n=2,908 by 2607.12161). **§5's floor is an empirical behaviour on one task and one model, and its
-  magnitude may not transfer** — the *definitional* argument in §5.1 does, its size does not.
-- The 20:1 ratio is the 1h cache TTL; at 5m it is 12.5:1. The bar moves, the direction does not.
-- `[Falsifiers to name explicitly: a model that does not re-verify; a pricing regime without a write premium;
-  a conversation long enough that amortisation dominates; a task where the control's context grows faster than
-  the payload. Also: re-run §5 on a second model — this is the single highest-value follow-up.]`
+- One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at
+  n=2,908 by 2607.12161). **§5's floor was an empirical behaviour on one task and one model** — the
+  *definitional* argument in §5.1 always transferred; its size had not been tested.
+- **The second model has now been run, and the floor holds.** `[n=3, probe]` Three rounds of arms A and C
+  on `claude-sonnet-5`, same harness and task: calls after `DONE` were **12, 15, 12** against Opus's
+  **14, 13, 10, 20, 17**. Every Sonnet round falls inside the Opus per-round range, with the structure
+  identical — `DONE` at call #6 every time, every refusal after it and none before. One Opus round
+  verified *less* than any Sonnet round. Full apparatus, limits and caveats:
+  [`bench/replay-ceiling/results-sonnet-probe/WHY.md`](../bench/replay-ceiling/results-sonnet-probe/WHY.md).
+  `[WRITE — state the limits in the text, not only by reference: different machine, a keycloak six days
+  newer, n=3, no arm B. This RAISES §5 from "one model" to "two models, same behaviour", which is what
+  §5.1's definitional argument predicted; it does not make the MAGNITUDE general.]`
+- **The 20:1 bar is a property of the cache TTL, not of the model**, and this is now measured rather than
+  asserted. Fitting billed prices from the transcripts: Opus `5 / 0.5 / 10 / 25` (residual 1e-15, n=118),
+  Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) / 15` (residual 4e-16, n=110). Cache read is 0.1x input and a 1h
+  write 2.0x input on BOTH, so the bar is 0.050 on both and the price level cancels — Sonnet is uniformly
+  3x cheaper and the trade is identical. At the 5m TTL it is 0.080 (12.5:1), a LOWER bar, so the trade is
+  easier to win there. `[WRITE — quote the TTL every time the 20:1 appears. Sonnet mixes both TTLs, which
+  is why a four-price fit of it returns a NEGATIVE input price; Opus is 100% 1h, which is why four terms
+  ever worked.]`
+- `[Falsifiers still open: a pricing regime without a write premium; a conversation long enough that
+  amortisation dominates; a task where the control's context grows faster than the payload. The
+  "model that does not re-verify" falsifier has been looked for on one further model and not found.]`
+- **`[NEW — and now the more valuable follow-up.]`** The probe found something nobody was looking for: arm
+  A, the CONTROL, takes **28-41 calls on Sonnet against 21-24 on Opus**. The cost ratio C/A therefore moves
+  toward the oracle (0.95 in the probe against the published 1.26) with nothing in §4 having changed — the
+  write premium is model-invariant, as the price fit above shows. What is not invariant is **how
+  efficiently the baseline model uses grep**. If that survives higher n it is a claim this study does not
+  make and should: *a retrieval tool's measured value is partly a function of how good the control model is
+  at searching.* It belongs in §7, not §5. It needs its own rounds — the probe has three arm-A rounds and
+  the spread between them is enormous — and unlike a §5 replication it needs no arm B, so no engine build.
 
 ---
 
@@ -413,9 +548,13 @@ no change to it at all. §5 is the model those results were missing.
 
 ## Appendix A — reproduction
 ```
-bench/replay-ceiling/run-arms.sh <round-id>     # one round = three arms, shuffled
-python3 bench/replay-ceiling/measure.py         # cost decomposition, break-even, verification floor
+bench/replay-ceiling/run-arms.sh <round-id>          # one round = three arms, shuffled
+python3 bench/replay-ceiling/measure.py              # cost decomposition, break-even, verification floor
+python3 bench/replay-ceiling/verify_independent.py   # a SECOND implementation, sharing no code with it
 ```
+`verify_independent.py` recomputes every figure above from the raw transcripts without importing
+`measure.py`. Two implementations that never shared code must agree or one of them is wrong; the `[AUDIT]`
+markers throughout this draft are where they did not. Full report: [`STUDY_AUDIT.md`](STUDY_AUDIT.md).
 ## Appendix B — discarded batches, and what they bought
 `results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md`
 ## Appendix C — the review that corrected this draft

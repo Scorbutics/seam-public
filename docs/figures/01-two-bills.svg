@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 268" width="720" height="268" role="img" aria-labelledby="t d">
+<title id="t">One payload, two bills</title>
+<desc id="d">A payload entering an agent's context splits into two costs: re-read on every remaining turn at the cache-read price, and written once at twenty times that price.</desc>
+<style>
+  :root{
+    --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
+    --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
+    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --premium:#C0761F; --premium-soft:#EBD6BA;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
+    --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
+    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
+    --premium:#E29A47; --premium-soft:#4A3820;
+  }}
+  .bg{fill:var(--panel)}
+  .ax{stroke:var(--rule);stroke-width:1;fill:none}
+  .gl{stroke:var(--rule-soft);stroke-width:1;fill:none}
+  .tk{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-faint)}
+  .lb{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px;fill:var(--ink);font-weight:500}
+  .lbs{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;fill:var(--ink-soft)}
+  .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
+  .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
+</style>
+<rect class="bg" x="0" y="0" width="720" height="268"/>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="var(--ink-soft)"/>
+    </marker>
+    <marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,1 L9,5 L0,9 z" fill="var(--premium)"/>
+    </marker>
+  </defs>
+
+  <rect x="14" y="104" width="128" height="56" rx="4" fill="none" stroke="var(--arm-c)" stroke-width="1.5"/>
+  <text class="lb" x="78" y="128" text-anchor="middle">the payload</text>
+  <text class="lbs" x="78" y="146" text-anchor="middle">~36k tokens</text>
+
+  <line x1="142" y1="132" x2="204" y2="132" stroke="var(--ink-soft)" stroke-width="1.3" marker-end="url(#ar)"/>
+
+  <rect x="208" y="86" width="136" height="92" rx="4" fill="var(--rule-soft)" stroke="var(--rule)" stroke-width="1"/>
+  <text class="lb" x="276" y="126" text-anchor="middle">the agent's</text>
+  <text class="lb" x="276" y="143" text-anchor="middle">context</text>
+
+  <line x1="344" y1="116" x2="430" y2="62" stroke="var(--ink-soft)" stroke-width="1.3" marker-end="url(#ar)"/>
+  <line x1="344" y1="150" x2="430" y2="204" stroke="var(--premium)" stroke-width="1.8" marker-end="url(#arp)"/>
+
+  <rect x="434" y="26" width="272" height="74" rx="4" fill="none" stroke="var(--rule)" stroke-width="1"/>
+  <text class="lb" x="450" y="50">RE-READ, every remaining turn</text>
+  <text class="lbs" x="450" y="70">$0.50 / Mtok  ×  T turns</text>
+  <text class="lbs" x="450" y="88">cheap per token · paid many times</text>
+
+  <rect x="434" y="168" width="272" height="74" rx="4" fill="var(--premium-soft)" stroke="var(--premium)" stroke-width="1.5"/>
+  <text class="lb" x="450" y="192">WRITTEN, exactly once</text>
+  <text class="lbs" x="450" y="212">$10.00 / Mtok  ×  1</text>
+  <text class="lbs" x="450" y="230">20× the read price · paid up front</text>
+
+  <text class="lbs" x="276" y="212" text-anchor="middle">the same bytes</text>
+  <text class="lbs" x="276" y="228" text-anchor="middle">do both</text>
+
+</svg>
