@@ -7,19 +7,98 @@ of them is wrong. Where they disagree, this script says so rather than deferring
 
     python3 bench/replay-ceiling/verify_independent.py
 
-Exit 0 = every checked figure reproduces. Exit 1 = at least one does not.
-Figures it CANNOT check (answer F1/precision/recall) are listed as UNCHECKED, never
-as passing: a check that looked at nothing has not passed.
+The price vector is FITTED from the transcripts' own modelUsage by least squares, never
+assumed, so the same script can audit a replication on another model. Where the model IS the
+one the paper ran on, the fit is checked against the published prices and every figure is
+compared to the published one; where it is not, the figures are printed as a table, because
+there is nothing to compare them against.
+
+Exit 0 = nothing contradicted. Exit 1 = a checked figure did not reproduce. There is no third
+code. Figures it CANNOT check (answer F1/precision/recall, and every paper figure when these
+are not the paper's transcripts) are listed as UNCHECKED, never as passing: a check that
+looked at nothing has not passed.
 """
 import json, glob, os, sys, statistics as st, collections
 
 RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-PRICE = {"in": 5e-6, "cr": 0.5e-6, "cw": 10e-6, "out": 25e-6}
 NAME = {"A": "GREP", "B": "SEAM", "C": "REPLAY"}
 ARMS = "ABC"
 ORACLE_DONE_STEP = 6          # arm C's oracle prints DONE at step 6
+COLS = ("in", "cr", "cw", "out")
 
-fails, notes = [], []
+# The model the published study ran on, spelled exactly as the provider bills it: the "[1m]"
+# suffix is PART OF THE NAME. claude-opus-5[1m] and claude-opus-5 are different products with
+# different cache TTLs and different prices, so they are never folded together here.
+PAPER_MODEL = "claude-opus-5[1m]"
+PAPER_SHAPE = (5, 3)          # the set the paper documents: 5 rounds x 3 arms
+
+# Published prices, $/token. NOT an input to any figure below — the price vector is fitted from
+# the transcripts. This is the check ON that fit, and it is the point of the exercise: a price
+# vector silently fitted from the wrong data is worse than a hardcoded one.
+KNOWN_PRICE = {PAPER_MODEL: {"in": 5e-6, "cr": 0.5e-6, "cw": 10e-6, "out": 25e-6}}
+
+fails, notes, unchecked, tabled = [], [], [], []
+
+
+def primary_model(mu, usage):
+    """Which modelUsage entry is the model under study — read from the data, not matched by name.
+
+    The result event's top-level `usage` block is the primary model's own usage, so the entry whose
+    four counters equal it IS the primary; anything else (a small auxiliary the harness calls for
+    its own housekeeping) is billed alongside and is not what the study measures. Falls back to the
+    costliest entry only if nothing matches exactly.
+    """
+    want = (usage.get("input_tokens", 0), usage.get("cache_read_input_tokens", 0),
+            usage.get("cache_creation_input_tokens", 0), usage.get("output_tokens", 0))
+    for k, v in mu.items():
+        if (v.get("inputTokens", 0), v.get("cacheReadInputTokens", 0),
+                v.get("cacheCreationInputTokens", 0), v.get("outputTokens", 0)) == want:
+            return k
+    return max(mu, key=lambda k: mu[k].get("costUSD", 0.0)) if mu else None
+
+
+def _solve(A, b):
+    """Least squares by normal equations, columns scaled to unit norm first (they span 1e1..1e6).
+
+    Pure standard library on purpose: numpy is used when present, and this is what runs when it is
+    not. Raises when the system is singular rather than returning a confident wrong vector.
+    """
+    n = len(A[0])
+    scale = [sum(r[j] * r[j] for r in A) ** 0.5 or 1.0 for j in range(n)]
+    As = [[r[j] / scale[j] for j in range(n)] for r in A]
+    m = [[sum(row[i] * row[j] for row in As) for j in range(n)] + [sum(As[k][i] * b[k] for k in range(len(b)))]
+         for i in range(n)]
+    for i in range(n):
+        piv = max(range(i, n), key=lambda r: abs(m[r][i]))
+        m[i], m[piv] = m[piv], m[i]
+        if abs(m[i][i]) < 1e-12:
+            raise ValueError("singular normal matrix: the token columns are collinear across runs")
+        for r in range(n):
+            if r != i:
+                f = m[r][i] / m[i][i]
+                for c in range(i, n + 1):
+                    m[r][c] -= f * m[i][c]
+    return [m[i][n] / m[i][i] / scale[i] for i in range(n)]
+
+
+def fit_prices(rows):
+    """Fit $/token for (input, cache_read, cache_write, output) from >=4 runs of one model.
+
+    Each run gives one equation `in*p_in + cr*p_cr + cw*p_cw + out*p_out = costUSD`; with more runs
+    than unknowns the system is overdetermined, so it is solved by least squares. numpy if it is
+    installed, the normal equations above if it is not — no dependency is added to the repo.
+    """
+    A = [list(r[:4]) for r in rows]
+    b = [r[4] for r in rows]
+    try:
+        import numpy
+    except ImportError:
+        x, how = _solve(A, b), "normal equations, pure python (numpy not installed)"
+    else:
+        x, how = [float(v) for v in numpy.linalg.lstsq(numpy.array(A, float),
+                                                       numpy.array(b, float), rcond=None)[0]], "numpy.linalg.lstsq"
+    resid = max(abs(sum(A[k][j] * x[j] for j in range(len(x))) - b[k]) for k in range(len(b)))
+    return dict(zip(COLS, x)), resid, how
 
 
 def load():
@@ -42,7 +121,8 @@ def load():
             if d.get("type") == "result":
                 u = d.get("usage") or {}
                 mu = d.get("modelUsage") or {}
-                opus = [v for k, v in mu.items() if "opus" in k]
+                pm = primary_model(mu, u)
+                bill = mu.get(pm) or {}
                 secs = os.path.join(RES, f"{rd}.{arm}.secs")
                 runs[arm][rd] = dict(
                     calls=calls,
@@ -53,7 +133,11 @@ def load():
                     out=u.get("output_tokens", 0),
                     think=(u.get("output_tokens_details") or {}).get("thinking_tokens", 0),
                     cost=d.get("total_cost_usd", 0.0),
-                    opus_cost=opus[0].get("costUSD", 0.0) if opus else 0.0,
+                    primary=pm,
+                    primary_cost=bill.get("costUSD", 0.0),
+                    bill=(bill.get("inputTokens", 0), bill.get("cacheReadInputTokens", 0),
+                          bill.get("cacheCreationInputTokens", 0), bill.get("outputTokens", 0),
+                          bill.get("costUSD", 0.0)),
                     models=sorted(mu.keys()),
                     den=len(d.get("permission_denials") or []),
                     wall_ms=d.get("duration_ms", 0) / 1000.0,
@@ -64,6 +148,10 @@ def load():
 
 
 def check(label, mine, paper, tol, fmt="{:.1f}"):
+    if not PAPER_SET:        # no published figure for this model: print it, claim nothing
+        print(f"  --    {label:44} mine={fmt.format(mine):>12}  (no published figure)")
+        tabled.append(label)
+        return None
     ok = abs(mine - paper) <= tol
     print(f"  {'ok ' if ok else 'FAIL'}  {label:44} mine={fmt.format(mine):>12}  paper={fmt.format(paper):>12}")
     if not ok:
@@ -72,12 +160,79 @@ def check(label, mine, paper, tol, fmt="{:.1f}"):
 
 
 runs = load()
-M = lambda a, k: st.mean(runs[a][r][k] for r in sorted(runs[a]))
-ctx = {a: (M(a, "cr") + M(a, "cw")) / M(a, "turns") for a in ARMS}   # (read+write)/turns
-
+NRUN = sum(len(runs[a]) for a in ARMS)
+if not NRUN:
+    print(f"no r?.?.jsonl transcripts under {RES} — scanned 0 runs, so nothing is proved")
+    sys.exit(1)
 print("=" * 96)
 print("INDEPENDENT RE-DERIVATION — docs/STUDY_STRUCTURAL_LIMITS.md, from results/r?.?.jsonl")
 print("=" * 96)
+
+print("\n## §0 which model produced these transcripts — read from modelUsage, not assumed")
+MODELS = sorted({m for a in ARMS for r in runs[a] for m in runs[a][r]["models"]})
+seen = collections.Counter(runs[a][r]["primary"] for a in ARMS for r in runs[a])
+for m, n in sorted(seen.items()):
+    print(f"        primary    {m:34} {n:2}/{NRUN} runs")
+for m in MODELS:
+    if m not in seen:
+        print(f"        auxiliary  {m:34}    billed alongside; not the model under study")
+if len(seen) != 1:
+    print(f"\n  FAIL  the round set mixes {len(seen)} primary models: " + ", ".join(sorted(seen)))
+    print("        Every figure below is a mean across the rounds, and these rounds were not priced")
+    print("        or served alike — averaging them would present a comparison as a measurement.")
+    print("        Split the transcripts by model and run this script once per set.")
+    sys.exit(1)
+MODEL = next(iter(seen))
+
+print("\n## §0 price vector — fitted from the transcripts by least squares, not hardcoded")
+rows = [runs[a][r]["bill"] for a in ARMS for r in sorted(runs[a])]
+if len(rows) < len(COLS):
+    print(f"  FAIL  {len(rows)} run(s) for {len(COLS)} unknown prices — the system is underdetermined.")
+    print("        No dollar figure below can be derived; refusing to print one.")
+    sys.exit(1)
+try:
+    PRICE, resid, how = fit_prices(rows)
+except ValueError as e:
+    print(f"  FAIL  the price system could not be solved: {e}")
+    sys.exit(1)
+print(f"        {how} — {len(rows)} equations, {len(COLS)} unknowns")
+print("        " + "  ".join(f"{k}=${PRICE[k] * 1e6:9.4f}/Mtok" for k in COLS))
+print(f"        max residual against the billed costUSD  ${resid:.9f}")
+known = KNOWN_PRICE.get(MODEL)
+if known:
+    off = [k for k in COLS if abs(PRICE[k] - known[k]) > 1e-3 * abs(known[k])]
+    for k in COLS:
+        print(f"  {'ok ' if k not in off else 'FAIL'}  {'fitted vs published price: ' + k:44}"
+              f"mine=${PRICE[k] * 1e6:>10.4f}  paper=${known[k] * 1e6:>9.4f}")
+    if off:
+        print(f"\n  FAIL  the fitted price vector contradicts the published {MODEL} prices.")
+        print("        Either these transcripts are not what they claim to be, or the fit is wrong.")
+        print("        Both make every dollar figure below meaningless, so none is computed.")
+        sys.exit(1)
+else:
+    print(f"  --    no published price vector for {MODEL}: the residual above is the only evidence")
+    unchecked.append(f"the fitted price vector for {MODEL} — this script knows no published prices "
+                     f"for it, so only its own residual attests to it")
+
+shape = (len({r for a in ARMS for r in runs[a]}), sum(1 for a in ARMS if runs[a]))
+PAPER_SET = (MODEL == PAPER_MODEL and shape == PAPER_SHAPE)
+if PAPER_SET:
+    print(f"\n        -> {MODEL}, {shape[0]}x{shape[1]} runs: these ARE the transcripts")
+    print("           docs/STUDY_STRUCTURAL_LIMITS.md reports, so its figures are checked below.")
+else:
+    print(f"\n        -> {MODEL}, {shape[0]}x{shape[1]} runs — NOT the published set "
+          f"({PAPER_MODEL}, {PAPER_SHAPE[0]}x{PAPER_SHAPE[1]}).")
+    print("           The paper's figures describe a different set, so comparing against them would")
+    print("           measure nothing. Everything below is printed as a TABLE with no pass/fail:")
+    print("           there is no published figure to compare it against.")
+
+empty = [NAME[a] for a in ARMS if not runs[a]]
+if empty:
+    print(f"\n  FAIL  no runs for arm(s): {', '.join(empty)}. Every figure below is a comparison")
+    print("        between the three arms, so none of them can be computed from this set.")
+    sys.exit(1)
+M = lambda a, k: st.mean(runs[a][r][k] for r in sorted(runs[a]))
+ctx = {a: (M(a, "cr") + M(a, "cw")) / M(a, "turns") for a in ARMS}   # (read+write)/turns
 
 print("\n## §1 counts (provider-reported and transcript-derived)")
 for key, lbl, paper, tol, fmt in [
@@ -112,28 +267,37 @@ for a in ARMS:
           {"A": 1.00, "B": 1.42, "C": 1.26}[a], 0.005, "{:.2f}")
 for a in "BC":
     got = [runs[a][r]["cost"] / runs["A"][r]["cost"] for r in sorted(runs[a])]
+    label = f"paired per-round ratios [{NAME[a]}]"
+    if not PAPER_SET:
+        print(f"  --    {label:44} " + " ".join(f"{v:.2f}" for v in got))
+        tabled.append(label)
+        continue
     paper = {"B": [1.01, 1.37, 1.51, 1.68, 1.53], "C": [1.26, 1.18, 1.00, 1.41, 1.48]}[a]
-    ok = all(abs(g - p) <= 0.015 for g, p in zip(got, paper))
-    print(f"  {'ok ' if ok else 'FAIL'}  paired per-round ratios [{NAME[a]}]   "
-          + " ".join(f"{v:.2f}" for v in got))
+    # zip() truncates, so a short round set would "pass" on a prefix: compare the lengths too.
+    ok = len(got) == len(paper) and all(abs(g - p) <= 0.015 for g, p in zip(got, paper))
+    print(f"  {'ok ' if ok else 'FAIL'}  {label}   " + " ".join(f"{v:.2f}" for v in got))
     if not ok:
         fails.append(f"paired ratios {NAME[a]}")
 
 print("\n## §3.1 'model PINNED' / §3.3 'zero residual'")
-models = sorted({m for a in ARMS for r in runs[a] for m in runs[a][r]["models"]})
-print(f"        models billed across the 15 runs: {models}")
-worst_tot = worst_opus = 0.0
+print(f"        models billed across the {NRUN} runs: {MODELS}")
+worst_tot = worst_primary = 0.0
 for a in ARMS:
     for rd in runs[a]:
         r = runs[a][rd]
         pred = r["inp"] * PRICE["in"] + r["cr"] * PRICE["cr"] + r["cw"] * PRICE["cw"] + r["out"] * PRICE["out"]
         worst_tot = max(worst_tot, abs(pred - r["cost"]))
-        worst_opus = max(worst_opus, abs(pred - r["opus_cost"]))
-print(f"  ok    fit vs the opus modelUsage entry      max residual ${worst_opus:.7f}  (exact)")
+        worst_primary = max(worst_primary, abs(pred - r["primary_cost"]))
+exact = worst_primary <= 1e-6                 # a verdict, not a label: the residual decides it
+print(f"  {'ok ' if exact else 'FAIL'}   fit vs the {MODEL} modelUsage entry   "
+      f"max residual ${worst_primary:.7f}  ({NRUN} runs)")
 print(f"  NOTE  fit vs total_cost_usd                 max residual ${worst_tot:.5f}  (the auxiliary model)")
-if len(models) > 1:
-    notes.append(f"§3.1: {len(models)} models are billed in every run, not one. "
-                 f"The fit is exact against the opus entry; total_cost_usd carries the auxiliary model too.")
+if not exact:
+    fails.append("four-price model fits the primary modelUsage entry")
+if len(MODELS) > 1:
+    notes.append(f"§3.1: {len(MODELS)} models are billed in every run, not one. "
+                 f"The fit is exact against the {MODEL} entry; total_cost_usd carries the auxiliary "
+                 f"model too.")
 
 print("\n## §4.1 the identity, and the product that cancels")
 for a in ARMS:
@@ -189,10 +353,11 @@ for k, (mine, paper) in dec.items():
 check("TOTAL gap ($)", tot_mine, 0.1370, 0.002, "{:+.4f}")
 check("TOTAL gap (%)", tot_mine / base * 100, 14.0, 0.5, "{:.1f}")
 
-print("\n## §4.2 / §4.3 derivations (no data needed)")
+print("\n## §4.2 / §4.3 derivations (algebra over the FITTED price vector, so they move with it)")
 check("break-even bar (read/write price)", PRICE["cr"] / PRICE["cw"], 0.050, 0.0005, "{:.3f}")
+cw_m, cr_m = PRICE["cw"] * 1e6, PRICE["cr"] * 1e6
 for T, p in [(20, 1.00), (10, 1.50), (4, 3.00), (2, 5.50), (1, 10.50)]:
-    check(f"amortised $/Mtok-turn at T={T}", (10 + 0.5 * T) / T, p, 0.005, "${:.2f}")
+    check(f"amortised $/Mtok-turn at T={T}", (cw_m + cr_m * T) / T, p, 0.005, "${:.2f}")
 
 print("\n## §4.4 thinking tokens — source matters")
 for a in ARMS:
@@ -227,7 +392,12 @@ notes.append("§3.2: non-API time is NEGATIVE for the control (-0.6s), so it is 
              "from the control', not a measurement of ~1ms.")
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
-for u in ["answer F1 / precision / recall (needs re-scoring answers against truth.txt)"]:
+unchecked.insert(0, "answer F1 / precision / recall (needs re-scoring answers against truth.txt)")
+if tabled:
+    unchecked.append(f"{len(tabled)} figure(s) printed above as a table — {MODEL} is not the set "
+                     f"docs/STUDY_STRUCTURAL_LIMITS.md documents, which publishes no figure they "
+                     f"could be compared against")
+for u in unchecked:
     print(f"  --    {u}")
 
 print("\n" + "=" * 96)
@@ -235,9 +405,17 @@ if fails:
     print(f"{len(fails)} figure(s) did NOT reproduce:")
     for f in fails:
         print("   -", f)
-else:
+elif PAPER_SET:
     print("Every checked figure reproduces from the transcripts.")
-print(f"\n{len(notes)} definitional / presentational finding(s):")
-for i, n in enumerate(notes, 1):
-    print(f"  {i}. {n}")
+else:
+    print(f"Nothing was contradicted — and nothing was compared: the {len(tabled)} figure(s) above")
+    print(f"are derived for {MODEL}, which the study does not document. Exit 0 here means no")
+    print("contradiction, not agreement.")
+if PAPER_SET:
+    print(f"\n{len(notes)} definitional / presentational finding(s):")
+    for i, n in enumerate(notes, 1):
+        print(f"  {i}. {n}")
+else:
+    print(f"\n{len(notes)} definitional finding(s) withheld: they are readings of the published Opus")
+    print("figures, and these transcripts are not those.")
 sys.exit(1 if fails else 0)
