@@ -175,6 +175,14 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
   and SEAM rows only.
 - **§3.2 "ten ground-truth locations" — CONFIRMED WRONG.** `truth.txt` holds **12** non-comment entries;
   the bench README is right and the study was wrong. Fixed in the draft.
+- **The §5 model replication — RUN, and the floor holds.** `bench/replay-ceiling/results-sonnet-probe/`
+  (n=3, arms A and C, `claude-sonnet-5`). Calls after `DONE`: 12, 15, 12 against Opus's 14, 13, 10, 20,
+  17 — every round inside the Opus range, same structure throughout. §6.3 updated. This closes the
+  follow-up §8.3 called "the single highest-value" one, in the direction §5.1 predicted.
+- **Billed prices, both models — fitted, not assumed.** Opus `5 / 0.5 / 10 / 25` (residual 1e-15 over
+  118 runs) and Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) / 15` (residual 4e-16 over 110). The break-even
+  bar is 0.050 on both at 1h TTL because it is structural. `verify_independent.py` now derives this per
+  run set instead of hardcoding Opus's vector.
 
 ## What this changes about the argument
 
