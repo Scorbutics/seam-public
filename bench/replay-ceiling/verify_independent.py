@@ -5,7 +5,13 @@ Written from the raw transcripts alone. It does not import, call, or copy measur
 the whole point is that two implementations that never shared code must agree, or one
 of them is wrong. Where they disagree, this script says so rather than deferring.
 
-    python3 bench/replay-ceiling/verify_independent.py
+    python3 bench/replay-ceiling/verify_independent.py [results-dir]
+
+The directory is optional and defaults to results/. Point it at a probe directory to read a
+replication (another model, another machine) with the same instrument. The round-file glob is
+<round>.<arm>.jsonl in either case, so a probe needs no renaming; what it does NOT get is the
+paper's published figures to compare against, because those describe the Opus set and nothing
+else. That comparison is gated on the model and the round count, not on the directory name.
 
 The price vector is FITTED from the transcripts' own modelUsage by least squares, never
 assumed, so the same script can audit a replication on another model. Where the model IS the
@@ -20,7 +26,8 @@ looked at nothing has not passed.
 """
 import json, glob, os, sys, statistics as st, collections
 
-RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+RES = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(_HERE, "results")
 NAME = {"A": "GREP", "B": "SEAM", "C": "REPLAY"}
 ARMS = "ABC"
 ORACLE_DONE_STEP = 6          # arm C's oracle prints DONE at step 6
@@ -103,7 +110,7 @@ def fit_prices(rows):
 
 def load():
     runs = collections.defaultdict(dict)
-    for f in sorted(glob.glob(os.path.join(RES, "r?.?.jsonl"))):
+    for f in sorted(glob.glob(os.path.join(RES, "*.[ABC].jsonl"))):
         rd, arm, _ = os.path.basename(f).split(".")
         calls = 0
         for line in open(f, errors="replace"):
