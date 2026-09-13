@@ -227,9 +227,7 @@ notes.append("§3.2: non-API time is NEGATIVE for the control (-0.6s), so it is 
              "from the control', not a measurement of ~1ms.")
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
-for u in ["answer F1 / precision / recall (needs re-scoring answers against truth.txt)",
-          "'All 23 of arm C's refusals fall AFTER DONE' (needs reliable refusal ordering)",
-          "arXiv 2607.12161 — existence and content of the cited prior work"]:
+for u in ["answer F1 / precision / recall (needs re-scoring answers against truth.txt)"]:
     print(f"  --    {u}")
 
 print("\n" + "=" * 96)

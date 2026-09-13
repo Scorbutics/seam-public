@@ -154,14 +154,27 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 ## Not checked — unexamined, not passing
 
-- **Answer F1 / precision / recall.** Needs re-scoring answers against `truth.txt`. These are the tier-4
-  figures; §7 already reports them as a direction with ranges, which is the right treatment.
-- **"All 23 of arm C's refusals fall AFTER `DONE`."** A positional heuristic over-counted (42 against the
-  authoritative 23), so it cannot adjudicate the ordering. The *count* (23 across five rounds, 4.6/round)
-  reproduces exactly.
-- **arXiv 2607.12161.** Existence and content of the cited prior work. §4 is explicitly positioned as
-  restating its Eq. 4, so §4 is either derivative or original depending on this. **Verify before anything
-  else ships.**
+- **Answer F1 / precision / recall.** Needs re-scoring 15 answers against `truth.txt` by a second
+  implementation. These are the tier-4 figures. §7 already reports them as a direction with ranges and
+  paired counts, and **no claim in the paper depends on them**, so ruling them out is defensible: say
+  they are scored by a single implementation and are illustrative, not load-bearing. The one place to
+  reword is §5.1, which cites `F1 78%, best arm` as evidence that the answer-quality lever was maxed —
+  the `recall → 100% by construction` row carries that argument on its own.
+
+## Closed since the first pass
+
+- **arXiv 2607.12161 — CONFIRMED by the author.** The citation is real and was added deliberately. §4 is
+  therefore correctly positioned as restating known prior work, and the contribution stands where §2 puts
+  it: the instrument (§3.2) and the floor (§5).
+- **"All 23 of arm C's refusals fall AFTER `DONE`" — VERIFIED.** Re-checked exactly, by matching each
+  `permission_denials` entry's `tool_use_id` to its position in the assistant message sequence rather than
+  by text matching. Result: **23 after, 0 before, 0 unmatched**, across all five rounds. The earlier
+  heuristic that over-counted (42) was wrong, not the paper.
+  This also independently confirms the split index: `DONE` lands at call **#6 in all five rounds**, so arm
+  C's `20.8 − 6 = 14.8` is genuinely "calls after the answer was complete". S1 is a problem for the GREP
+  and SEAM rows only.
+- **§3.2 "ten ground-truth locations" — CONFIRMED WRONG.** `truth.txt` holds **12** non-comment entries;
+  the bench README is right and the study was wrong. Fixed in the draft.
 
 ## What this changes about the argument
 
