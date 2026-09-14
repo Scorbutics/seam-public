@@ -113,11 +113,39 @@ what this study's first draft treated as a discovery:
 **Adjacent work, and a tension worth resolving.** *Redundant or Necessary?* (arXiv 2605.29893) builds a
 benchmark for **detecting** redundant agent steps; it classifies rather than costs them, uses pre-existing
 trajectories with synthetic redundancy inserted, and has no oracle arm — verified by reading. Conversely,
-*When the Tool Decides: LLM Agents Defer Blindly to Graph…* (arXiv 2606.14476) reports agents **under**-
-verifying tool output. `[NOT YET READ IN FULL — flagged deliberately. If it holds, the two results are in
-apparent tension and the reconciliation is probably task-shape: deference where the tool's answer IS the
-deliverable, verification where the agent must assemble a claim it will be held to. Read it before publishing;
-do not cite it on a search snippet.]`
+*When the Tool Decides: LLM Agents Defer Blindly to Graph Neural Network Tools* (arXiv 2606.14476) reports
+agents adopting a tool's output wholesale — prediction-level agreement with a frozen GCN of 0.976–0.992 —
+which reads as the exact opposite of §5. **Read in full, it is not.** It measures a different variable in a
+different regime, and it BOUNDS this study's claim rather than contradicting it. Four reasons, in the order a
+reviewer will want them:
+
+- **It disclaims measuring invocation choice**, which is precisely what §5 measures. Its scaffold instructs the
+  agent to consult tools before answering, so invocation is prompt-encouraged; its §3 says the measurement is
+  *"about what the agent does with the returned output (adopt vs. weigh), not about whether it chooses to
+  invoke"*. §5's dependent variable is the discarded one: how many calls an agent CHOOSES to make once it
+  already holds a complete answer.
+- **Its agent cannot verify.** The tool returns a predicted label with confidence, a *reconstruction* anomaly
+  score and link probabilities — all three from the same frozen GCN, so the anomaly signal is that model's
+  self-assessment rather than outside evidence. The only alternative is the agent's own tool-free reasoning,
+  which is a separate arm and is much worse (0.16 / 0.20 / 0.42 against the parrot's 0.29 / 0.44 / 0.71).
+  Deferring is the better move from where its agent stands. Arm C's agent holds the repository: every claim
+  the oracle makes is a path it can open and settle.
+- **Its cost measure is cross-arm.** The oracle gap `acc(max{A1, A2, A4}) − acc(A1)` ranges over separate arms
+  with different toolboxes. The neighbour-label tool that overtakes the GNN at high homophily (0.81 vs 0.71)
+  lives in A2 and was never in A1's hands, so "stronger agents forgo better alternatives" describes a toolbox
+  the agent was not given. The authors are consistent about this — their gate is *"posed outside the agent for
+  this reason"* — but the abstract invites the stronger reading.
+- **Its title is broader than its own claim.** Its §9 reports agreement of 0.53 (Mistral-7B) and 0.60
+  (OLMo-2-7B) against Qwen's 0.98, and states that near-total parroting is *"partly Qwen-specific… the
+  effect's direction generalizes across families, its extreme magnitude does not"*. Backbones are Qwen2.5
+  0.5B–7B; beyond 7B is left to future work. Cite the scoped claim, not the headline.
+
+Taken together the two results are halves of one rule, stated in §5: an agent defers when the tool's output IS
+the deliverable and no independent check exists, and verifies when it must assemble a claim it will be held to
+against evidence it can reach. `[And their §7 is the same shape as our §8, reached from the other side:
+selective invocation is bounded by AVAILABLE INFORMATION rather than router design — held-out estimators cap
+the best achievable gate at one sixth to one third of the oracle headroom — which is this study's conclusion
+that the floor is not attackable from the engine.]`
 
 **Contribution, stated narrowly:** (a) the replay-oracle ceiling as a reusable instrument; (b) a measurement
 of the verification floor's *cost* under a provably complete answer; (c) corroboration of 2607.12161 from the
@@ -415,6 +443,16 @@ verification drive than the raw call count is. Report both terms; the behaviour 
 Adjusted, the floor is 10.2 executed calls — still 47% of the ideal arm's turns spent after the answer was
 complete.]`
 
+**The floor has a boundary, and the boundary is not capability.** An agent verifies when verification is
+POSSIBLE and the claim is ITS OWN; it defers when the tool's output IS the deliverable and no independent
+check exists. 2606.14476 measures that second regime — a GNN returning the very label the agent must emit,
+with nothing outside the model to check it against — and finds wholesale adoption. This study is the first
+regime: the oracle returns locations, the agent must assemble an answer it is scored on for precision as well
+as completeness, and the repository is open beside it. Neither result transfers to the other's regime, and the
+pair is a sharper claim than either alone. `[WRITE — say this BEFORE a reviewer reaches for that paper. §6.3
+lists "a model that does not re-verify" among the falsifiers to look for, and this is the closest thing the
+literature currently has to one.]`
+
 **This is not distrust of the tool.** There is nothing left to distrust: the answer is complete, correct, and
 was produced by the tool itself. `[WRITE: the behaviour is invariant to output quality — which is precisely
 what makes it un-addressable from the engine, and what the compression literature cannot show because
@@ -499,7 +537,10 @@ no change to it at all. §5 is the model those results were missing.
   ever worked.]`
 - `[Falsifiers still open: a pricing regime without a write premium; a conversation long enough that
   amortisation dominates; a task where the control's context grows faster than the payload. The
-  "model that does not re-verify" falsifier has been looked for on one further model and not found.]`
+  "model that does not re-verify" falsifier has been looked for twice and not found: empirically on a second
+  model (above), and in the literature, where the closest candidate (2606.14476) turns out to measure
+  adopt-vs-weigh in a regime with no independent check available — a different variable in a different
+  regime, as §2 sets out.]`
 - **`[NEW — and now the more valuable follow-up.]`** The probe found something nobody was looking for: arm
   A, the CONTROL, takes **28-41 calls on Sonnet against 21-24 on Opus**. The cost ratio C/A therefore moves
   toward the oracle (0.95 in the probe against the published 1.26) with nothing in §4 having changed — the
@@ -572,7 +613,10 @@ does not check whether the harness's own costs are being attributed to the treat
   in API-Based Coding Agents.* **Read.** The primary prior work for §4.
 - arXiv **2605.29893** — *Redundant or Necessary? A Benchmark for Detecting Redundant Steps in Agent
   Trajectories.* **Read.** Classifies redundant steps; does not cost them; no oracle arm.
-- arXiv **2606.14476** — *When the Tool Decides: LLM Agents Defer Blindly to Graph…* **NOT READ — do not cite
-  until read** (§2).
+- arXiv **2606.14476** — *When the Tool Decides: LLM Agents Defer Blindly to Graph Neural Network Tools, and
+  Stronger Backbones Defer More.* Wang & Vemuri, 12 Jun 2026. **Read in full.** Scopes §5 rather than
+  contradicting it — it measures adopt-vs-weigh under prompt-encouraged invocation, explicitly not invocation
+  choice, in a regime where no independent check is available (§2). Its strong-parrot magnitude is scoped to
+  the Qwen2.5 family by its own §9.
 - arXiv **2606.10209** — *Less Context, Better Agents: Efficient Context Engineering for Long-Horizon
   Tool-Using LLM Agents.* **NOT READ.**
