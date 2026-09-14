@@ -47,19 +47,37 @@ any tool-builder can freeze their tool's outputs and measure this bound before i
 
 ## 1. Motivation
 
-`[kcC]` Six paired rounds: **2.7x fewer tool calls, 17% higher cost.** `[n=5]` Re-measured on a corrected
-harness with the oracle arm added:
+Seam traces a code flow across a repository — which files participate, where it crosses a language or a
+service boundary, where it ends. The working hypothesis while building it was the obvious one: a tool that
+answers in fewer steps than an agent grepping its way to the same place should cost less than that agent.
+
+`[kcC]` Six paired rounds measured the first half of that and refused the second: **2.7x fewer tool calls,
+and a 17% higher bill.** Every token class the tool was built to move, moved the right way — output tokens
+−19%, cache reads −19%, API time −19% — and the bill rose anyway, because the one class that went UP was the
+cache **write** (1.79x). Wall clock rose 1.09x.
+
+**Fewer calls, fewer tokens, more money.** That is the observation this study exists to explain.
+
+Explaining it needed an instrument rather than another round of engine work. While both arms are imperfect
+tools, a flat result is always attributable to the tool not being good enough *yet* — and that hypothesis
+cannot be falsified by improving the tool, because there is always another improvement. So a third arm was
+built: a **replay oracle** that serves a real Seam run's recorded output with no latency, no wrong turns and
+no anchor risk (§3.2).
+
+**Scope, stated before the numbers: one task, one repository, five paired rounds.** The repository is
+Keycloak — a monolith, a Java server with a TypeScript admin client — and the task is a single cross-language
+trace. Every figure below is `[n=5]` on that one case unless marked `[kcC]`, which is the earlier six-round
+measurement on the same repository. Re-measured on a corrected harness with the oracle arm added:
 
 | per run, mean | GREP | SEAM | REPLAY (ideal) |
 |---|---|---|---|
 | tool calls | 22.4 | **14.4** | 20.8 |
 | model turns | 23.4 | **15.4** | 21.8 |
 | context tokens / turn | 41,882 | **83,955** | 57,152 |
-| thinking tokens | 870 | **1,940** (2.23x) | **1,890** (2.17x) |
+| thinking tokens `[AUDIT S2]` | 870 | **1,940** (2.23x) | **1,890** (2.17x) |
 | cache write | 36,779 | 62,923 | 49,991 |
 | cache read | 943,264 | 1,229,982 | 1,195,918 |
 | wall clock | 85s | 119s | 89s |
-| answer F1 | 69% | 75% | **78%** |
 | refused calls (apparatus) | 0.0 | 1.6 | 4.6 |
 | **billed cost, raw** | **$1.00** | **$1.42 (1.42x)** | **$1.26 (1.26x)** |
 | **billed cost, denial-adjusted** | **$1.00** | **$1.36 (1.36x)** | **$1.14 (1.14x)** |
@@ -71,15 +89,18 @@ Paired, per round (raw) — not a mean artefact:
 | SEAM vs GREP | 1.01x | 1.37x | 1.51x | 1.68x | 1.53x | **5 of 5** |
 | REPLAY vs GREP | 1.26x | 1.18x | 1.00x | 1.41x | 1.48x | **5 of 5** |
 
-Every axis the tool was built to move, moved — calls, turns, and quality. The bill moved the other way, and
-**so did the ideal tool's**.
+Every axis the tool was built to move, moved. The bill moved the other way — and **so did the ideal tool's**.
 
-`[WRITE — the denial adjustment, and why the raw row is not the claim.` Arms B and C are denied content
-search, so some of their turns are refusals. A refused call still costs a turn — the prompt is re-sent — but it
-is **imposed by the harness, not chosen by the agent**, so it belongs in the apparatus, not the result. The
-adjusted row subtracts one prompt re-read per refusal, which is what a refusal actually costs; subtracting a
-*full average turn* would over-credit, because the payload's cache writes happened regardless. **§6.2.4 states
-which claim each row supports.**`]`
+Answer quality is deliberately absent from this table. It points the tool's way and is reported in §7 as a
+*direction* with ranges and paired counts, never as a figure: n=5, one task, overlapping intervals. Nothing
+in the argument rests on it.
+
+**The denial adjustment, in one paragraph.** Arms B and C are denied content search, so some of their turns
+are refusals. A refusal still costs a turn — the prompt is re-sent — but the harness imposed it rather than
+the agent choosing it, so the adjusted row subtracts one prompt re-read per refusal. (Subtracting a *full*
+average turn would over-credit: the payload's cache writes happened regardless.) This is not bookkeeping.
+It is what moves the ideal arm from **losing** the context trade to **drawing** it (§4.1), so §4.3's claim
+that the write premium is the entire residual depends on it. §6.2.4 states which pitch supports which row.
 
 ---
 
@@ -97,18 +118,19 @@ what this study's first draft treated as a discovery:
 
 **Three things remain open, and this study addresses them.**
 
-1. **The opposite intervention.** That work *compresses* — it removes tool output. This study *injects*: a
-   structural tool adds a large payload to buy turn reduction. Opposite direction, same cost conclusion, which
-   makes this an independent corroboration rather than a replication. `[Also a different cache tier: 1h TTL
-   (write 2.0x input, 20:1 over reads) against their 5m tier (1.25x, 12.5:1) — the premium here is larger, so
-   the effect should be, and is, stronger.]`
-2. **Verification is named as a mechanism but never isolated.** That paper observes that "if compression
-   removes context the model later needs, the model can search again, re-read files, or take extra diagnostic
-   turns" — but it does not separate that from tool inadequacy, because in a compression design the two are
-   confounded by construction: removing context is exactly what makes re-reading rational. Our oracle arm
-   removes the confound.
-3. **No ceiling arm exists in this literature.** Arms are competing systems (baseline, RTK, Headroom), all
-   imperfect. Nobody measures what an *optimal* tool would cost.
+1. **The opposite intervention.** That work **compresses** — it removes tool output to save tokens. This
+   study **injects** — it adds a large payload to buy a reduction in calls. Opposite directions, and the same
+   conclusion: the bill goes up. That makes this an independent corroboration rather than a replication.
+   `[Also a different cache tier: 1h TTL (write 2.0x input, 20:1 over reads) against their 5m tier (1.25x,
+   12.5:1) — the premium here is larger, so the effect should be stronger, and is.]`
+2. **Verification, isolated.** In a compression design re-reading is *rational*: context was removed, so the
+   agent legitimately needs it back. Verification and tool inadequacy are therefore confounded by
+   construction, and 2607.12161 names the mechanism without being able to separate it. The oracle removes
+   nothing and gets nothing wrong — the answer it hands over is complete and correct — so every further call
+   is verification and nothing else.
+3. **No ceiling arm exists in this literature.** Its arms are competing real systems (baseline, RTK,
+   Headroom), all imperfect. Nobody measures what an **optimal** tool would cost — a tool that could not
+   exist in practice, which is exactly what makes it a bound on the ones that can.
 
 **Adjacent work, and a tension worth resolving.** *Redundant or Necessary?* (arXiv 2605.29893) builds a
 benchmark for **detecting** redundant agent steps; it classifies rather than costs them, uses pre-existing
@@ -188,22 +210,28 @@ tool can lose:
 The step *selection* is idealised; the step *content* is not. No line was written for the benchmark; the five
 recorded results were chosen because their union covers all 12 ground-truth entries (`bench/replay-ceiling/truth.txt`).
 
+**What the payload actually is.** The five steps deliver **43 KB of text — about 13k tokens of cache write
+above the control's baseline**. Step 1 is a route table (147 routes matched, one with both sides resolved).
+Step 2 is the agent map — the region to read instead of running a grep loop — and at 27 KB it is the bulk of
+the payload. Step 3 is the cross-stack coupling of the Java resource. Steps 4 and 5 resolve eight named
+symbols to a file and a line. That is what "injecting a structural payload" means everywhere in this paper,
+and it is why the write premium is the term that matters: 13k tokens written once at 2.0x input is a real
+charge, and the tool's entire purpose is to shorten the window it has to amortise over.
+
 **Why this is the right instrument.** Every prior negative result in this project — and every arm in the
 compression literature — compares imperfect systems, so a flat result is always attributable to the tool
-being not-yet-good-enough. That hypothesis is unfalsifiable in the limit: there is always another render fix.
-The oracle makes it falsifiable by *saturating* it. **If arm C cannot beat the control, no engine improvement
-can.** The argument is definitional, not statistical, which is what lets it stand at n=5.
+being not-yet-good-enough. That hypothesis cannot be falsified by improving the tool, because there is always
+another improvement. The oracle makes it falsifiable by *saturating* it: **if the best imaginable version of
+a retrieval tool cannot beat the control, no version of it can.** The question then stops being "is this
+engine good enough yet?" and becomes a question about the whole category — which is why one oracle arm is
+worth more than another round of engine work, and why a result this small in n can carry a claim this large.
+The argument is definitional, not statistical.
 
-**In one sentence:** if the best imaginable version of a retrieval tool cannot beat the control, then no
-version of it can — and the question stops being *"is this engine good enough yet?"* and becomes a question
-about the whole category. That is why one oracle arm is worth more than another round of engine work, and
-why a result this small in n can carry a claim this large.
-
-Be precise about what "upper bound" does and does not mean. It bounds the class of tools that answer by
-**putting a payload into the agent's context**, which is what every retrieval tool here does. It says
-nothing about a tool that changes the agent's *loop* — one that suppresses re-verification, or that
-persists its payload across conversations (§8.2). Those escape the bound because they are not playing the
-game it saturates.
+**What the bound covers, and what it does not.** It bounds tools that answer by **putting a payload into the
+agent's context** — which is what every retrieval tool here does. It says nothing about a tool that changes
+what the agent *does* with an answer: one that stops it re-verifying, or that keeps its payload across
+conversations instead of paying to write it again each time (§8.2). Those are not better retrieval. They are
+a different game, and the oracle does not bound them.
 
 **Cost to reproduce for any tool-builder:** freeze your tool's outputs on one task, serve them from `cat`,
 write a 300-byte manual. `[Argue this belongs in every agent-tool project's evaluation, before the engine
@@ -233,8 +261,10 @@ auxiliary model.]`
 
 ## 4. Background — the cost mechanism, and which half of it injection escapes
 
-`[WRITE — compress hard. This section is BACKGROUND (see §2), not a result. Its job is to make the paper
-self-contained and to state the injection-side form of a known argument. Cite 2607.12161 throughout.]`
+**This section is background, not a result.** The cost mechanism below is established prior work —
+2607.12161 measures it at n=2,908 and formalises the marginal cost of a token delivered at turn *t*. §4's
+job is to make this paper self-contained and to state that argument in its **injection-side** form, because
+the literature states it for compression. The results are §5 and the instrument is §3.2.
 
 ### 4.0 In plain terms, before the arithmetic
 
@@ -270,11 +300,11 @@ of the conversation but the sum of its sizes:
 ```
 
 **Why this, and not "how big did the context get".** An LLM keeps nothing between turns: the whole
-conversation is re-sent every time. So the quantity you are billed for is not the context's final size but
-the **sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns
-while doubling the size of each one buys exactly nothing. This is the single fact that makes tool-call
-count a bad proxy for cost, and it is why the two axes in §1 can move in opposite directions without
-either being mismeasured.
+conversation is re-sent every time. What you are billed for is therefore not the context's final size but the
+**sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns while
+doubling each one buys nothing. This is 2607.12161's `N_future_reads` seen from the other side, and it is the
+single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite directions
+without either being mismeasured.
 
 ![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
 
@@ -327,11 +357,13 @@ allowed* — and the tool sets its own budget.
 
 ### 4.2 The write premium and the break-even
 
-A tool is cheaper on the write/read trade only if **every extra token it puts into context removes twenty
-tokens of re-reading**. `[kcC]`, where turns did fall 2.5x and the trade was genuinely made: ratio **0.176**
-against a 0.050 bar — fails by 3.5x. Counterfactuals: the extra payload would have to fit in 6,838 tokens
-(the map alone is ~7k), or the tool would have to answer in **3.9 turns — fewer turns than it makes tool
-calls** (8.7), which is unreachable by construction.
+At the 1h cache TTL a write costs 2.0x input and a read 0.1x, so a tool is cheaper on that trade only if
+**every extra token it puts into context removes twenty tokens of re-reading** — a bar of 0.050. `[kcC]`,
+where turns did fall 2.5x and the trade was genuinely attempted, the ratio is **0.176**: it fails by 3.5x.
+The two escapes are both closed by arithmetic. The payload would have to fit in 6,838 tokens (the map alone
+is ~7k), or the tool would have to answer in **3.9 turns — fewer turns than it makes tool calls** (8.7).
+`[State the TTL beside the bar: at the 5m tier it is 0.080 (12.5:1), a LOWER bar. Both tiers are measured
+in §6.3.]`
 
 ### 4.3 The amortisation inversion — the ONLY surviving cost term
 
