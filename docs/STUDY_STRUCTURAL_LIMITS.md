@@ -287,24 +287,20 @@ entire remaining cost.**
 
 ![One payload, two bills](figures/01-two-bills.svg)
 
-***Figure 1.** The bytes that let the agent stop early are the same bytes every remaining turn must carry. One payload, two terms, moving in opposite directions.*
+***Figure 1.** The two terms and their prices: $0.50/Mtok paid on every remaining turn, against $10.00/Mtok paid once.*
 
 
 ### 4.1 The context identity
-
-An LLM is stateless; the whole conversation is re-sent every turn. So the dominant cost term is not the size
-of the conversation but the sum of its sizes:
 
 ```
     cache_read  ≈  turns  ×  context_per_turn
 ```
 
-**Why this, and not "how big did the context get".** An LLM keeps nothing between turns: the whole
-conversation is re-sent every time. What you are billed for is therefore not the context's final size but the
-**sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns while
-doubling each one buys nothing. This is 2607.12161's `N_future_reads` seen from the other side, and it is the
-single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite directions
-without either being mismeasured.
+§4.0's first term, made arithmetic. What you are billed for is not the context's final size but the **sum of
+its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns while doubling each
+one buys nothing. This is 2607.12161's `N_future_reads` seen from the injection side, and
+it is the single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite
+directions without either being mismeasured.
 
 ![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
 
@@ -318,8 +314,7 @@ approximation error IS the cache write — the term §4.3 calls the entire findi
 
 `[n=5]` Verified: GREP 23.4 × 41.9k ≈ 980k (actual 943k); SEAM 15.4 × 84.0k ≈ 1,294k (actual 1,230k).
 
-A retrieval tool moves **both factors, in opposite directions, with the same bytes**: the payload that removes
-turns is the payload that inflates every remaining turn. It lowers read cost only if
+So a payload lowers read cost only if
 
 ```
     turns_ratio  ×  context_ratio  <  1
@@ -346,9 +341,7 @@ is −10,244; on total context, +2,968. All three are ~0 against a ~1M baseline,
 definition — restate it under one and drop the spurious precision. This also moves §4.3: read term
 −$0.0051 not +$0.0002, total gap $0.1317 not $0.1370, **+13% not +14%**.]` *An ideal
 retrieval tool does not lose the turns x context trade. It draws it.* The shipped tool still loses it (1.182),
-so the trade is winnable in principle and is not being won in practice. `[WRITE: this is the result §4.3 needs
-— with the read term neutralised, the write premium is the ONLY term left, and §4.3 stops being one mechanism
-among several.]`
+so the trade is winnable in principle and is not being won in practice.
 
 Restated as a **turn budget** — the form most useful to a tool designer: grep spent 943k tokens of reading, so
 at 84.0k of context per turn Seam may take **11.2 turns**; it took 15.4. The oracle, at 57.2k, may take 16.5;
