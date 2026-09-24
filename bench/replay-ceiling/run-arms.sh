@@ -79,13 +79,17 @@ run_arm () {  # run_arm <letter> <prompt-var> <deny-array-name> <allowed-tools..
   local scratch="$OUT/.scratch-$letter"; rm -rf "$scratch"; mkdir -p "$scratch"
   local started ended
   started=$(date +%s)
+  # --add-dir "$REPO": since Claude Code ~2.1.28x, Bash is confined to the working directory plus --add-dir
+  # directories, so a repository outside the harness had its shell verbs REFUSED even when granted — silently,
+  # and hardest on the grep control (results-oracle-grep/discarded-outside-workdir/WHY.md). 2.1.239, which ran
+  # the published rounds, did not enforce this. Identical for every arm.
   # --include-partial-messages is what makes THINKING measurable: stream-json alone stores thinking blocks
   # with EMPTY content, which is why the earlier benchmark could only ever report total output tokens and
   # the "thinking went up" reading was never directly evidenced.
   claude -p "$prompt" \
     --model "$MODEL" \
     --output-format stream-json --verbose --include-partial-messages --max-turns 60 \
-    --add-dir "$scratch" \
+    --add-dir "$scratch" --add-dir "$REPO" \
     --allowedTools "$@" --disallowedTools "${deny[@]}" \
     > "$OUT/$ROUND.$letter.jsonl" 2>"$OUT/$ROUND.$letter.stderr"
   ended=$(date +%s)
