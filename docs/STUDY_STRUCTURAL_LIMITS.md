@@ -211,12 +211,59 @@ The step *selection* is idealised; the step *content* is not. No line was writte
 recorded results were chosen because their union covers all 12 ground-truth entries (`bench/replay-ceiling/truth.txt`).
 
 **What the payload actually is.** The five steps deliver **43 KB of text — about 13k tokens of cache write
-above the control's baseline**. Step 1 is a route table (147 routes matched, one with both sides resolved).
-Step 2 is the agent map — the region to read instead of running a grep loop — and at 27 KB it is the bulk of
-the payload. Step 3 is the cross-stack coupling of the Java resource. Steps 4 and 5 resolve eight named
-symbols to a file and a line. That is what "injecting a structural payload" means everywhere in this paper,
-and it is why the write premium is the term that matters: 13k tokens written once at 2.0x input is a real
-charge, and the tool's entire purpose is to shorten the window it has to amortise over.
+above the control's baseline**. Excerpts are verbatim from `bench/replay-ceiling/steps/`.
+
+**Step 1 — the route table** (1.9 KB). 147 routes matched; exactly one has both sides resolved, and that one
+is the crossing the task asks about:
+
+```
+# Locate route: /admin/realms
+147 route(s) matched; 1 with BOTH sides resolved — the crossing itself
+
+- /admin/realms
+    serves   services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:232
+    fetches  js/libs/keycloak-admin-client/src/resources/realms.ts:409
+```
+
+**Step 2 — the agent map** (27 KB, the bulk of the payload): the region to read instead of running a grep
+loop, as pinned centers with their source lines.
+
+```
+anchor: Realms | resolution: FULL | edges: 956 grounded + 678 shared-key crossing(s) | unresolved: 0
+
+  Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:22) — PINNED CENTER
+      22> export class Realms extends Resource {
+  getEvents (services/.../admin/RealmAdminResource.java:893) — PINNED CENTER
+      893> @Path("events")
+```
+
+**Step 3 — the cross-stack coupling** of the Java resource (4.7 KB), keyed by route rather than by symbol:
+
+```
+# Coupling of RealmAdminResource (cross-stack data boundary)
+shared keys: 40 | counterpart sites: 57
+
+## http-route "/*"  — anchor writes
+  ● extension (services/.../admin/RealmAdminResource.java:657)  — THE ANCHOR'S OWN ACCESS
+        657> @Path("{extension}")
+```
+
+**Steps 4 and 5 — eight named symbols** resolved to a file and a line (5.7 KB + 4.4 KB):
+
+```
+## updateRealm — 1 definition(s)
+- server-spi-private/.../models/utils/RepresentationToModel.java:285#updateRealm   [method]
+    public static void updateRealm(RealmRepresentation rep, RealmModel realm, KeycloakSession session) {
+
+## getRealm — 25 definition(s) of 207 — narrow with `--in <path-prefix>`
+```
+
+That last line is worth reading twice, because it explains the payload's *size*. `getRealm` has 207
+definitions in this repository; the tool returns 25 of them and tells the agent to choose. **A structural
+tool is large partly because it declines to disambiguate** — it is honest about what it cannot narrow, and
+honesty costs bytes. Those bytes are written into the cache once, at 2.0x input, and the tool's entire
+purpose is to shorten the window they have to amortise over. That is the whole tension of §4, visible in
+one line of output.
 
 **Why this is the right instrument.** Every prior negative result in this project — and every arm in the
 compression literature — compares imperfect systems, so a flat result is always attributable to the tool
