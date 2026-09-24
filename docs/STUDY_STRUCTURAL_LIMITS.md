@@ -37,7 +37,10 @@ zero. The entire remaining gap, **+13%**, is the cache-write premium and nothing
 1.36x adjusted while cutting tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
-turn reduction the whole trade depends on does not arrive even at the ceiling. **The write premium is the
+turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
+channel as well removes about 40% of its post-answer calls and leaves the rest. The floor is the urge to
+verify; the channel only sets its price. Used alongside grep, the ideal tool breaks even with grep alone. Used
+instead of it, it loses. **The write premium is the
 whole residual**: an ideal retrieval tool breaks even on turns x context and then loses by precisely the
 premium it paid to put its answer in the context. Because the oracle is optimal by construction, this is a
 definitional argument rather than a statistical one. We report the ceiling method as the transferable result:
@@ -543,9 +546,49 @@ the answer was complete**. It does **not** optimise *checking* the answer. Once 
 is nothing left to ask it, and arm C is denied search, so every check goes through whole-file reads. That is
 the one engine variable arm C leaves at its worst rather than its best, and §5.2 measures what it costs. The
 residual is therefore not addressable from the *answering* side of the engine by definition; whether a
-checking channel addresses it is an empirical question, and arm D answers it. `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read
-term is indistinguishable from zero) but the write premium on a payload the agent then declined to treat as
-final.]`
+checking channel addresses it is an empirical question. Arm D answers it (§5.2): **about 40% of it does,
+and the rest does not.** `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read term is
+indistinguishable from zero) but the write premium on a payload the agent then declined to treat as final.]`
+
+### 5.2 What the floor's size includes — arm D
+
+Arm C has nothing left to ask after `DONE` and is denied search, so each check costs it a refused `grep` and
+then whole-file reads. That leaves its post-answer count mixing two things: **the urge to verify**, and **the
+price of verifying without a channel**. Arm D separates them. It is arm C unchanged — same oracle, same
+manual — plus the search arm A has. Arms A, C and D ran together, five paired rounds in randomised order, on
+one rig (`bench/replay-ceiling/results-oracle-grep/`).
+
+| per run, mean — this rig | GREP | REPLAY | REPLAY + grep |
+|---|---|---|---|
+| tool calls | 35.2 | 32.2 | **21.8** |
+| refused | 0.0 | 7.8 | 0.0 |
+| calls after `DONE` | — | 26.2 | **15.8** |
+| — of which search | — | 0 (7.8 refused, all `grep`/`rg`) | 4.8 |
+| — of which file reads | — | 17.0 | 10.8 |
+| billed cost vs GREP | 1.00 | 1.23 raw · 1.06 adjusted | **0.91** |
+
+Three findings, in order of how firmly the data holds them:
+
+1. **About 40% of the ideal arm's post-answer calls are the price of the missing channel.** Given search, arm D
+   makes **10.4 fewer calls after `DONE`** than arm C — fewer in all 5 paired rounds (5, 11, 7, 15, 14; paired
+   t = 5.36, df = 4). It stops reaching for a tool it lacks, and replaces whole-file reads with targeted
+   searches.
+2. **The floor survives the channel.** With search available and nothing refused, arm D still makes **15.8
+   calls after a provably complete answer** — 72% of all its calls. It walked the oracle to `DONE` first in
+   every round and searched nothing before it. A better way to check does not stop the agent checking. It
+   makes each check cheaper.
+3. **On cost, the ideal tool used alongside grep is at parity with grep alone.** Arm D costs **0.91x** the
+   control, which is not distinguishable from 1.0 at n=5 (sd 0.28; above 1.0 in 1 round, level in 1, below
+   in 3). It is cheaper than arm C in all 5 rounds. Arm C still loses (1.06x adjusted, 1.23x raw), the same
+   direction as the published rounds. So the headline depends on the pitch §6.2.4 separates. Used **instead
+   of** grep, the ideal tool loses. Used **alongside** grep, it breaks even. It never clearly wins.
+
+**Read this table against itself, never against §1's.** On this rig every arm makes ~1.55x the published
+number of calls (GREP 35.2 against 22.4), and arm C's post-answer count is 1.77x (26.2 against 14.8). The CLI
+is 43 versions newer and keycloak six days newer. The floor's *existence* reproduces — it is larger here, not
+smaller — but its *magnitude* depends on the rig, and only comparisons within this batch are paired. A first
+batch was discarded because the harness could not reach the repository from the shell
+(`results-oracle-grep/discarded-outside-workdir/WHY.md`, §6.1).
 
 ---
 
@@ -560,6 +603,13 @@ final.]`
   Direction is what made it disqualifying: a bias *against* a conclusion is a conservative bound; one that
   manufactures it is not.
 - Denied attempts still cost a turn; reported separately from real contamination. Arm C pays 4.6/round.
+- **A grant's meaning depends on the CLI version, not only on its flags.** From about Claude Code 2.1.28x,
+  Bash is confined to the working directory plus `--add-dir` directories. The harness runs outside the
+  repository, so on 2.1.282 every arm was refused shell verbs it had been explicitly granted. On 2.1.239,
+  which ran the published rounds, it was not. It surfaced as refusals of `ls` and `find` in the grep control,
+  and it disabled the shell `grep` arm D exists to test. The batch was discarded
+  (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
+  every arm.
 - Thinking text is redacted even with `--include-partial-messages`; `estimated_tokens` is the measurement.
 
 ### 6.2 Design asymmetries, stated
@@ -572,7 +622,9 @@ final.]`
    - *If the tool is pitched as a grep REPLACEMENT*, the refusals are **real friction a user would meet**, and
      the raw row (SEAM 1.42x, REPLAY 1.26x) is the honest figure.
    - *If it is pitched as a grep COMPANION* — which is how it actually ships — the refusals are **pure
-     apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure.
+     apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure. Arm D now measures this pitch
+     directly instead of by adjustment. The ideal tool plus grep costs **0.91x** grep alone, which is not
+     distinguishable from parity (§5.2).
    - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
      reading. **State the pitch before quoting a number.**
    - Arm C's verification is forced through whole-file `Read`s rather than targeted search. This was a
@@ -653,7 +705,10 @@ python3 bench/replay-ceiling/verify_independent.py   # a SECOND implementation, 
 `measure.py`. Two implementations that never shared code must agree or one of them is wrong; the `[AUDIT]`
 markers throughout this draft are where they did not. Full report: [`STUDY_AUDIT.md`](STUDY_AUDIT.md).
 ## Appendix B — discarded batches, and what they bought
-`results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md`
+`results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md` ·
+`results-oracle-grep/discarded-outside-workdir/WHY.md` — a newer CLI confined Bash to the working directory,
+disabling granted shell verbs on every arm (§6.1). Its hint pointed the wrong way — that search barely cut
+post-answer calls — because arm D's own shell `grep` was among the verbs refused.
 ## Appendix C — the review that corrected this draft
 The denial adjustment in §1, §4.1, §4.3 and §5 came from external review of the first draft, which caught that
 refused turns were being reported as behaviour. Every adjusted figure was re-derived from the transcripts
