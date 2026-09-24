@@ -229,12 +229,8 @@ is the crossing the task asks about:
 loop, as pinned centers with their source lines.
 
 ```
-anchor: Realms | resolution: FULL | edges: 956 grounded + 678 shared-key crossing(s) | unresolved: 0
-
   Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:22) — PINNED CENTER
       22> export class Realms extends Resource {
-  getEvents (services/.../admin/RealmAdminResource.java:893) — PINNED CENTER
-      893> @Path("events")
 ```
 
 **Step 3 — the cross-stack coupling** of the Java resource (4.7 KB), keyed by route rather than by symbol:
