@@ -347,7 +347,7 @@ directions without either being mismeasured.
 
 ![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
 
-***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. SEAM's rectangle is the narrowest and also the largest; the ideal arm's is barely smaller than the control's.*
+***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. The hatched strip is refused calls, which the harness imposed. Leave them out and the ideal arm covers 983k against the control's 980k — §4.1's break-even as two equal areas. SEAM's rectangle is the narrowest and stays the largest either way.*
 
 `[AUDIT S4/S8 — 'context_per_turn' is (cache_read + cache_write)/turns; that definition appears nowhere in
 this draft and must be stated. With it substituted, 'turns × context_per_turn ≈ cache_read' reads
@@ -531,15 +531,19 @@ compression makes re-reading rational.]`
 
 | lever | owner | state in arm C | did it help? |
 |---|---|---|---|
-| engine latency → 0 | engine | achieved (−1.0s vs +20.6s) | no |
+| engine latency → 0 | engine | achieved — non-API time indistinguishable from the control (arm B: +20.6s) | no |
 | answer completeness → 100% | engine | achieved by construction — the five steps cover all 12 ground-truth entries | no |
 | documentation cost → 0 | engine | achieved (300 B vs 42 KB) | no |
+| **verification channel** | engine | **not provided** — nothing left to query after `DONE`, and search is denied | — |
 | post-answer verification | **model** | unchanged | — |
 
-Arm C sets **every engine-controllable variable to its optimum simultaneously** — not one at a time — and
-still costs **1.13x the control** (adjusted; 1.26x raw), spending **10.2 executed calls after the answer was
-complete**. The residual is therefore not addressable from the engine side *by definition*: it is what remains
-when the engine is perfect. `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read
+Arm C sets **every engine variable that governs GETTING the answer to its optimum simultaneously** — not one
+at a time — and still costs **1.13x the control** (adjusted; 1.26x raw), spending **10.2 executed calls after
+the answer was complete**. It does **not** optimise *checking* the answer. Once the oracle prints `DONE` there
+is nothing left to ask it, and arm C is denied search, so every check goes through whole-file reads. That is
+the one engine variable arm C leaves at its worst rather than its best, and §5.2 measures what it costs. The
+residual is therefore not addressable from the *answering* side of the engine by definition; whether a
+checking channel addresses it is an empirical question, and arm D answers it. `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read
 term is indistinguishable from zero) but the write premium on a payload the agent then declined to treat as
 final.]`
 
@@ -571,8 +575,9 @@ final.]`
      apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure.
    - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
      reading. **State the pitch before quoting a number.**
-   - Arm C's verification is also forced through whole-file `Read`s rather than targeted search, which makes
-     its absolute cost pessimistic under either reading.
+   - Arm C's verification is forced through whole-file `Read`s rather than targeted search. This was a
+     one-line caveat here; it turned out to explain why the ideal arm makes MORE calls than the shipped
+     tool, so it is measured in §5.2 rather than conceded here.
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 296" width="720" height="296" role="img" aria-labelledby="t d">
 <title id="t">You pay the area, not the endpoint</title>
-<desc id="d">Three rectangles on shared axes: turns wide by context-per-turn tall. GREP is wide and short at 980k tokens, SEAM is narrow and tall at 1293k, REPLAY is wide and mid at 1246k.</desc>
+<desc id="d">Three rectangles on shared axes, width turns by height context per turn, each with a hatched strip for refused calls. Leaving refusals out, GREP covers 980k, SEAM 1,159k and the ideal REPLAY arm 983k, level with the control.</desc>
 <style>
   :root{
     --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
@@ -25,6 +25,12 @@
 </style>
 <rect class="bg" x="0" y="0" width="720" height="296"/>
 
+  <defs>
+    <pattern id="refused" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
+      <rect width="5" height="5" fill="var(--panel)"/>
+      <line x1="0" y1="0" x2="0" y2="5" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    </pattern>
+  </defs>
   <line class="ax" x1="46" y1="238" x2="704" y2="238"/>
   <g class="gl">
     <line x1="46" y1="196" x2="704" y2="196"/><line x1="46" y1="154" x2="704" y2="154"/>
@@ -36,27 +42,35 @@
   </g>
   <text class="tk" x="10" y="46">context</text><text class="tk" x="10" y="60">per turn</text>
 
-  <!-- GREP : 23.4 turns x 41,882 -->
+  <!-- GREP : 23.4 turns x 41,882, no refusals -->
   <rect x="50" y="150" width="176" height="88" class="a" opacity="0.30"/>
   <rect x="50" y="150" width="176" height="88" fill="none" stroke="var(--arm-a)" stroke-width="1.5"/>
   <text class="big" x="138" y="196" text-anchor="middle">980k</text>
   <text class="lb" x="50" y="262">GREP</text>
-  <text class="lbs" x="50" y="279">23.4 turns × 41.9k</text>
+  <text class="lbs" x="50" y="279">23.4 turns, 0 refused</text>
 
-  <!-- SEAM : 15.4 turns x 83,955 -->
-  <rect x="280" y="61" width="116" height="177" class="b" opacity="0.30"/>
+  <!-- SEAM : 15.4 turns (1.6 refused) x 83,955 -->
+  <rect x="280" y="61" width="104" height="177" class="b" opacity="0.30"/>
+  <rect x="384" y="61" width="12" height="177" fill="url(#refused)"/>
   <rect x="280" y="61" width="116" height="177" fill="none" stroke="var(--arm-b)" stroke-width="1.5"/>
-  <text class="big" x="338" y="155" text-anchor="middle">1,293k</text>
+  <text class="big" x="332" y="150" text-anchor="middle">1,159k</text>
+  <text class="lbs" x="332" y="167" text-anchor="middle">+134k refused</text>
   <text class="lb" x="280" y="262">SEAM</text>
-  <text class="lbs" x="280" y="279">15.4 turns × 84.0k</text>
+  <text class="lbs" x="280" y="279">15.4 turns, 1.6 refused</text>
 
-  <!-- REPLAY : 21.8 turns x 57,152 -->
-  <rect x="510" y="117" width="164" height="121" class="c" opacity="0.30"/>
+  <!-- REPLAY : 21.8 turns (4.6 refused) x 57,152 -->
+  <rect x="510" y="117" width="129" height="121" class="c" opacity="0.30"/>
+  <rect x="639" y="117" width="35" height="121" fill="url(#refused)"/>
   <rect x="510" y="117" width="164" height="121" fill="none" stroke="var(--arm-c)" stroke-width="1.5"/>
-  <text class="big" x="592" y="182" text-anchor="middle">1,246k</text>
+  <line x1="639" y1="117" x2="639" y2="238" stroke="var(--arm-c)" stroke-width="1" stroke-dasharray="3 3"/>
+  <text class="big" x="574" y="176" text-anchor="middle">983k</text>
+  <text class="lbs" x="574" y="193" text-anchor="middle">≈ GREP's 980k</text>
+  <text class="lbs" x="656" y="108" text-anchor="middle">+263k</text>
   <text class="lb" x="510" y="262">REPLAY (ideal)</text>
-  <text class="lbs" x="510" y="279">21.8 turns × 57.2k</text>
+  <text class="lbs" x="510" y="279">21.8 turns, 4.6 refused</text>
 
-  <text class="lbs" x="704" y="30" text-anchor="end">width = turns · height = context per turn · AREA = what you pay</text>
+  <rect x="430" y="18" width="12" height="12" fill="url(#refused)" stroke="var(--ink-soft)" stroke-width="0.8"/>
+  <text class="lbs" x="448" y="28">refused calls — imposed by the harness</text>
+  <text class="lbs" x="704" y="46" text-anchor="end">width = turns · height = context/turn · AREA = what you pay</text>
 
 </svg>
