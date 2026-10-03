@@ -79,13 +79,17 @@ run_arm () {  # run_arm <letter> <prompt-var> <deny-array-name> <allowed-tools..
   local scratch="$OUT/.scratch-$letter"; rm -rf "$scratch"; mkdir -p "$scratch"
   local started ended
   started=$(date +%s)
+  # --add-dir "$REPO": since Claude Code ~2.1.28x, Bash is confined to the working directory plus --add-dir
+  # directories, so a repository outside the harness had its shell verbs REFUSED even when granted — silently,
+  # and hardest on the grep control (results-oracle-grep/discarded-outside-workdir/WHY.md). 2.1.239, which ran
+  # the published rounds, did not enforce this. Identical for every arm.
   # --include-partial-messages is what makes THINKING measurable: stream-json alone stores thinking blocks
   # with EMPTY content, which is why the earlier benchmark could only ever report total output tokens and
   # the "thinking went up" reading was never directly evidenced.
   claude -p "$prompt" \
     --model "$MODEL" \
     --output-format stream-json --verbose --include-partial-messages --max-turns 60 \
-    --add-dir "$scratch" \
+    --add-dir "$scratch" --add-dir "$REPO" \
     --allowedTools "$@" --disallowedTools "${deny[@]}" \
     > "$OUT/$ROUND.$letter.jsonl" 2>"$OUT/$ROUND.$letter.stderr"
   ended=$(date +%s)
@@ -147,6 +151,30 @@ $CONTRACT"
 DENY_C=("${COMMON_DENY[@]}" "${NO_SEARCH[@]}" "Bash(bun:*)")
 ARM_C () { run_arm C PROMPT_C DENY_C "Bash($HERE/call-flow:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" \
         "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read; }
+
+# ── ARM D: the replay ceiling PLUS grep ─────────────────────────────────────────────────────────────────
+# Arm C is ideal for GETTING the answer and has no channel at all for CHECKING it: once the oracle prints DONE
+# there is nothing left to ask, and every one of its 23 refusals across the published rounds is a grep. So its
+# post-answer cost mixes two things — the urge to verify, and the price of verifying with only whole-file
+# reads. Arm D separates them: the same oracle, the same manual, plus the search arm A has. It is also the
+# honest ceiling for the COMPANION pitch (§6.2.4): a real user has the tool AND grep.
+# Identical to C except that NO_SEARCH is not denied and the search verbs are granted.
+PROMPT_D="You are working in the repository at $REPO.
+
+TASK: $TASK
+
+You have a flow-tracing tool. Invoke it as:  $HERE/call-flow --step N
+Start at --step 1 and work through the steps IN ORDER (1, 2, 3, ...) until it prints DONE. Each step returns
+structural facts about this flow. Do not skip steps.
+ripgrep/grep and file reads are also available.
+
+A scratch directory you may write to (identical for every arm): $OUT/.scratch-D
+  — use it if you want to save output to a file rather than re-running a command.
+$CONTRACT"
+DENY_D=("${COMMON_DENY[@]}" "Bash(bun:*)")
+ARM_D () { run_arm D PROMPT_D DENY_D "Bash($HERE/call-flow:*)" "Bash(rg:*)" "Bash(grep:*)" "Bash(cat:*)" "Bash(sed:*)" \
+        "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" \
+        "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read Glob Grep; }
 
 # ── RANDOMISED ARM ORDER ─────────────────────────────────────────────────────────────────────────────────
 # bench/grep-vs-seam ran its arms in a FIXED order (grep first, always), which leaves an order confound

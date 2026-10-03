@@ -258,7 +258,6 @@ for a in ARMS:
     alt = M(a, "cr") / M(a, "turns")
     check(f"(cache_read+cache_write)/turns [{NAME[a]}]", ctx[a], paper, 2, "{:.0f}")
     print(f"        (cache_read/turns alone would be {alt:,.0f} — not the figure used)")
-notes.append("§1/§4.1: context_per_turn = (cache_read + cache_write)/turns. Undocumented; state it.")
 
 print("\n## §1 wall clock — source is the .secs files, not duration_ms")
 for a in ARMS:
@@ -311,9 +310,6 @@ for a in ARMS:
     gap = M(a, "turns") * ctx[a] - M(a, "cr")
     print(f"        {NAME[a]:7} turns x ctx = {M(a,'turns')*ctx[a]:>12,.0f}   cache_read = {M(a,'cr'):>12,.0f}"
           f"   gap = {gap:>9,.0f}   cache_write = {M(a,'cw'):>9,.0f}")
-notes.append("§4.1: 'turns x context_per_turn ~ cache_read' is true by construction "
-             "(ctx is defined as (read+write)/turns), and the residual it calls approximation "
-             "error IS the cache write — the term §4.3 calls the entire finding. Drop 'Verified'.")
 
 Ctot = {a: M(a, "cr") + M(a, "cw") for a in ARMS}
 print("\n        product turns_ratio x context_ratio == total-context ratio (turns cancel algebraically):")
@@ -321,8 +317,6 @@ for a in "BC":
     tr = M(a, "turns") / M("A", "turns")
     cr_ = ctx[a] / ctx["A"]
     print(f"        {NAME[a]:7} {tr:.3f} x {cr_:.3f} = {tr*cr_:.4f}   and  C_x/C_A = {Ctot[a]/Ctot['A']:.4f}")
-notes.append("§4.1: the product is algebraically identical to the total-context ratio — the turns "
-             "cancel. Report one ratio, not a product of two that annihilate.")
 
 print("\n## §4.1 adjusted (denials removed)")
 for a in ARMS:
@@ -343,22 +337,18 @@ cands = {
 }
 for k, v in cands.items():
     print(f"        {k:44} {v:+12,.0f}" + ("   <- reproduces '+305'" if abs(v - 305) < 80 else ""))
-notes.append("§4.1: '+305' uses context_per_turn = cache_read/turns, contradicting the same section's "
-             "(read+write)/turns. Under §4.1's own definition it is -10,244; on total context +2,968. "
-             "All three are ~0 against a ~1M baseline, so the CLAIM holds — restate it under one definition "
-             "and drop the spurious precision.")
 
 print("\n## §4.3 decomposition of arm C's adjusted gap")
 dec = {
     "cache write": ((M("C", "cw") - M("A", "cw")) * PRICE["cw"], 0.1321),
-    "cache read":  ((M("C", "cr") - d * ctx["C"] - M("A", "cr")) * PRICE["cr"], 0.0002),
+    "cache read":  ((M("C", "cr") - d * ctx["C"] - M("A", "cr")) * PRICE["cr"], -0.0051),
     "output":      ((M("C", "out") - M("A", "out")) * PRICE["out"], 0.0047),
 }
 tot_mine = sum(v[0] for v in dec.values())
 for k, (mine, paper) in dec.items():
     check(f"{k}", mine, paper, 0.002, "{:+.4f}")
-check("TOTAL gap ($)", tot_mine, 0.1370, 0.002, "{:+.4f}")
-check("TOTAL gap (%)", tot_mine / base * 100, 14.0, 0.5, "{:.1f}")
+check("TOTAL gap ($)", tot_mine, 0.1317, 0.002, "{:+.4f}")
+check("TOTAL gap (%)", tot_mine / base * 100, 13.2, 0.5, "{:.1f}")
 
 print("\n## §4.2 / §4.3 derivations (algebra over the FITTED price vector, so they move with it)")
 check("break-even bar (read/write price)", PRICE["cr"] / PRICE["cw"], 0.050, 0.0005, "{:.3f}")
@@ -368,35 +358,41 @@ for T, p in [(20, 1.00), (10, 1.50), (4, 3.00), (2, 5.50), (1, 10.50)]:
 
 print("\n## §4.4 thinking tokens — source matters")
 for a in ARMS:
-    paper = {"A": 870, "B": 1940, "C": 1890}[a]
+    paper = {"A": 1108, "B": 2177, "C": 2145}[a]
     check(f"thinking tokens [{NAME[a]}]", M(a, "think"), paper, 5, "{:.0f}")
     print(f"        (usage.output_tokens_details.thinking_tokens; paper uses streamed estimated_tokens)")
 for a in "BC":
-    paper = {"B": 2.23, "C": 2.17}[a]
+    paper = {"B": 1.97, "C": 1.94}[a]
     check(f"thinking ratio vs GREP [{NAME[a]}]", M(a, "think") / M("A", "think"), paper, 0.02, "{:.2f}")
-notes.append("§4.4: the thinking figures come from streamed estimated_tokens, which sits ~240 tokens "
-             "below the provider's own usage.output_tokens_details.thinking_tokens in every arm. "
-             "A near-constant offset off a small control baseline inflates the RATIO: 1.97x / 1.94x "
-             "on the authoritative field, not 2.23x / 2.17x. 'Roughly doubles' survives; the figure does not.")
 
-print("\n## §5 the verification floor")
-for a in ARMS:
-    mine = M(a, "calls") - ORACLE_DONE_STEP
-    paper = {"A": 16.4, "B": 8.4, "C": 14.8}[a]
-    check(f"'calls after the answer was complete' [{NAME[a]}]", mine, paper, 0.05, "{:.1f}")
-print(f"        NOTE: this column is total_calls - {ORACLE_DONE_STEP} for EVERY arm. The split index is")
-print( "        arm C's DONE step; measure.py's own docstring says it is 'only meaningful for arm C'.")
-notes.append("§5: the GREP/SEAM rows of the verification-floor table are total_calls - 6, a fixed index "
-             "borrowed from arm C's oracle. measure.py says it is 'only meaningful for arm C'. The paper "
-             "heads the column 'calls after the answer was complete' for all three arms. Restrict the "
-             "claim to arm C, or define completion for A and B.")
+print("\n## §5 the verification floor — arm C only, split at its own DONE")
+def done_index(path):
+    """Position of the call whose result first carried the oracle's DONE, counted from the transcript."""
+    calls = 0
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list): continue
+        if m.get("role") == "assistant":
+            calls += sum(1 for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use")
+        elif m.get("role") == "user":
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: return calls
+    return None
+dones = [done_index(os.path.join(RES, f"{rd}.C.jsonl")) for rd in sorted(runs["C"])]
+print(f"        DONE at call {dones} — measured from the transcripts, not assumed")
+check("DONE lands at the same call in every round", float(len(set(dones)) == 1 and dones[0] == ORACLE_DONE_STEP), 1.0, 0, "{:.0f}")
+check("calls after DONE [REPLAY]", M("C", "calls") - ORACLE_DONE_STEP, 14.8, 0.05, "{:.1f}")
+check("refused after DONE [REPLAY]", M("C", "den"), 4.6, 0.05, "{:.1f}")
+print("        GREP and SEAM have no completion marker, so 'calls after the answer was complete'")
+print("        does not exist for them; the paper no longer reports it, and neither does this script.")
 
 print("\n## §3.2 non-API ('engine') time")
 for a in ARMS:
     print(f"        {NAME[a]:7} wall {M(a,'wall_ms'):6.1f}s   api {M(a,'api'):6.1f}s   non-API {M(a,'wall_ms')-M(a,'api'):+6.1f}s")
-notes.append("§3.2: non-API time is NEGATIVE for the control (-0.6s), so it is not engine time — "
-             "duration_api_ms and duration_ms are not a partition. Arm C's '-1.0s' is 'indistinguishable "
-             "from the control', not a measurement of ~1ms.")
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
 unchecked.insert(0, "answer F1 / precision / recall (needs re-scoring answers against truth.txt)")

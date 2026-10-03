@@ -48,7 +48,7 @@ def answer_block(text):
 
 def measure(path):
     """One run -> one row. Everything is read from the transcript; nothing is inferred."""
-    r = dict(tool_calls=0, turns=0, think_chars=0, think_tok_raw=0, text_chars=0, cost=0.0,
+    r = dict(tool_calls=0, turns=0, think_chars=0, think_tok_raw=0, think_tok_provider=None, text_chars=0, cost=0.0,
              wall=0, api=0.0, dur=0.0, answer="", model=set(), denials=0)
     usage = {}
     for line in open(path):
@@ -83,12 +83,18 @@ def measure(path):
             r["dur"] = e.get("duration_ms", 0) / 1000
             r["answer"] = e.get("result", "")
             r["denials"] = len(e.get("permission_denials", []))
+            # THINKING, from the provider's own count. The streamed `estimated_tokens` below sits ~240 under
+            # it in every arm, and a near-constant offset off a small control baseline inflates the RATIO
+            # (2.23x against 1.97x) — see docs/STUDY_AUDIT.md, S2. Kept only as `think_tok_est`, for comparison.
+            r["think_tok_provider"] = ((e.get("usage") or {}).get("output_tokens_details") or {}).get("thinking_tokens")
     r.update(usage)
     secs = path.replace(".jsonl", ".secs")
     if os.path.exists(secs): r["wall"] = int(open(secs).read().strip())
     r["engine"] = round(r["dur"] - r["api"], 1)          # non-API time = tool execution
     for k in PRICE: r.setdefault(k, 0)
-    r["think_tok"] = r["think_tok_raw"]                    # reported by the API, not estimated by us
+    r["think_tok_est"] = r["think_tok_raw"]                # streamed estimate — NOT the measurement
+    r["think_tok"] = (r["think_tok_provider"] if r.get("think_tok_provider") is not None
+                      else r["think_tok_raw"])             # provider's count; estimate only if a transcript lacks it
     r["text_tok"]  = round(r["text_chars"] / 3.6)
     return r
 

@@ -152,6 +152,28 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 ---
 
+## Status in the paper
+
+Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
+is where the trail lives after a marker is removed. With S1 and S2 applied, `verify_independent.py` reports
+every checked figure reproducing (55 checks, exit 0); its two remaining notes are S6 and the wall-clock source.
+
+| finding | status | where |
+|---|---|---|
+| S1 — §5 control rows are `total_calls − 6` | **applied** — the table is arm C only, split at its own `DONE` (measured at call 6 in every round); why the other arms cannot be split is stated | §5 |
+| S2 — thinking ratio inflated by its source | **applied** — provider count, 1.97x / 1.94x; the cost statement now uses the net output term, since thinking rises ~1,040 tokens while other output falls ~850 | §1, §4.4, §6.1, measure.py |
+| S3 — "+305" used a second definition | **applied** — read excess stated as indistinguishable from zero; 1.13x / +13% throughout | §1, §4.1, §4.3, §5.1, §6.2.4, abstract |
+| S4 — the identity was true by construction | **applied** — stated as a definition; the circular "Verified" line removed | §4.1 |
+| S5 — the break-even product cancels | **applied** — one ratio, total input context vs the control | §4.1, abstract |
+| S6 — two models billed, not one | **open** — marked inline | §3.1, §3.3 |
+| S7 — non-API time is not engine time | **applied** — "indistinguishable from the control" | §3.2, §5.1 (one explanatory marker kept in §3.2) |
+| S8 — undocumented definitions | **applied** for context per turn | §4.1 |
+| S9 — "exactly break-even" | **applied** — "indistinguishable from break-even" | §4.1, abstract |
+
+The turn budget in §4.1 had S3's problem in a second place — the control's *cache read* (943k) divided by a
+*read + write* context per turn. It now uses total input context throughout: budgets of 11.7 and 17.1 turns,
+against 13.8 and 17.2 taken.
+
 ## Not checked — unexamined, not passing
 
 - **Answer F1 / precision / recall.** Needs re-scoring 15 answers against `truth.txt` by a second

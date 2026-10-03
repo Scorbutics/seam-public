@@ -29,15 +29,18 @@ We construct a **replay oracle**: a tool that serves a real structural tool's re
 latency, zero wrong turns, perfect recall and a 300-byte manual. It is an upper bound on the entire class of
 retrieval tools, not a proxy for one.
 
-Given a provably complete answer, the agent makes **14.8 further calls — 10.2 executed and 4.6 refused
-reaches for a search tool it does not have** — costing 52% of the run, and finishes in **21.8 model turns
-against the control's 23.4**. Correcting for the refused turns (apparatus, not behaviour), the ideal arm lands
-on `turns_ratio 0.735 x context_ratio 1.365 = 1.003` — **exactly break-even** on the context trade, with a read
-excess of **+305 tokens**. Its entire remaining cost gap, **+14%**, is the cache-write premium and nothing
-else. The shipped tool costs 1.36x adjusted while cutting tool calls 36%.
+Given a provably complete answer, the agent makes **14.8 further calls** — 10.2 executed, 4.6 refused, every
+refusal landing after the oracle said `DONE` — costing 52% of the run and finishing in **21.8 model turns
+against the control's 23.4**. Corrected for the refused turns, its **total input context is 1.003x the
+control's**: the turns it removes and the context it adds cancel, leaving a read excess indistinguishable from
+zero. The entire remaining gap, **+13%**, is the cache-write premium and nothing else. The shipped tool costs
+1.36x adjusted while cutting tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
-turn reduction the whole trade depends on does not arrive even at the ceiling. **The write premium is the
+turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
+channel as well removes about 40% of its post-answer calls and leaves the rest. The floor is the urge to
+verify; the channel only sets its price. Used alongside grep, the ideal tool breaks even with grep alone. Used
+instead of it, it loses. **The write premium is the
 whole residual**: an ideal retrieval tool breaks even on turns x context and then loses by precisely the
 premium it paid to put its answer in the context. Because the oracle is optimal by construction, this is a
 definitional argument rather than a statistical one. We report the ceiling method as the transferable result:
@@ -74,13 +77,13 @@ measurement on the same repository. Re-measured on a corrected harness with the 
 | tool calls | 22.4 | **14.4** | 20.8 |
 | model turns | 23.4 | **15.4** | 21.8 |
 | context tokens / turn | 41,882 | **83,955** | 57,152 |
-| thinking tokens `[AUDIT S2]` | 870 | **1,940** (2.23x) | **1,890** (2.17x) |
+| thinking tokens | 1,108 | **2,177** (1.97x) | **2,145** (1.94x) |
 | cache write | 36,779 | 62,923 | 49,991 |
 | cache read | 943,264 | 1,229,982 | 1,195,918 |
 | wall clock | 85s | 119s | 89s |
 | refused calls (apparatus) | 0.0 | 1.6 | 4.6 |
 | **billed cost, raw** | **$1.00** | **$1.42 (1.42x)** | **$1.26 (1.26x)** |
-| **billed cost, denial-adjusted** | **$1.00** | **$1.36 (1.36x)** | **$1.14 (1.14x)** |
+| **billed cost, denial-adjusted** | **$1.00** | **$1.36 (1.36x)** | **$1.13 (1.13x)** |
 
 Paired, per round (raw) — not a mean artefact:
 
@@ -211,12 +214,55 @@ The step *selection* is idealised; the step *content* is not. No line was writte
 recorded results were chosen because their union covers all 12 ground-truth entries (`bench/replay-ceiling/truth.txt`).
 
 **What the payload actually is.** The five steps deliver **43 KB of text — about 13k tokens of cache write
-above the control's baseline**. Step 1 is a route table (147 routes matched, one with both sides resolved).
-Step 2 is the agent map — the region to read instead of running a grep loop — and at 27 KB it is the bulk of
-the payload. Step 3 is the cross-stack coupling of the Java resource. Steps 4 and 5 resolve eight named
-symbols to a file and a line. That is what "injecting a structural payload" means everywhere in this paper,
-and it is why the write premium is the term that matters: 13k tokens written once at 2.0x input is a real
-charge, and the tool's entire purpose is to shorten the window it has to amortise over.
+above the control's baseline**. Excerpts are verbatim from `bench/replay-ceiling/steps/`.
+
+**Step 1 — the route table** (1.9 KB). 147 routes matched; exactly one has both sides resolved, and that one
+is the crossing the task asks about:
+
+```
+# Locate route: /admin/realms
+147 route(s) matched; 1 with BOTH sides resolved — the crossing itself
+
+- /admin/realms
+    serves   services/src/main/java/org/keycloak/services/resources/admin/AdminRoot.java:232
+    fetches  js/libs/keycloak-admin-client/src/resources/realms.ts:409
+```
+
+**Step 2 — the agent map** (27 KB, the bulk of the payload): the region to read instead of running a grep
+loop, as pinned centers with their source lines.
+
+```
+  Realms (js/libs/keycloak-admin-client/src/resources/realms.ts:22) — PINNED CENTER
+      22> export class Realms extends Resource {
+```
+
+**Step 3 — the cross-stack coupling** of the Java resource (4.7 KB), keyed by route rather than by symbol:
+
+```
+# Coupling of RealmAdminResource (cross-stack data boundary)
+shared keys: 40 | counterpart sites: 57
+
+## http-route "/*"  — anchor writes
+  ● extension (services/.../admin/RealmAdminResource.java:657)  — THE ANCHOR'S OWN ACCESS
+        657> @Path("{extension}")
+```
+
+**Steps 4 and 5 — eight named symbols** resolved to a file and a line (5.7 KB + 4.4 KB):
+
+```
+## updateRealm — 1 definition(s)
+- server-spi-private/.../models/utils/RepresentationToModel.java:285#updateRealm   [method]
+    public static void updateRealm(RealmRepresentation rep, RealmModel realm, KeycloakSession session) {
+
+## getRealm — 25 definition(s) of 207 — narrow with `--in <path-prefix>`
+```
+
+That last line is worth reading twice, because it explains the payload's *size*. `getRealm` has 207
+definitions in this repository; the tool returns 25 of them and tells the agent to choose. **A structural
+tool is large partly because it declines to disambiguate** — it is honest about what it cannot narrow, and
+honesty costs bytes. Those bytes are written into the cache once, at 2.0x input, and the tool's entire
+purpose is to shorten the window they have to amortise over. That is the whole tension of §4, visible in
+one line of output.
 
 **Why this is the right instrument.** Every prior negative result in this project — and every arm in the
 compression literature — compares imperfect systems, so a flat result is always attributable to the tool
@@ -230,7 +276,7 @@ The argument is definitional, not statistical.
 **What the bound covers, and what it does not.** It bounds tools that answer by **putting a payload into the
 agent's context** — which is what every retrieval tool here does. It says nothing about a tool that changes
 what the agent *does* with an answer: one that stops it re-verifying, or that keeps its payload across
-conversations instead of paying to write it again each time (§8.2). Those are not better retrieval. They are
+conversations instead of paying to write it again each time (§8.1). Those are not better retrieval. They are
 a different game, and the oracle does not bound them.
 
 **Cost to reproduce for any tool-builder:** freeze your tool's outputs on one task, serve them from `cat`,
@@ -287,73 +333,59 @@ entire remaining cost.**
 
 ![One payload, two bills](figures/01-two-bills.svg)
 
-***Figure 1.** The bytes that let the agent stop early are the same bytes every remaining turn must carry. One payload, two terms, moving in opposite directions.*
+***Figure 1.** The two terms and their prices: $0.50/Mtok paid on every remaining turn, against $10.00/Mtok paid once.*
 
 
 ### 4.1 The context identity
 
-An LLM is stateless; the whole conversation is re-sent every turn. So the dominant cost term is not the size
-of the conversation but the sum of its sizes:
+Context per turn is defined throughout as **everything the model reads on an average turn**:
 
 ```
-    cache_read  ≈  turns  ×  context_per_turn
+    context_per_turn  =  (cache_read + cache_write) / turns
+    total input context  =  turns  ×  context_per_turn
 ```
 
-**Why this, and not "how big did the context get".** An LLM keeps nothing between turns: the whole
-conversation is re-sent every time. What you are billed for is therefore not the context's final size but the
-**sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns while
-doubling each one buys nothing. This is 2607.12161's `N_future_reads` seen from the other side, and it is the
-single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite directions
-without either being mismeasured.
+The second line is exact by that definition. What you are billed for is therefore not the context's final size
+but the **sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns
+while doubling each one buys nothing. This is 2607.12161's `N_future_reads` seen from the injection side, and
+it is the single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite
+directions without either being mismeasured.
 
-![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
+So a payload lowers the reading bill only if it removes more turns than it inflates each one by — that is,
+only if the arm's **total input context** ends up below the control's. One number per arm settles it:
 
-***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. SEAM's rectangle is the narrowest and also the largest; the ideal arm's is barely smaller than the control's.*
+| per run, mean | turns | of which refused | context / turn | total input context | vs GREP |
+|---|---|---|---|---|---|
+| GREP | 23.4 | 0.0 | 41.9k | 980k | 1.00 |
+| SEAM | 15.4 | 1.6 | 84.0k | 1,293k raw · **1,159k adjusted** | 1.32 raw · **1.18 adjusted** |
+| REPLAY (ideal) | 21.8 | 4.6 | 57.2k | 1,246k raw · **983k adjusted** | 1.27 raw · **1.003 adjusted** |
 
-`[AUDIT S4/S8 — 'context_per_turn' is (cache_read + cache_write)/turns; that definition appears nowhere in
-this draft and must be stated. With it substituted, 'turns × context_per_turn ≈ cache_read' reads
-'cache_read + cache_write ≈ cache_read', which cannot fail, and the residual reported below as
-approximation error IS the cache write — the term §4.3 calls the entire finding. Drop the word
-'Verified' and present it as a definition. See docs/STUDY_AUDIT.md.]`
+**Which column is the result.** Both, for different questions — and the difference is exactly one kind of
+turn. *Adjusted* removes the **refused calls**: turns where the agent reached for search, the harness said no,
+and the prompt was re-sent anyway. The harness imposed them, so they are apparatus. They are the **only** thing
+removed. Every turn the agent chose to take stays in — including all of its checking after the answer was
+already complete (§5). Read *raw* if the tool is meant to replace grep, where a user would meet the same
+refusals; read *adjusted* if it ships beside grep (§6.2.4). §5.2 then measures that second case directly,
+with grep actually available, instead of by adjustment.
 
-`[n=5]` Verified: GREP 23.4 × 41.9k ≈ 980k (actual 943k); SEAM 15.4 × 84.0k ≈ 1,294k (actual 1,230k).
+**The adjusted row is the paper's sharpest number.** The ideal tool's total input context is
+indistinguishable from the control's — 983k against 980k — so *an ideal retrieval tool does not lose the
+turns × context trade; it draws it.* The turns it removes and the context it adds to each one cancel almost
+exactly. The shipped tool still loses it (1.18), so the trade is winnable in principle and is not being won in
+practice. And because the reading side draws, everything the ideal tool costs above the control comes from
+the other term — the cache write (§4.3).
 
-A retrieval tool moves **both factors, in opposite directions, with the same bytes**: the payload that removes
-turns is the payload that inflates every remaining turn. It lowers read cost only if
+![Total input context per run, refused calls separated](figures/02-area-not-endpoint.svg)
 
-```
-    turns_ratio  ×  context_ratio  <  1
-```
+***Figure 2.** Each bar is an arm's total input context — turns × context per turn — on one shared scale. The
+hatched end is the refused calls, the only part the adjustment removes. The line marks the control. With
+refusals removed, the ideal arm stops at the line (983k against 980k); the shipped tool overshoots it either
+way.*
 
-| | turns_ratio | context_ratio | product | |
-|---|---|---|---|---|
-| SEAM, raw | 0.66 | 2.00 | 1.32 | loses |
-| **SEAM, adjusted** | **0.590** | **2.005** | **1.182** | **loses** |
-| REPLAY, raw | 0.93 | 1.36 | 1.27 | loses |
-| **REPLAY, adjusted** | **0.735** | **1.365** | **1.003** | **exactly break-even** |
-
-`[AUDIT S5 — the product turns_ratio × context_ratio is algebraically identical to the TOTAL-context
-ratio: the turns cancel, (t_x/t_A)·((C_x/t_x)/(C_A/t_A)) = C_x/C_A. Verified numerically both ways. The
-adjusted 1.003 is correct and meaningful — it is (C_x − denials·ctx)/C_A, the adjusted total-input-context
-ratio — but it is ONE ratio, not a product of two that annihilate. Report it as such; the narrative above
-is true and should stay.]`
-
-**This is the paper's sharpest number and it was nearly missed.** Corrected for refused turns, the ideal arm's
-excess cache read is **indistinguishable from zero** against the control — not the +252,654 the raw
-figures show. `[AUDIT S3 — the published "+305" is computed with context_per_turn = cache_read/turns,
-contradicting the (read+write)/turns used a few lines above. Under this section's own definition the figure
-is −10,244; on total context, +2,968. All three are ~0 against a ~1M baseline, so the CLAIM survives every
-definition — restate it under one and drop the spurious precision. This also moves §4.3: read term
-−$0.0051 not +$0.0002, total gap $0.1317 not $0.1370, **+13% not +14%**.]` *An ideal
-retrieval tool does not lose the turns x context trade. It draws it.* The shipped tool still loses it (1.182),
-so the trade is winnable in principle and is not being won in practice. `[WRITE: this is the result §4.3 needs
-— with the read term neutralised, the write premium is the ONLY term left, and §4.3 stops being one mechanism
-among several.]`
-
-Restated as a **turn budget** — the form most useful to a tool designer: grep spent 943k tokens of reading, so
-at 84.0k of context per turn Seam may take **11.2 turns**; it took 15.4. The oracle, at 57.2k, may take 16.5;
-it took 21.8 raw, **17.2 adjusted — inside 5% of its budget.** *The denser the answer, the fewer turns it is
-allowed* — and the tool sets its own budget.
+The same draw, restated as a **turn budget** — the form most useful to a tool designer. The control read
+980k tokens in total, so a tool carrying 84.0k of context per turn can afford **11.7 turns** to match it;
+Seam took 13.8 adjusted. At 57.2k per turn the oracle can afford **17.1**; it took **17.2 adjusted**. *The
+denser the answer, the fewer turns it is allowed* — and the tool sets its own budget.
 
 ### 4.2 The write premium and the break-even
 
@@ -367,15 +399,15 @@ in §6.3.]`
 
 ### 4.3 The amortisation inversion — the ONLY surviving cost term
 
-`[WRITE — §4.1 adjusted leaves the read term at +305 tokens, i.e. zero. Everything the ideal tool costs above
+`[WRITE — §4.1 adjusted leaves the read term indistinguishable from zero. Everything the ideal tool costs above
 the control is therefore this section and nothing else:]`
 
 ```
 arm C's adjusted cost gap vs GREP, decomposed:
     cache WRITE premium   +$0.1321      <- the whole of it
-    cache read            +$0.0002
+    cache read            −$0.0051      <- indistinguishable from zero
     output                +$0.0047
-    TOTAL                 +$0.1370      = +14%
+    TOTAL                 +$0.1317      = +13%
 ```
 
 
@@ -416,17 +448,18 @@ that regime is never reached.]`
 
 ### 4.4 Thinking doubles, and is not the cause
 
-`[AUDIT S2 — these figures come from streamed `estimated_tokens`, which sits ~240 tokens BELOW the
-provider's own `usage.output_tokens_details.thinking_tokens` in every arm (870/1940/1890 against
-1108/2177/2145). A near-constant offset subtracted from a small control baseline inflates the RATIO:
-**1.97x / 1.94x** on the authoritative field, not 2.23x / 2.17x. "Roughly doubles" survives; the figure
-does not. The cost SHARES (7% / 10%) are unaffected.]`
+`[n=5]` Read from the provider's own count (`usage.output_tokens_details.thinking_tokens`), thinking roughly
+doubles: **1,108** tokens per run in the control, **2,177** in the Seam arm (**1.97x**) and **2,145** in the ideal
+arm (**1.94x**). It is real and reproducible, and nearly irrelevant to the bill, for two reasons.
 
-`[n=5]` With thinking measured directly (`thinking_delta.estimated_tokens`; the earlier harness stored
-thinking blocks with empty content), reasoning rises **2.23x** in the Seam arm and **2.17x** in the ideal arm —
-while accounting for only **7%** and **10%** of their respective cost gaps. Real, reproducible, nearly
-irrelevant to the bill: thinking is priced as output ($25/Mtok) but small in volume; context is priced 50x
-lower per token and three orders of magnitude larger.
+First, thinking is billed as output, and output is small next to context. Context is priced 50x lower per
+token but is three orders of magnitude larger.
+
+Second, **the arms that think more write less of everything else.** Thinking is part of the output tokens.
+The Seam and ideal arms each think about 1,040 tokens more than the control, but write about 850 fewer
+tokens of text and tool calls, because they make fewer calls. The output term as a whole therefore rises by
+only about 190 tokens in the ideal arm. That is the +$0.0047 in §4.3, under 4% of its adjusted cost gap.
+Pricing thinking on its own makes it look about five times larger than the output term it sits inside.
 
 **And it is not documentation density.** The ideal arm carries a 300-byte manual against 42 KB and thinks just
 as much, so what doubles reasoning is the *structured payload itself*, not the instructions for obtaining it.
@@ -454,22 +487,25 @@ every experiment that compares two imperfect tools.
 **14.8 further calls**, costing **52% of the run**, and finished in **21.8 turns against the control's 23.4** —
 a 7% reduction, from a tool that had already handed it the entire answer.
 
-| | calls after the answer was complete | of which executed | of which refused | share of run cost |
+| REPLAY (ideal), per run | tool calls | of which executed | of which refused | share of run cost |
 |---|---|---|---|---|
-| GREP | 16.4 | 16.4 | 0.0 | 65% |
-| SEAM | 8.4 | 6.8 | 1.6 | 41% |
-| **REPLAY (ideal)** | **14.8** | **10.2** | **4.6** | **52%** |
+| before `DONE` — reaching the answer | 6.0 | 6.0 | 0.0 | 48% |
+| **after `DONE` — checking it** | **14.8** | **10.2** | **4.6** | **52%** |
 
-`[AUDIT S1 — the GREP and SEAM rows are `total_calls − 6`, the split index borrowed from arm C's oracle;
-measure.py's own docstring says it is "only meaningful for arm C". Those arms have no completion marker, so
-the column as headed is not a measurement for them. Arm C's row IS real and is independently confirmed:
-`DONE` lands at call #6 in all five rounds, so 20.8 − 6 = 14.8 is genuinely "after the answer was
-complete". Restrict the claim to arm C, or define completion for A and B and measure it.]`
+Only the ideal arm can be split this way, because only it has a moment at which the answer is provably
+complete: the oracle prints `DONE`, and it does so at call 6 in all five rounds. The grep control and the
+shipped tool have no such marker — nothing tells them, or us, when they have the whole answer — so "calls
+after the answer was complete" is not a quantity that exists for them, and this table does not pretend
+otherwise. (An earlier draft gave them rows by borrowing arm C's split at call 6; those were the total call
+count minus six, not a measurement.)
 
-**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before.** `[VERIFIED
-independently by tool_use_id position: 23 after, 0 before, 0 unmatched, across all five rounds.]` The agent walks the
-oracle to completion without once trying to go around it, and only then starts reaching for tools it does not
-have. `[WRITE — and note which way the refusals cut: an agent that, having been handed a provably complete
+The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.3's mechanism inside a single
+run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
+the long tail after `DONE` re-reads at a twentieth of that price.
+
+**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before** — matched by tool-call
+id, 23 after, 0 before, 0 unmatched. The agent walks the oracle to completion without once trying to go
+around it, and only then starts reaching for tools it does not have. `[WRITE — and note which way the refusals cut: an agent that, having been handed a provably complete
 answer, reaches five more times for a search tool it has been told it lacks is STRONGER evidence of the
 verification drive than the raw call count is. Report both terms; the behaviour survives either reading.
 Adjusted, the floor is 10.2 executed calls — still 47% of the ideal arm's turns spent after the answer was
@@ -494,26 +530,61 @@ compression makes re-reading rational.]`
 
 | lever | owner | state in arm C | did it help? |
 |---|---|---|---|
-| engine latency → 0 | engine | achieved (−1.0s vs +20.6s) | no |
-| answer quality → optimal | engine | achieved (F1 78%, best arm) | no |
-| recall → 100% | engine | achieved by construction | no |
+| engine latency → 0 | engine | achieved — non-API time indistinguishable from the control (arm B: +20.6s) | no |
+| answer completeness → 100% | engine | achieved by construction — the five steps cover all 12 ground-truth entries | no |
 | documentation cost → 0 | engine | achieved (300 B vs 42 KB) | no |
+| **verification channel** | engine | **not provided** — nothing left to query after `DONE`, and search is denied | — |
 | post-answer verification | **model** | unchanged | — |
 
-Arm C sets **every engine-controllable variable to its optimum simultaneously** — not one at a time — and
-still costs **1.14x the control** (adjusted; 1.26x raw), spending **10.2 executed calls after the answer was
-complete**. The residual is therefore not addressable from the engine side *by definition*: it is what remains
-when the engine is perfect. `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read term
-is +305 tokens, i.e. zero) but the write premium on a payload the agent then declined to treat as final.]`
+Arm C sets **every engine variable that governs GETTING the answer to its optimum simultaneously** — not one
+at a time — and still costs **1.13x the control** (adjusted; 1.26x raw), spending **10.2 executed calls after
+the answer was complete**. It does **not** optimise *checking* the answer. Once the oracle prints `DONE` there
+is nothing left to ask it, and arm C is denied search, so every check goes through whole-file reads. That is
+the one engine variable arm C leaves at its worst rather than its best, and §5.2 measures what it costs. The
+residual is therefore not addressable from the *answering* side of the engine by definition; whether a
+checking channel addresses it is an empirical question. Arm D answers it (§5.2): **about 40% of it does,
+and the rest does not.** `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read term is
+indistinguishable from zero) but the write premium on a payload the agent then declined to treat as final.]`
 
-### 5.2 The corroborating history `[WRITE]`
+### 5.2 What the floor's size includes — arm D
 
-`[bench/grep-vs-seam]` This project held the answer across a dozen negative results with no model to unify
-them: "richer output does not buy fewer calls" predicted and refuted three times (runs 2, 4, kc5); the `cn`
-case, where the agent reasoned *from* the tool's arity histogram and then re-derived it independently and
-confirmed it exactly; kc5, where the code **was** shown and the file was opened anyway; seven-plus engine
-levers killed by their own pre-build checks; and a control arm whose own median swung 20 → 25 → 14 → 35 with
-no change to it at all. §5 is the model those results were missing.
+Arm C has nothing left to ask after `DONE` and is denied search, so each check costs it a refused `grep` and
+then whole-file reads. That leaves its post-answer count mixing two things: **the urge to verify**, and **the
+price of verifying without a channel**. Arm D separates them. It is arm C unchanged — same oracle, same
+manual — plus the search arm A has. Arms A, C and D ran together, five paired rounds in randomised order, on
+one rig (`bench/replay-ceiling/results-oracle-grep/`).
+
+| per run, mean — this rig | GREP | REPLAY | REPLAY + grep |
+|---|---|---|---|
+| tool calls | 35.2 | 32.2 | **21.8** |
+| refused | 0.0 | 7.8 | 0.0 |
+| calls after `DONE` | — | 26.2 | **15.8** |
+| — of which search | — | 0 (7.8 refused, all `grep`/`rg`) | 4.8 |
+| — of which file reads | — | 17.0 | 10.8 |
+| billed cost vs GREP | 1.00 | 1.23 raw · 1.06 adjusted | **0.91** |
+
+Three findings, in order of how firmly the data holds them:
+
+1. **About 40% of the ideal arm's post-answer calls are the price of the missing channel.** Given search, arm D
+   makes **10.4 fewer calls after `DONE`** than arm C — fewer in all 5 paired rounds (5, 11, 7, 15, 14; paired
+   t = 5.36, df = 4). It stops reaching for a tool it lacks, and replaces whole-file reads with targeted
+   searches.
+2. **The floor survives the channel.** With search available and nothing refused, arm D still makes **15.8
+   calls after a provably complete answer** — 72% of all its calls. It walked the oracle to `DONE` first in
+   every round and searched nothing before it. A better way to check does not stop the agent checking. It
+   makes each check cheaper.
+3. **On cost, the ideal tool used alongside grep is at parity with grep alone.** Arm D costs **0.91x** the
+   control, which is not distinguishable from 1.0 at n=5 (sd 0.28; above 1.0 in 1 round, level in 1, below
+   in 3). It is cheaper than arm C in all 5 rounds. Arm C still loses (1.06x adjusted, 1.23x raw), the same
+   direction as the published rounds. So the headline depends on the pitch §6.2.4 separates. Used **instead
+   of** grep, the ideal tool loses. Used **alongside** grep, it breaks even. It never clearly wins.
+
+**Read this table against itself, never against §1's.** On this rig every arm makes ~1.55x the published
+number of calls (GREP 35.2 against 22.4), and arm C's post-answer count is 1.77x (26.2 against 14.8). The CLI
+is 43 versions newer and keycloak six days newer. The floor's *existence* reproduces — it is larger here, not
+smaller — but its *magnitude* depends on the rig, and only comparisons within this batch are paired. A first
+batch was discarded because the harness could not reach the repository from the shell
+(`results-oracle-grep/discarded-outside-workdir/WHY.md`, §6.1).
 
 ---
 
@@ -528,7 +599,17 @@ no change to it at all. §5 is the model those results were missing.
   Direction is what made it disqualifying: a bias *against* a conclusion is a conservative bound; one that
   manufactures it is not.
 - Denied attempts still cost a turn; reported separately from real contamination. Arm C pays 4.6/round.
-- Thinking text is redacted even with `--include-partial-messages`; `estimated_tokens` is the measurement.
+- **A grant's meaning depends on the CLI version, not only on its flags.** From about Claude Code 2.1.28x,
+  Bash is confined to the working directory plus `--add-dir` directories. The harness runs outside the
+  repository, so on 2.1.282 every arm was refused shell verbs it had been explicitly granted. On 2.1.239,
+  which ran the published rounds, it was not. It surfaced as refusals of `ls` and `find` in the grep control,
+  and it disabled the shell `grep` arm D exists to test. The batch was discarded
+  (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
+  every arm.
+- Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
+  count, `usage.output_tokens_details.thinking_tokens`. An earlier draft used the streamed `estimated_tokens`,
+  which sits ~240 tokens lower in every arm. Subtracting a near-constant offset from the small control
+  baseline inflated the ratio to 2.23x, against 1.97x on the provider's count.
 
 ### 6.2 Design asymmetries, stated
 1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
@@ -540,11 +621,14 @@ no change to it at all. §5 is the model those results were missing.
    - *If the tool is pitched as a grep REPLACEMENT*, the refusals are **real friction a user would meet**, and
      the raw row (SEAM 1.42x, REPLAY 1.26x) is the honest figure.
    - *If it is pitched as a grep COMPANION* — which is how it actually ships — the refusals are **pure
-     apparatus**, and the adjusted row (1.36x / 1.14x) is the honest figure.
+     apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure. Arm D now measures this pitch
+     directly instead of by adjustment. The ideal tool plus grep costs **0.91x** grep alone, which is not
+     distinguishable from parity (§5.2).
    - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
      reading. **State the pitch before quoting a number.**
-   - Arm C's verification is also forced through whole-file `Read`s rather than targeted search, which makes
-     its absolute cost pessimistic under either reading.
+   - Arm C's verification is forced through whole-file `Read`s rather than targeted search. This was a
+     one-line caveat here; it turned out to explain why the ideal arm makes MORE calls than the shipped
+     tool, so it is measured in §5.2 rather than conceded here.
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at
@@ -573,49 +657,40 @@ no change to it at all. §5 is the model those results were missing.
   model (above), and in the literature, where the closest candidate (2606.14476) turns out to measure
   adopt-vs-weigh in a regime with no independent check available — a different variable in a different
   regime, as §2 sets out.]`
-- **`[NEW — and now the more valuable follow-up.]`** The probe found something nobody was looking for: arm
-  A, the CONTROL, takes **28-41 calls on Sonnet against 21-24 on Opus**. The cost ratio C/A therefore moves
-  toward the oracle (0.95 in the probe against the published 1.26) with nothing in §4 having changed — the
-  write premium is model-invariant, as the price fit above shows. What is not invariant is **how
-  efficiently the baseline model uses grep**. If that survives higher n it is a claim this study does not
-  make and should: *a retrieval tool's measured value is partly a function of how good the control model is
-  at searching.* It belongs in §7, not §5. It needs its own rounds — the probe has three arm-A rounds and
-  the spread between them is enormous — and unlike a §5 replication it needs no arm B, so no engine build.
+- The probe also found something nobody was looking for — arm A, the CONTROL, taking **28-41 calls on Sonnet
+  against 21-24 on Opus**, which moves the cost ratio toward the oracle with nothing in §4 having changed.
+  That is a follow-up rather than a threat, and it is stated in §8.2.
 
 ---
 
 ## 7. What this does NOT say
 
-- **Not that the tool is worthless.** `[n=5]` Answer quality points the right way, and should be reported as
-  a **direction, not a figure** — n=5, one task, overlapping ranges, no interval:
-  `GREP 69% (58-75) | SEAM 75% (72-78) | REPLAY 78% (72-86)`, with REPLAY beating GREP in **4 of 5** paired
-  rounds and SEAM in **3 of 5**. `[WRITE: quote the paired counts and the ranges, never the means alone.]` `[kcC]` Seam reaches one hop deeper — grep missed the JPA
-  persistence hop in 3 of 3 rounds — and resolves a cross-stack REST hop by key that no symbol graph or
-  language server can resolve at all.
+- **Not a verdict on any particular tool.** The shipped tool is arm B, and arm B is here only because the
+  oracle had to be built from *some* real tool's recorded output. Whether that tool is worth using is a
+  question about reach, honesty and consistency on questions a language server cannot answer — a different
+  question, settled by different evidence, and not settled here. The claim is about the **class**: what any
+  tool that answers by injecting a payload costs, bounded by what the best conceivable one costs.
 - **Not that tool calls are a bad metric.** The 36% reduction is real. It is **not a cost proxy**, and the two
   axes here move in opposite directions.
-- **Not that the engine work was wasted.** It is what made arm B's output good enough for arm C to be built
-  from its recorded results.
 - **Not a new cost mechanism.** §4 is background; see §2.
 
 ---
 
 ## 8. What follows `[WRITE]`
 
-1. **Stop making the cost claim.** The defensible claims are reach (cross-language, DI, data-coupling),
-   honesty (declared blindspots against confident silence), consistency, and — directionally, not yet at an
-   interval — quality.
-2. **A cost win requires attacking the verification floor — not the engine's to attack — or changing the
-   economics.** The one structural escape from §4.3 is a payload cached *across* sessions rather than
-   re-written per conversation, converting a repeated write premium into a one-time cost. `[Open question,
-   not a plan: is that reachable under current cache semantics?]`
-3. **Replicate §5 on a second model** before generalising. `[The floor's existence is definitional; its size
-   is not.]`
-4. **The one arithmetic escape is now unambiguous.** §4.1 adjusted says the read term is already neutral at
-   the ceiling, so the entire gap is a write premium paid once per conversation. A payload cached *across*
-   sessions converts that repeated premium into a one-time cost and is the only lever that touches the sole
-   surviving term. `[Open question, not a plan.]`
-5. `[Anything the data suggests that this skeleton did not anticipate.]`
+1. **The one arithmetic escape, and it is unambiguous.** §4.1 adjusted leaves the read term neutral at the
+   ceiling, so the entire gap is a write premium paid **once per conversation**. A payload cached *across*
+   sessions rather than re-written per conversation converts that repeated premium into a one-time cost, and
+   it is the only lever that touches the sole surviving term. Everything else — a faster engine, a better
+   answer, a shorter payload — is bounded by §5. `[Open question, not a plan: is that reachable under current
+   cache semantics?]`
+2. **How much of the result is the CONTROL's competence?** The Sonnet probe (§6.3) found the grep arm taking
+   28–41 calls where Opus took 21–24, moving the cost ratio toward the oracle with nothing in §4 having
+   changed. If that survives its own rounds it is a claim this study does not make: *a retrieval tool's
+   measured cost advantage is partly a function of how good the baseline model is at searching.* It needs
+   arm A on both models and no arm C at all, so it is cheap. `[The highest-value follow-up now that §5's
+   model replication is done.]`
+3. `[Anything the data suggests that this skeleton did not anticipate.]`
 
 ---
 
@@ -629,7 +704,10 @@ python3 bench/replay-ceiling/verify_independent.py   # a SECOND implementation, 
 `measure.py`. Two implementations that never shared code must agree or one of them is wrong; the `[AUDIT]`
 markers throughout this draft are where they did not. Full report: [`STUDY_AUDIT.md`](STUDY_AUDIT.md).
 ## Appendix B — discarded batches, and what they bought
-`results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md`
+`results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md` ·
+`results-oracle-grep/discarded-outside-workdir/WHY.md` — a newer CLI confined Bash to the working directory,
+disabling granted shell verbs on every arm (§6.1). Its hint pointed the wrong way — that search barely cut
+post-answer calls — because arm D's own shell `grep` was among the verbs refused.
 ## Appendix C — the review that corrected this draft
 The denial adjustment in §1, §4.1, §4.3 and §5 came from external review of the first draft, which caught that
 refused turns were being reported as behaviour. Every adjusted figure was re-derived from the transcripts
