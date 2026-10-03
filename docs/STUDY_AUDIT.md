@@ -156,7 +156,7 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (55 checks, exit 0, no open notes).
+markers. `verify_independent.py` reports every checked figure reproducing (61 checks, exit 0, no open notes).
 
 | finding | status | where |
 |---|---|---|

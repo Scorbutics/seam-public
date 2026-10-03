@@ -381,6 +381,37 @@ print(f"        DONE at call {dones} — measured from the transcripts, not assu
 check("DONE lands at the same call in every round", float(len(set(dones)) == 1 and dones[0] == ORACLE_DONE_STEP), 1.0, 0, "{:.0f}")
 check("calls after DONE [REPLAY]", M("C", "calls") - ORACLE_DONE_STEP, 14.8, 0.05, "{:.1f}")
 check("refused after DONE [REPLAY]", M("C", "den"), 4.6, 0.05, "{:.1f}")
+
+def context_split(path):
+    """(read+write) of every model turn before the DONE result, and of the whole run, from per-message usage.
+
+    Streaming repeats one message id across several lines; the last usage seen for an id is its own."""
+    per, before, done = {}, set(), False
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if not isinstance(m, dict): continue
+        if m.get("role") == "assistant" and m.get("id"):
+            u = m.get("usage") or {}
+            per[m["id"]] = u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+            if not done: before.add(m["id"])
+        elif m.get("role") == "user" and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: done = True
+    return sum(per[i] for i in before), sum(per.values())
+splits = [context_split(os.path.join(RES, f"{rd}.C.jsonl")) for rd in sorted(runs["C"])]
+pre = sum(p for p, _ in splits) / len(splits)
+whole = sum(w for _, w in splits) / len(splits)
+check("per-message context sums to the result's [REPLAY]", whole, Ctot["C"], 1, "{:,.0f}")
+check("context before DONE [REPLAY] (k)", pre / 1e3, 346, 0.5, "{:.0f}")
+adj_c = Ctot["C"] - M("C", "den") * ctx["C"]
+check("executed context after DONE [REPLAY] (k)", (adj_c - pre) / 1e3, 637, 0.5, "{:.0f}")
+check("refused context [REPLAY] (k)", (Ctot["C"] - adj_c) / 1e3, 263, 0.5, "{:.0f}")
+check("context before DONE / control", pre / Ctot["A"], 0.35, 0.005, "{:.3f}")
+check("executed checking after DONE / control", (adj_c - pre) / Ctot["A"], 0.65, 0.005, "{:.3f}")
 print("        GREP and SEAM have no completion marker, so 'calls after the answer was complete'")
 print("        does not exist for them; the paper no longer reports it, and neither does this script.")
 

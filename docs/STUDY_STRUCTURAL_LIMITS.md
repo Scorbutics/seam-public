@@ -23,9 +23,10 @@ retrieval tools, not a proxy for one.
 Given a provably complete answer, the agent makes **14.8 further calls** — 10.2 executed, 4.6 refused, every
 refusal landing after the oracle said `DONE` — costing 52% of the run and finishing in **21.8 model turns
 against the control's 23.4**. Corrected for the refused turns, its **total input context is 1.003x the
-control's**: the turns it removes and the context it adds cancel, leaving a read excess indistinguishable from
-zero. The entire remaining gap, **+13%**, is the cache-write premium and nothing else. The shipped tool costs
-1.36x adjusted while cutting tool calls 36%.
+control's**. It had the complete answer at about a third of the control's context; the checking that followed
+brought it back to parity, leaving a read excess indistinguishable from zero. The entire remaining gap,
+**+13%**, is the cache-write premium and nothing else. The shipped tool costs 1.36x adjusted while cutting
+tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
 turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
@@ -355,21 +356,24 @@ already complete (§5). Read *raw* if the tool is meant to replace grep, where a
 refusals; read *adjusted* if it ships beside grep (§6.2.4). §5.2 then measures that second case directly,
 with grep actually available, instead of by adjustment.
 
-**The adjusted row is the paper's sharpest number.** The ideal tool's total input context is
-indistinguishable from the control's — 983k against 980k — so *an ideal retrieval tool does not lose the
-turns × context trade; it draws it.* The turns it removes and the context it adds to each one cancel almost
-exactly. The shipped tool still loses it (1.18), so the trade is winnable in principle and is not being won in
-practice. And because the reading side draws, everything the ideal tool costs above the control comes from
-the other term — the cache write (§4.3).
+**The adjusted row is the paper's sharpest number, and it is not a balance.** The ideal tool's total input
+context lands on the control's — 983k against 980k — but it does not get there by trading turns for context.
+It had the complete answer at **346k, about a third of the control's total**. On reading, the ideal tool wins
+by a wide margin; what brings it back to the line is the **637k the agent then spent checking an answer that
+was already complete**. That checking is the paper's result, the verification floor (§5). The shipped tool
+loses the trade either way (1.18). And because the ideal run as a whole reads about what the control reads,
+everything it costs above the control comes from the other term — the cache write (§4.3).
 
 ![Total input context per run, refused calls separated](figures/02-area-not-endpoint.svg)
 
 ***Figure 2.** Each bar is an arm's total input context — turns × context per turn — on one shared scale. The
-hatched end is the refused calls, the only part the adjustment removes. The line marks the control. With
-refusals removed, the ideal arm stops at the line (983k against 980k); the shipped tool overshoots it either
-way.*
+hatched end is the refused calls, the only part the adjustment removes. The line marks the control. The ideal
+arm's bar is split where its answer became complete (`DONE`, call 6 in every round): 346k to get there, 637k of
+checking after it. Only that arm can be split, because only it has a completion marker. With refusals removed,
+the ideal arm stops at the line, and almost two thirds of what reaches it is checking; the shipped tool
+overshoots the line either way.*
 
-The same draw, restated as a **turn budget** — the form most useful to a tool designer. The control read
+The same parity, restated as a **turn budget** — the form most useful to a tool designer. The control read
 980k tokens in total, so a tool carrying 84.0k of context per turn can afford **11.7 turns** to match it;
 Seam took 13.8 adjusted. At 57.2k per turn the oracle can afford **17.1**; it took **17.2 adjusted**. *The
 denser the answer, the fewer turns it is allowed* — and the tool sets its own budget.
@@ -484,6 +488,9 @@ complete: the oracle prints `DONE`, and it does so at call 6 in all five rounds.
 shipped tool have no such marker — nothing tells them, or us, when they have the whole answer — so "calls
 after the answer was complete" is not a quantity that exists for them, and this table does not pretend
 otherwise.
+
+In context, the same split is 346k to reach the answer and 637k of executed checking after it, plus the 263k of
+refusals (Figure 2): the checking alone reads 65% of what the control reads for the whole task.
 
 The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.3's mechanism inside a single
 run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
