@@ -5,17 +5,8 @@
 **Status: SKELETON — the argument and every measurement are final; the prose is not.** Sections marked
 `[WRITE]` need expanding into paper form. Numbers tagged `[n=5]` come from `bench/replay-ceiling` (five clean
 paired rounds, zero contamination); `[kcC]` from six recorded rounds in `bench/grep-vs-seam/results/`.
-Everything is re-derivable from those transcripts by `bench/replay-ceiling/measure.py`.
-
-> **Restructured 2026-09-05 after a literature check.** The cost mechanism this study started from is
-> established prior work at n=2,908 (§2). It has been demoted from the headline to background. The
-> contribution is the **instrument** in §3.2 and the **floor** it measures in §5.
->
-> **Corrected 2026-09-05 after external review.** Arm C's refused tool calls are apparatus, not behaviour, and
-> the first draft left them in the headline. Adjusted (§4.1), the ideal arm lands *exactly* on break-even for
-> the turns × context trade and its entire residual is the write premium — which sharpens the paper rather
-> than weakening it, and promotes §4.3 from one mechanism among several to the only surviving one. All
-> adjusted figures were re-derived from the transcripts before being accepted.
+Everything is re-derivable from those transcripts by `bench/replay-ceiling/measure.py`, and checked by a
+second implementation that shares no code with it (Appendix A).
 
 ---
 
@@ -80,7 +71,7 @@ measurement on the same repository. Re-measured on a corrected harness with the 
 | thinking tokens | 1,108 | **2,177** (1.97x) | **2,145** (1.94x) |
 | cache write | 36,779 | 62,923 | 49,991 |
 | cache read | 943,264 | 1,229,982 | 1,195,918 |
-| wall clock | 85s | 119s | 89s |
+| wall clock (shell-timed) | 85s | 119s | 89s |
 | refused calls (apparatus) | 0.0 | 1.6 | 4.6 |
 | **billed cost, raw** | **$1.00** | **$1.42 (1.42x)** | **$1.26 (1.26x)** |
 | **billed cost, denial-adjusted** | **$1.00** | **$1.36 (1.36x)** | **$1.13 (1.13x)** |
@@ -111,7 +102,7 @@ that the write premium is the entire residual depends on it. §6.2.4 states whic
 
 **The cost mechanism is established.** *Token Reduction Is Not Cost Reduction* (arXiv 2607.12161) measures
 2,908 provider-billed Claude Code runs across 103 tasks, 7 repositories and 3 models. Its findings subsume
-what this study's first draft treated as a discovery:
+the cost mechanism this study started from:
 
 - component-level token reduction does not predict end-to-end cost (task-level Pearson **r = 0.154**);
 - the bill is **cache-dominated** — cache write 44.3% + cache read 35.4% ≈ 80% of the total;
@@ -182,18 +173,16 @@ injection side.
 
 ### 3.1 Arms and controls `[WRITE]`
 One task, one repo commit, three arms back-to-back in a single invocation. Model pinned
-(`claude-opus-5[1m]`). **Arm order randomised per round.** Identical machine-readable output contract.
+(`claude-opus-5[1m]`); the CLI also bills a small auxiliary model in every run, about 0.5% of cost, and it is
+included in all totals. **Arm order randomised per round.** Identical machine-readable output contract.
 Contamination audited from the transcript rather than assumed from the flags — **all five rounds clean**.
-`[AUDIT S6 — an auxiliary model is billed alongside `claude-opus-5[1m]` in 15 of 15 runs, at ~0.54% of run
-cost. "Pinned" needs that footnote, and §3.3's fit is exact against the opus `modelUsage` entry, not against
-`total_cost_usd` (max residual $0.01378) — which is the field the cost figures use.]`
 
 - **A — GREP**: ripgrep + reads. The control.
 - **B — SEAM**: the real CLI with its real `SKILL.md`. The product as shipped.
 - **C — REPLAY**: the idealised oracle (§3.2).
 
 The **only** capability that differs is content search: every arm gets the same read/list verbs and `Read`;
-only A gets `rg`/`grep`/`Grep`/`Glob`. `[§6.1 — an earlier batch was discarded for getting this wrong.]`
+only A gets `rg`/`grep`/`Grep`/`Glob` (§6.1 explains why this has to be audited, not assumed).
 
 ### 3.2 THE INSTRUMENT — the replay oracle is an upper bound, not a proxy
 
@@ -283,13 +272,13 @@ a different game, and the oracle does not bound them.
 write a 300-byte manual. `[Argue this belongs in every agent-tool project's evaluation, before the engine
 investment, not after.]`
 
-`[AUDIT S7 — non-API time is NEGATIVE for the control too (−0.6s): `duration_api_ms` and `duration_ms` are
-not a partition, so neither figure is "engine time". Arm B's +20.6s gap is large enough to survive that;
-arm C's −1.0s is not a measurement of ~1 ms and should not be presented as one.]`
+Non-API time is wall clock minus API time, which is only a rough proxy for engine time — it even comes out
+slightly negative for the control. Arm B's +20.6s is large enough to read; arm C's is reported as
+indistinguishable from the control rather than as a number.
 
 ### 3.3 Cost model
 
-Four billed token classes, fitted against 12 recorded runs' `modelUsage`/`costUSD` with **zero residual**:
+Four billed token classes, fitted against the agent model's `modelUsage` entry in every recorded run:
 
 ```
 input        $ 5.00 /Mtok
@@ -298,10 +287,8 @@ cache write  $10.00 /Mtok    paid ONCE, per new block injected     (1h TTL; 5m T
 output       $25.00 /Mtok
 ```
 
-Exact fit — independently reconfirmed at a residual of **$0.0000000** against the opus `modelUsage`
-entry, which is a stronger statement than "zero residual" — so every decomposition is arithmetic on billed
-prices, not an estimate. `[AUDIT S6 — say "against the opus entry"; `total_cost_usd` also carries the
-auxiliary model.]`
+The fit is exact (residual below $0.000001), so every decomposition is arithmetic on billed prices, not an
+estimate.
 
 ---
 
@@ -496,8 +483,7 @@ Only the ideal arm can be split this way, because only it has a moment at which 
 complete: the oracle prints `DONE`, and it does so at call 6 in all five rounds. The grep control and the
 shipped tool have no such marker — nothing tells them, or us, when they have the whole answer — so "calls
 after the answer was complete" is not a quantity that exists for them, and this table does not pretend
-otherwise. (An earlier draft gave them rows by borrowing arm C's split at call 6; those were the total call
-count minus six, not a measurement.)
+otherwise.
 
 The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.3's mechanism inside a single
 run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
@@ -607,9 +593,8 @@ batch was discarded because the harness could not reach the repository from the 
   (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
   every arm.
 - Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
-  count, `usage.output_tokens_details.thinking_tokens`. An earlier draft used the streamed `estimated_tokens`,
-  which sits ~240 tokens lower in every arm. Subtracting a near-constant offset from the small control
-  baseline inflated the ratio to 2.23x, against 1.97x on the provider's count.
+  count, `usage.output_tokens_details.thinking_tokens`; the streamed `estimated_tokens` runs ~240 tokens
+  lower per run and is not used.
 
 ### 6.2 Design asymmetries, stated
 1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
@@ -701,19 +686,18 @@ python3 bench/replay-ceiling/measure.py              # cost decomposition, break
 python3 bench/replay-ceiling/verify_independent.py   # a SECOND implementation, sharing no code with it
 ```
 `verify_independent.py` recomputes every figure above from the raw transcripts without importing
-`measure.py`. Two implementations that never shared code must agree or one of them is wrong; the `[AUDIT]`
-markers throughout this draft are where they did not. Full report: [`STUDY_AUDIT.md`](STUDY_AUDIT.md).
+`measure.py`. Two implementations that never shared code must agree or one of them is wrong. They agree on
+every figure in this paper; where they first disagreed, and what changed, is in
+[`STUDY_AUDIT.md`](STUDY_AUDIT.md).
 ## Appendix B — discarded batches, and what they bought
 `results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md` ·
 `results-oracle-grep/discarded-outside-workdir/WHY.md` — a newer CLI confined Bash to the working directory,
 disabling granted shell verbs on every arm (§6.1). Its hint pointed the wrong way — that search barely cut
 post-answer calls — because arm D's own shell `grep` was among the verbs refused.
-## Appendix C — the review that corrected this draft
-The denial adjustment in §1, §4.1, §4.3 and §5 came from external review of the first draft, which caught that
-refused turns were being reported as behaviour. Every adjusted figure was re-derived from the transcripts
-before acceptance. `[WRITE — worth a line in the paper: the correction strengthened the result, and the draft
-that missed it had already survived its own contamination audit. An audit that checks whether the control held
-does not check whether the harness's own costs are being attributed to the treatment.]`
+## Appendix C — external review
+The denial adjustment (§1, §4.1) came from external review, which caught refused turns being counted as
+behaviour. The lesson generalises: a contamination audit checks that the control held; it does not check
+whether the harness's own costs are being charged to the treatment.
 
 ## Appendix D — full per-round tables
 `[paste measure.py output verbatim]`
