@@ -152,6 +152,27 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 ---
 
+## Status in the paper
+
+Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
+is where the trail lives after a marker is removed.
+
+| finding | status | where |
+|---|---|---|
+| S1 — §5 control rows are `total_calls − 6` | **open** — marked inline | §5 table |
+| S2 — thinking ratio inflated by its source | **open** — marked inline | §1 table, §4.4 |
+| S3 — "+305" used a second definition | **applied** — read excess stated as indistinguishable from zero; 1.13x / +13% throughout | §1, §4.1, §4.3, §5.1, §6.2.4, abstract |
+| S4 — the identity was true by construction | **applied** — stated as a definition; the circular "Verified" line removed | §4.1 |
+| S5 — the break-even product cancels | **applied** — one ratio, total input context vs the control | §4.1, abstract |
+| S6 — two models billed, not one | **open** — marked inline | §3.1, §3.3 |
+| S7 — non-API time is not engine time | **applied** — "indistinguishable from the control" | §3.2, §5.1 (one explanatory marker kept in §3.2) |
+| S8 — undocumented definitions | **applied** for context per turn | §4.1 |
+| S9 — "exactly break-even" | **applied** — "indistinguishable from break-even" | §4.1, abstract |
+
+The turn budget in §4.1 had S3's problem in a second place — the control's *cache read* (943k) divided by a
+*read + write* context per turn. It now uses total input context throughout: budgets of 11.7 and 17.1 turns,
+against 13.8 and 17.2 taken.
+
 ## Not checked — unexamined, not passing
 
 - **Answer F1 / precision / recall.** Needs re-scoring 15 answers against `truth.txt` by a second

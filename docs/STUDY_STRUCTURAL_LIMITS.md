@@ -338,62 +338,54 @@ entire remaining cost.**
 
 ### 4.1 The context identity
 
+Context per turn is defined throughout as **everything the model reads on an average turn**:
+
 ```
-    cache_read  ≈  turns  ×  context_per_turn
+    context_per_turn  =  (cache_read + cache_write) / turns
+    total input context  =  turns  ×  context_per_turn
 ```
 
-§4.0's first term, made arithmetic. What you are billed for is not the context's final size but the **sum of
-its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns while doubling each
-one buys nothing. This is 2607.12161's `N_future_reads` seen from the injection side, and
+The second line is exact by that definition. What you are billed for is therefore not the context's final size
+but the **sum of its sizes over all turns** — the area under the curve, not its endpoint. Halving the turns
+while doubling each one buys nothing. This is 2607.12161's `N_future_reads` seen from the injection side, and
 it is the single fact that makes tool-call count a bad cost proxy: it is why §1's two axes move in opposite
 directions without either being mismeasured.
 
-![You pay the area, not the endpoint](figures/02-area-not-endpoint.svg)
+So a payload lowers the reading bill only if it removes more turns than it inflates each one by — that is,
+only if the arm's **total input context** ends up below the control's. One number per arm settles it:
 
-***Figure 2.** Width is turns, height is context per turn, and the AREA is what lands on the invoice. The hatched strip is refused calls, which the harness imposed. Leave them out and the ideal arm covers 983k against the control's 980k — §4.1's break-even as two equal areas. SEAM's rectangle is the narrowest and stays the largest either way.*
+| per run, mean | turns | of which refused | context / turn | total input context | vs GREP |
+|---|---|---|---|---|---|
+| GREP | 23.4 | 0.0 | 41.9k | 980k | 1.00 |
+| SEAM | 15.4 | 1.6 | 84.0k | 1,293k raw · **1,159k adjusted** | 1.32 raw · **1.18 adjusted** |
+| REPLAY (ideal) | 21.8 | 4.6 | 57.2k | 1,246k raw · **983k adjusted** | 1.27 raw · **1.003 adjusted** |
 
-`[AUDIT S4/S8 — 'context_per_turn' is (cache_read + cache_write)/turns; that definition appears nowhere in
-this draft and must be stated. With it substituted, 'turns × context_per_turn ≈ cache_read' reads
-'cache_read + cache_write ≈ cache_read', which cannot fail, and the residual reported below as
-approximation error IS the cache write — the term §4.3 calls the entire finding. Drop the word
-'Verified' and present it as a definition. See docs/STUDY_AUDIT.md.]`
+**Which column is the result.** Both, for different questions — and the difference is exactly one kind of
+turn. *Adjusted* removes the **refused calls**: turns where the agent reached for search, the harness said no,
+and the prompt was re-sent anyway. The harness imposed them, so they are apparatus. They are the **only** thing
+removed. Every turn the agent chose to take stays in — including all of its checking after the answer was
+already complete (§5). Read *raw* if the tool is meant to replace grep, where a user would meet the same
+refusals; read *adjusted* if it ships beside grep (§6.2.4). §5.2 then measures that second case directly,
+with grep actually available, instead of by adjustment.
 
-`[n=5]` Verified: GREP 23.4 × 41.9k ≈ 980k (actual 943k); SEAM 15.4 × 84.0k ≈ 1,294k (actual 1,230k).
+**The adjusted row is the paper's sharpest number.** The ideal tool's total input context is
+indistinguishable from the control's — 983k against 980k — so *an ideal retrieval tool does not lose the
+turns × context trade; it draws it.* The turns it removes and the context it adds to each one cancel almost
+exactly. The shipped tool still loses it (1.18), so the trade is winnable in principle and is not being won in
+practice. And because the reading side draws, everything the ideal tool costs above the control comes from
+the other term — the cache write (§4.3).
 
-So a payload lowers read cost only if
+![Total input context per run, refused calls separated](figures/02-area-not-endpoint.svg)
 
-```
-    turns_ratio  ×  context_ratio  <  1
-```
+***Figure 2.** Each bar is an arm's total input context — turns × context per turn — on one shared scale. The
+hatched end is the refused calls, the only part the adjustment removes. The line marks the control. With
+refusals removed, the ideal arm stops at the line (983k against 980k); the shipped tool overshoots it either
+way.*
 
-| | turns_ratio | context_ratio | product | |
-|---|---|---|---|---|
-| SEAM, raw | 0.66 | 2.00 | 1.32 | loses |
-| **SEAM, adjusted** | **0.590** | **2.005** | **1.182** | **loses** |
-| REPLAY, raw | 0.93 | 1.36 | 1.27 | loses |
-| **REPLAY, adjusted** | **0.735** | **1.365** | **1.003** | **exactly break-even** |
-
-`[AUDIT S5 — the product turns_ratio × context_ratio is algebraically identical to the TOTAL-context
-ratio: the turns cancel, (t_x/t_A)·((C_x/t_x)/(C_A/t_A)) = C_x/C_A. Verified numerically both ways. The
-adjusted 1.003 is correct and meaningful — it is (C_x − denials·ctx)/C_A, the adjusted total-input-context
-ratio — but it is ONE ratio, not a product of two that annihilate. Report it as such; the narrative above
-is true and should stay.]`
-
-**This is the paper's sharpest number and it was nearly missed.** Corrected for refused turns, the ideal arm's
-excess cache read is **indistinguishable from zero** against the control — not the +252,654 the raw
-figures show. `[AUDIT S3 — APPLIED, recorded here so the change is traceable. The earlier "+305" was computed with
-context_per_turn = cache_read/turns, contradicting the (read+write)/turns used a few lines above; under this
-section's own definition it is −10,244, and on total context +2,968. All three are ~0 against a ~1M baseline,
-so the CLAIM survived every definition and only the spurious precision went. Consequently §1, §4.3, §5.1 and
-§6.2.4 now read 1.13x / +$0.1317 / +13% rather than 1.14x / +$0.1370 / +14%, and arm B is unaffected (its
-adjusted read excess is +152k, not ~0).]` *An ideal
-retrieval tool does not lose the turns x context trade. It draws it.* The shipped tool still loses it (1.182),
-so the trade is winnable in principle and is not being won in practice.
-
-Restated as a **turn budget** — the form most useful to a tool designer: grep spent 943k tokens of reading, so
-at 84.0k of context per turn Seam may take **11.2 turns**; it took 15.4. The oracle, at 57.2k, may take 16.5;
-it took 21.8 raw, **17.2 adjusted — inside 5% of its budget.** *The denser the answer, the fewer turns it is
-allowed* — and the tool sets its own budget.
+The same draw, restated as a **turn budget** — the form most useful to a tool designer. The control read
+980k tokens in total, so a tool carrying 84.0k of context per turn can afford **11.7 turns** to match it;
+Seam took 13.8 adjusted. At 57.2k per turn the oracle can afford **17.1**; it took **17.2 adjusted**. *The
+denser the answer, the fewer turns it is allowed* — and the tool sets its own budget.
 
 ### 4.2 The write premium and the break-even
 

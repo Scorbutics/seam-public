@@ -1,18 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 296" width="720" height="296" role="img" aria-labelledby="t d">
-<title id="t">You pay the area, not the endpoint</title>
-<desc id="d">Three rectangles on shared axes, width turns by height context per turn, each with a hatched strip for refused calls. Leaving refusals out, GREP covers 980k, SEAM 1,159k and the ideal REPLAY arm 983k, level with the control.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 236" width="720" height="236" role="img" aria-labelledby="t d">
+<title id="t">Total input context per run</title>
+<desc id="d">Total input context per run on one shared scale, refused calls hatched at the end of each bar, with a line at the control's 980k. Adjusted, the ideal arm is 1.003 times the control and the shipped tool 1.18; raw, 1.27 and 1.32.</desc>
 <style>
   :root{
     --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
     --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
-    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --arm-a:#2a78d6; --arm-b:#008300; --arm-c:#e87ba4;
     --premium:#C0761F; --premium-soft:#EBD6BA;
   }
   @media (prefers-color-scheme:dark){:root{
     --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
     --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
-    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
-    --premium:#E29A47; --premium-soft:#4A3820;
+    --arm-a:#3987e5; --arm-b:#008300; --arm-c:#d55181;
+    --premium:#B8812A; --premium-soft:#4A3820;
   }}
   .bg{fill:var(--panel)}
   .ax{stroke:var(--rule);stroke-width:1;fill:none}
@@ -23,54 +23,42 @@
   .big{font-family:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;fill:var(--ink);font-weight:600}
   .a{fill:var(--arm-a)} .b{fill:var(--arm-b)} .c{fill:var(--arm-c)} .p{fill:var(--premium)}
 </style>
-<rect class="bg" x="0" y="0" width="720" height="296"/>
-
+<rect class="bg" x="0" y="0" width="720" height="236"/>
   <defs>
-    <pattern id="refused" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
-      <rect width="5" height="5" fill="var(--panel)"/>
-      <line x1="0" y1="0" x2="0" y2="5" stroke="var(--ink-soft)" stroke-width="1.6"/>
-    </pattern>
+  <pattern id="ref-a" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--arm-a)" stroke-width="2"/></pattern>
+  <pattern id="ref-b" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--arm-b)" stroke-width="2"/></pattern>
+  <pattern id="ref-c" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--arm-c)" stroke-width="2"/></pattern>
+  <pattern id="ref-key" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--ink-soft)" stroke-width="2"/></pattern>
   </defs>
-  <line class="ax" x1="46" y1="238" x2="704" y2="238"/>
-  <g class="gl">
-    <line x1="46" y1="196" x2="704" y2="196"/><line x1="46" y1="154" x2="704" y2="154"/>
-    <line x1="46" y1="112" x2="704" y2="112"/><line x1="46" y1="70" x2="704" y2="70"/>
-  </g>
-  <g class="tk" text-anchor="end">
-    <text x="40" y="242">0</text><text x="40" y="200">20k</text><text x="40" y="158">40k</text>
-    <text x="40" y="116">60k</text><text x="40" y="74">80k</text>
-  </g>
-  <text class="tk" x="10" y="46">context</text><text class="tk" x="10" y="60">per turn</text>
-
-  <!-- GREP : 23.4 turns x 41,882, no refusals -->
-  <rect x="50" y="150" width="176" height="88" class="a" opacity="0.30"/>
-  <rect x="50" y="150" width="176" height="88" fill="none" stroke="var(--arm-a)" stroke-width="1.5"/>
-  <text class="big" x="138" y="196" text-anchor="middle">980k</text>
-  <text class="lb" x="50" y="262">GREP</text>
-  <text class="lbs" x="50" y="279">23.4 turns, 0 refused</text>
-
-  <!-- SEAM : 15.4 turns (1.6 refused) x 83,955 -->
-  <rect x="280" y="61" width="104" height="177" class="b" opacity="0.30"/>
-  <rect x="384" y="61" width="12" height="177" fill="url(#refused)"/>
-  <rect x="280" y="61" width="116" height="177" fill="none" stroke="var(--arm-b)" stroke-width="1.5"/>
-  <text class="big" x="332" y="150" text-anchor="middle">1,159k</text>
-  <text class="lbs" x="332" y="167" text-anchor="middle">+134k refused</text>
-  <text class="lb" x="280" y="262">SEAM</text>
-  <text class="lbs" x="280" y="279">15.4 turns, 1.6 refused</text>
-
-  <!-- REPLAY : 21.8 turns (4.6 refused) x 57,152 -->
-  <rect x="510" y="117" width="129" height="121" class="c" opacity="0.30"/>
-  <rect x="639" y="117" width="35" height="121" fill="url(#refused)"/>
-  <rect x="510" y="117" width="164" height="121" fill="none" stroke="var(--arm-c)" stroke-width="1.5"/>
-  <line x1="639" y1="117" x2="639" y2="238" stroke="var(--arm-c)" stroke-width="1" stroke-dasharray="3 3"/>
-  <text class="big" x="574" y="176" text-anchor="middle">983k</text>
-  <text class="lbs" x="574" y="193" text-anchor="middle">≈ GREP's 980k</text>
-  <text class="lbs" x="656" y="108" text-anchor="middle">+263k</text>
-  <text class="lb" x="510" y="262">REPLAY (ideal)</text>
-  <text class="lbs" x="510" y="279">21.8 turns, 4.6 refused</text>
-
-  <rect x="430" y="18" width="12" height="12" fill="url(#refused)" stroke="var(--ink-soft)" stroke-width="0.8"/>
-  <text class="lbs" x="448" y="28">refused calls — imposed by the harness</text>
-  <text class="lbs" x="704" y="46" text-anchor="end">width = turns · height = context/turn · AREA = what you pay</text>
-
+  <line class="gl" x1="160.0" y1="36" x2="160.0" y2="190"/>
+  <text class="tk" x="160.0" y="206" text-anchor="middle">0</text>
+  <line class="gl" x1="274.3" y1="36" x2="274.3" y2="190"/>
+  <text class="tk" x="274.3" y="206" text-anchor="middle">400k</text>
+  <line class="gl" x1="388.6" y1="36" x2="388.6" y2="190"/>
+  <text class="tk" x="388.6" y="206" text-anchor="middle">800k</text>
+  <line class="gl" x1="502.9" y1="36" x2="502.9" y2="190"/>
+  <text class="tk" x="502.9" y="206" text-anchor="middle">1,200k</text>
+  <line class="ax" x1="160" y1="190" x2="600" y2="190"/>
+  <text class="lbs" x="160" y="226">total input context per run — cache read + cache write</text>
+  <rect x="160" y="8" width="14" height="12" rx="2" fill="url(#ref-key)"/>
+  <text class="lbs" x="180" y="18">refused calls — imposed by the harness, the only thing "adjusted" removes</text>
+  <text class="lb" x="10" y="55">GREP</text>
+  <text class="lbs" x="10" y="70">23.4 turns × 41.9k</text>
+  <path class="a" d="M160.0,44 H436.0 Q440.0,44 440.0,48 V66 Q440.0,70 436.0,70 H160.0 Z"><title>GREP: 980k from turns the agent took</title></path>
+  <text class="big" x="448.0" y="56">1.00×</text>
+  <text class="lbs" x="448.0" y="70">980k</text>
+  <text class="lb" x="10" y="111">SEAM</text>
+  <text class="lbs" x="10" y="126">15.4 turns × 84.0k</text>
+  <path class="b" d="M160.0,100 H491.1 V126 H160.0 Z"><title>SEAM: 1,159k from turns the agent took</title></path>
+  <path fill="url(#ref-b)" d="M493.1,100 H525.4 Q529.4,100 529.4,104 V122 Q529.4,126 525.4,126 H493.1 Z"><title>SEAM: 134k from 1.6 refused calls per run</title></path>
+  <text class="big" x="537.4" y="112">1.18×</text>
+  <text class="lbs" x="537.4" y="126">1,159k · raw 1.32×</text>
+  <text class="lb" x="10" y="167">REPLAY (ideal)</text>
+  <text class="lbs" x="10" y="182">21.8 turns × 57.2k</text>
+  <path class="c" d="M160.0,156 H440.9 V182 H160.0 Z"><title>REPLAY (ideal): 983k from turns the agent took</title></path>
+  <path fill="url(#ref-c)" d="M442.9,156 H512.0 Q516.0,156 516.0,160 V178 Q516.0,182 512.0,182 H442.9 Z"><title>REPLAY (ideal): 263k from 4.6 refused calls per run</title></path>
+  <text class="big" x="524.0" y="168">1.003×</text>
+  <text class="lbs" x="524.0" y="182">983k · raw 1.27×</text>
+  <line x1="440.0" y1="36" x2="440.0" y2="190" stroke="var(--ink)" stroke-width="1.4"/>
+  <text class="lbs" x="440.0" y="32" text-anchor="middle">control 980k</text>
 </svg>

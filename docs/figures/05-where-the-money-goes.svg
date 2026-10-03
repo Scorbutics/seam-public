@@ -5,14 +5,14 @@
   :root{
     --ink:#141C22; --ink-soft:#4A585F; --ink-faint:#7C8A90;
     --rule:#D2DAD9; --rule-soft:#E4EAE9; --panel:#FAFBFB;
-    --arm-a:#54666E; --arm-b:#2F6F6A; --arm-c:#3C5A8A;
+    --arm-a:#2a78d6; --arm-b:#008300; --arm-c:#e87ba4;
     --premium:#C0761F; --premium-soft:#EBD6BA;
   }
   @media (prefers-color-scheme:dark){:root{
     --ink:#E2E9EA; --ink-soft:#9DAAAF; --ink-faint:#6F7D83;
     --rule:#2A363B; --rule-soft:#212C31; --panel:#182024;
-    --arm-a:#8DA0A8; --arm-b:#5AA9A2; --arm-c:#7C9BCE;
-    --premium:#E29A47; --premium-soft:#4A3820;
+    --arm-a:#3987e5; --arm-b:#008300; --arm-c:#d55181;
+    --premium:#B8812A; --premium-soft:#4A3820;
   }}
   .bg{fill:var(--panel)}
   .ax{stroke:var(--rule);stroke-width:1;fill:none}
@@ -40,13 +40,13 @@
   <text class="lbs" x="162" y="289" text-anchor="middle">the premium</text>
 
   <line x1="214" y1="83" x2="266" y2="83" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
-  <rect x="266" y="83" width="104" height="7" fill="var(--arm-a)"/>
+  <rect x="266" y="83" width="104" height="7" fill="var(--ink-soft)"/>
   <text class="lbs" x="318" y="74" text-anchor="middle">−$0.0051</text>
   <text class="lb" x="318" y="272" text-anchor="middle">cache read</text>
   <text class="lbs" x="318" y="289" text-anchor="middle">≈ zero</text>
 
   <line x1="370" y1="90" x2="422" y2="90" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3 3"/>
-  <rect x="422" y="84" width="104" height="6" fill="var(--arm-c)"/>
+  <rect x="422" y="84" width="104" height="6" fill="var(--ink-soft)"/>
   <text class="lbs" x="474" y="74" text-anchor="middle">+$0.0047</text>
   <text class="lb" x="474" y="272" text-anchor="middle">output</text>
   <text class="lbs" x="474" y="289" text-anchor="middle">thinking lives here</text>
