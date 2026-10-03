@@ -155,12 +155,13 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 ## Status in the paper
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
-is where the trail lives after a marker is removed.
+is where the trail lives after a marker is removed. With S1 and S2 applied, `verify_independent.py` reports
+every checked figure reproducing (55 checks, exit 0); its two remaining notes are S6 and the wall-clock source.
 
 | finding | status | where |
 |---|---|---|
-| S1 — §5 control rows are `total_calls − 6` | **open** — marked inline | §5 table |
-| S2 — thinking ratio inflated by its source | **open** — marked inline | §1 table, §4.4 |
+| S1 — §5 control rows are `total_calls − 6` | **applied** — the table is arm C only, split at its own `DONE` (measured at call 6 in every round); why the other arms cannot be split is stated | §5 |
+| S2 — thinking ratio inflated by its source | **applied** — provider count, 1.97x / 1.94x; the cost statement now uses the net output term, since thinking rises ~1,040 tokens while other output falls ~850 | §1, §4.4, §6.1, measure.py |
 | S3 — "+305" used a second definition | **applied** — read excess stated as indistinguishable from zero; 1.13x / +13% throughout | §1, §4.1, §4.3, §5.1, §6.2.4, abstract |
 | S4 — the identity was true by construction | **applied** — stated as a definition; the circular "Verified" line removed | §4.1 |
 | S5 — the break-even product cancels | **applied** — one ratio, total input context vs the control | §4.1, abstract |

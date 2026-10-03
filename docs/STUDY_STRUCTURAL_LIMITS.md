@@ -77,7 +77,7 @@ measurement on the same repository. Re-measured on a corrected harness with the 
 | tool calls | 22.4 | **14.4** | 20.8 |
 | model turns | 23.4 | **15.4** | 21.8 |
 | context tokens / turn | 41,882 | **83,955** | 57,152 |
-| thinking tokens `[AUDIT S2]` | 870 | **1,940** (2.23x) | **1,890** (2.17x) |
+| thinking tokens | 1,108 | **2,177** (1.97x) | **2,145** (1.94x) |
 | cache write | 36,779 | 62,923 | 49,991 |
 | cache read | 943,264 | 1,229,982 | 1,195,918 |
 | wall clock | 85s | 119s | 89s |
@@ -448,17 +448,18 @@ that regime is never reached.]`
 
 ### 4.4 Thinking doubles, and is not the cause
 
-`[AUDIT S2 — these figures come from streamed `estimated_tokens`, which sits ~240 tokens BELOW the
-provider's own `usage.output_tokens_details.thinking_tokens` in every arm (870/1940/1890 against
-1108/2177/2145). A near-constant offset subtracted from a small control baseline inflates the RATIO:
-**1.97x / 1.94x** on the authoritative field, not 2.23x / 2.17x. "Roughly doubles" survives; the figure
-does not. The cost SHARES (7% / 10%) are unaffected.]`
+`[n=5]` Read from the provider's own count (`usage.output_tokens_details.thinking_tokens`), thinking roughly
+doubles: **1,108** tokens per run in the control, **2,177** in the Seam arm (**1.97x**) and **2,145** in the ideal
+arm (**1.94x**). It is real and reproducible, and nearly irrelevant to the bill, for two reasons.
 
-`[n=5]` With thinking measured directly (`thinking_delta.estimated_tokens`; the earlier harness stored
-thinking blocks with empty content), reasoning rises **2.23x** in the Seam arm and **2.17x** in the ideal arm —
-while accounting for only **7%** and **10%** of their respective cost gaps. Real, reproducible, nearly
-irrelevant to the bill: thinking is priced as output ($25/Mtok) but small in volume; context is priced 50x
-lower per token and three orders of magnitude larger.
+First, thinking is billed as output, and output is small next to context. Context is priced 50x lower per
+token but is three orders of magnitude larger.
+
+Second, **the arms that think more write less of everything else.** Thinking is part of the output tokens.
+The Seam and ideal arms each think about 1,040 tokens more than the control, but write about 850 fewer
+tokens of text and tool calls, because they make fewer calls. The output term as a whole therefore rises by
+only about 190 tokens in the ideal arm. That is the +$0.0047 in §4.3, under 4% of its adjusted cost gap.
+Pricing thinking on its own makes it look about five times larger than the output term it sits inside.
 
 **And it is not documentation density.** The ideal arm carries a 300-byte manual against 42 KB and thinks just
 as much, so what doubles reasoning is the *structured payload itself*, not the instructions for obtaining it.
@@ -486,22 +487,25 @@ every experiment that compares two imperfect tools.
 **14.8 further calls**, costing **52% of the run**, and finished in **21.8 turns against the control's 23.4** —
 a 7% reduction, from a tool that had already handed it the entire answer.
 
-| | calls after the answer was complete | of which executed | of which refused | share of run cost |
+| REPLAY (ideal), per run | tool calls | of which executed | of which refused | share of run cost |
 |---|---|---|---|---|
-| GREP | 16.4 | 16.4 | 0.0 | 65% |
-| SEAM | 8.4 | 6.8 | 1.6 | 41% |
-| **REPLAY (ideal)** | **14.8** | **10.2** | **4.6** | **52%** |
+| before `DONE` — reaching the answer | 6.0 | 6.0 | 0.0 | 48% |
+| **after `DONE` — checking it** | **14.8** | **10.2** | **4.6** | **52%** |
 
-`[AUDIT S1 — the GREP and SEAM rows are `total_calls − 6`, the split index borrowed from arm C's oracle;
-measure.py's own docstring says it is "only meaningful for arm C". Those arms have no completion marker, so
-the column as headed is not a measurement for them. Arm C's row IS real and is independently confirmed:
-`DONE` lands at call #6 in all five rounds, so 20.8 − 6 = 14.8 is genuinely "after the answer was
-complete". Restrict the claim to arm C, or define completion for A and B and measure it.]`
+Only the ideal arm can be split this way, because only it has a moment at which the answer is provably
+complete: the oracle prints `DONE`, and it does so at call 6 in all five rounds. The grep control and the
+shipped tool have no such marker — nothing tells them, or us, when they have the whole answer — so "calls
+after the answer was complete" is not a quantity that exists for them, and this table does not pretend
+otherwise. (An earlier draft gave them rows by borrowing arm C's split at call 6; those were the total call
+count minus six, not a measurement.)
 
-**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before.** `[VERIFIED
-independently by tool_use_id position: 23 after, 0 before, 0 unmatched, across all five rounds.]` The agent walks the
-oracle to completion without once trying to go around it, and only then starts reaching for tools it does not
-have. `[WRITE — and note which way the refusals cut: an agent that, having been handed a provably complete
+The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.3's mechanism inside a single
+run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
+the long tail after `DONE` re-reads at a twentieth of that price.
+
+**All 23 of arm C's refusals across the five rounds fall AFTER `DONE`; none before** — matched by tool-call
+id, 23 after, 0 before, 0 unmatched. The agent walks the oracle to completion without once trying to go
+around it, and only then starts reaching for tools it does not have. `[WRITE — and note which way the refusals cut: an agent that, having been handed a provably complete
 answer, reaches five more times for a search tool it has been told it lacks is STRONGER evidence of the
 verification drive than the raw call count is. Report both terms; the behaviour survives either reading.
 Adjusted, the floor is 10.2 executed calls — still 47% of the ideal arm's turns spent after the answer was
@@ -602,7 +606,10 @@ batch was discarded because the harness could not reach the repository from the 
   and it disabled the shell `grep` arm D exists to test. The batch was discarded
   (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
   every arm.
-- Thinking text is redacted even with `--include-partial-messages`; `estimated_tokens` is the measurement.
+- Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
+  count, `usage.output_tokens_details.thinking_tokens`. An earlier draft used the streamed `estimated_tokens`,
+  which sits ~240 tokens lower in every arm. Subtracting a near-constant offset from the small control
+  baseline inflated the ratio to 2.23x, against 1.97x on the provider's count.
 
 ### 6.2 Design asymmetries, stated
 1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
