@@ -264,7 +264,6 @@ for a in ARMS:
     paper = {"A": 85, "B": 119, "C": 89}[a]
     check(f"wall from .secs [{NAME[a]}]", st.mean(runs[a][r]["wall_secs"] for r in sorted(runs[a])), paper, 0.5, "{:.0f}")
     print(f"        (duration_ms would give {M(a,'wall_ms'):.0f}s)")
-notes.append("§1: wall clock comes from the shell-timed .secs files; duration_ms is ~2s lower. Say which.")
 
 print("\n## §1 billed cost")
 base = M("A", "cost")
@@ -300,11 +299,6 @@ print(f"  {'ok ' if exact else 'FAIL'}   fit vs the {MODEL} modelUsage entry   "
 print(f"  NOTE  fit vs total_cost_usd                 max residual ${worst_tot:.5f}  (the auxiliary model)")
 if not exact:
     fails.append("four-price model fits the primary modelUsage entry")
-if len(MODELS) > 1:
-    notes.append(f"§3.1: {len(MODELS)} models are billed in every run, not one. "
-                 f"The fit is exact against the {MODEL} entry; total_cost_usd carries the auxiliary "
-                 f"model too.")
-
 print("\n## §4.1 the identity, and the product that cancels")
 for a in ARMS:
     gap = M(a, "turns") * ctx[a] - M(a, "cr")

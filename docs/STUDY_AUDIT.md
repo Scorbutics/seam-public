@@ -155,8 +155,8 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 ## Status in the paper
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
-is where the trail lives after a marker is removed. With S1 and S2 applied, `verify_independent.py` reports
-every checked figure reproducing (55 checks, exit 0); its two remaining notes are S6 and the wall-clock source.
+is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
+markers. `verify_independent.py` reports every checked figure reproducing (55 checks, exit 0, no open notes).
 
 | finding | status | where |
 |---|---|---|
@@ -165,9 +165,9 @@ every checked figure reproducing (55 checks, exit 0); its two remaining notes ar
 | S3 — "+305" used a second definition | **applied** — read excess stated as indistinguishable from zero; 1.13x / +13% throughout | §1, §4.1, §4.3, §5.1, §6.2.4, abstract |
 | S4 — the identity was true by construction | **applied** — stated as a definition; the circular "Verified" line removed | §4.1 |
 | S5 — the break-even product cancels | **applied** — one ratio, total input context vs the control | §4.1, abstract |
-| S6 — two models billed, not one | **open** — marked inline | §3.1, §3.3 |
+| S6 — two models billed, not one | **applied** — §3.1 names the auxiliary model; §3.3 states the fit plainly | §3.1, §3.3 |
 | S7 — non-API time is not engine time | **applied** — "indistinguishable from the control" | §3.2, §5.1 (one explanatory marker kept in §3.2) |
-| S8 — undocumented definitions | **applied** for context per turn | §4.1 |
+| S8 — undocumented definitions | **applied** — context per turn defined; wall clock marked shell-timed | §4.1, §1 |
 | S9 — "exactly break-even" | **applied** — "indistinguishable from break-even" | §4.1, abstract |
 
 The turn budget in §4.1 had S3's problem in a second place — the control's *cache read* (943k) divided by a
