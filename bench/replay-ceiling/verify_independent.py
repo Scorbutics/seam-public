@@ -332,7 +332,7 @@ cands = {
 for k, v in cands.items():
     print(f"        {k:44} {v:+12,.0f}" + ("   <- reproduces '+305'" if abs(v - 305) < 80 else ""))
 
-print("\n## §4.3 decomposition of arm C's adjusted gap")
+print("\n## §4.2 decomposition of arm C's adjusted gap")
 dec = {
     "cache write": ((M("C", "cw") - M("A", "cw")) * PRICE["cw"], 0.1321),
     "cache read":  ((M("C", "cr") - d * ctx["C"] - M("A", "cr")) * PRICE["cr"], -0.0051),
@@ -344,13 +344,13 @@ for k, (mine, paper) in dec.items():
 check("TOTAL gap ($)", tot_mine, 0.1317, 0.002, "{:+.4f}")
 check("TOTAL gap (%)", tot_mine / base * 100, 13.2, 0.5, "{:.1f}")
 
-print("\n## §4.2 / §4.3 derivations (algebra over the FITTED price vector, so they move with it)")
+print("\n## §4.2 derivations (algebra over the FITTED price vector, so they move with it)")
 check("break-even bar (read/write price)", PRICE["cr"] / PRICE["cw"], 0.050, 0.0005, "{:.3f}")
 cw_m, cr_m = PRICE["cw"] * 1e6, PRICE["cr"] * 1e6
 for T, p in [(20, 1.00), (10, 1.50), (4, 3.00), (2, 5.50), (1, 10.50)]:
     check(f"amortised $/Mtok-turn at T={T}", (cw_m + cr_m * T) / T, p, 0.005, "${:.2f}")
 
-print("\n## §4.4 thinking tokens — source matters")
+print("\n## §4.3 thinking tokens — source matters")
 for a in ARMS:
     paper = {"A": 1108, "B": 2177, "C": 2145}[a]
     check(f"thinking tokens [{NAME[a]}]", M(a, "think"), paper, 5, "{:.0f}")
@@ -414,6 +414,47 @@ check("context before DONE / control", pre / Ctot["A"], 0.35, 0.005, "{:.3f}")
 check("executed checking after DONE / control", (adj_c - pre) / Ctot["A"], 0.65, 0.005, "{:.3f}")
 print("        GREP and SEAM have no completion marker, so 'calls after the answer was complete'")
 print("        does not exist for them; the paper no longer reports it, and neither does this script.")
+
+print("\n## [kcC] the earlier six-round measurement (§1, §4.2) — bench/grep-vs-seam/results/kcC-ab*")
+KCC = os.path.join(_HERE, "..", "grep-vs-seam", "results")
+def kcc_run(path):
+    calls, res = 0, None
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            calls += sum(1 for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use")
+        if d.get("type") == "result": res = d
+    u = res.get("usage") or {}
+    return dict(calls=calls, turns=res.get("num_turns", 0),
+                cw=u.get("cache_creation_input_tokens", 0), cr=u.get("cache_read_input_tokens", 0),
+                out=u.get("output_tokens", 0), cost=res.get("total_cost_usd", 0.0),
+                api=res.get("duration_api_ms", 0) / 1000.0,
+                wall=float(open(path[:-len(".jsonl")] + ".secs").read().strip()))
+kcc = {a: [kcc_run(f) for f in sorted(glob.glob(os.path.join(KCC, f"kcC-ab*.{a}.jsonl")))] for a in "AB"}
+if PAPER_SET and all(kcc.values()):
+    print(f"        rounds: GREP {len(kcc['A'])}, SEAM {len(kcc['B'])}")
+    K = {a: {k: sum(r[k] for r in kcc[a]) / len(kcc[a]) for k in kcc[a][0]} for a in "AB"}
+    ka, kb = K["A"], K["B"]
+    check("[kcC] rounds per arm", min(len(kcc["A"]), len(kcc["B"])), 6, 0, "{:.0f}")
+    check("[kcC] fewer tool calls (x)", ka["calls"] / kb["calls"], 2.7, 0.05, "{:.2f}")
+    check("[kcC] bill, total incl. auxiliary model (x)", kb["cost"] / ka["cost"], 1.18, 0.005, "{:.3f}")
+    check("[kcC] output tokens (x)", kb["out"] / ka["out"], 0.81, 0.005, "{:.3f}")
+    check("[kcC] cache read (x)", kb["cr"] / ka["cr"], 0.81, 0.005, "{:.3f}")
+    check("[kcC] API time (x)", kb["api"] / ka["api"], 0.81, 0.005, "{:.3f}")
+    check("[kcC] cache write (x)", kb["cw"] / ka["cw"], 1.79, 0.005, "{:.3f}")
+    check("[kcC] wall clock, shell-timed (x)", kb["wall"] / ka["wall"], 1.09, 0.005, "{:.3f}")
+    check("[kcC] fewer turns (x)", ka["turns"] / kb["turns"], 2.6, 0.05, "{:.2f}")
+    dw, dr = kb["cw"] - ka["cw"], ka["cr"] - kb["cr"]
+    bar = PRICE["cr"] / PRICE["cw"]
+    check("[kcC] added write / saved read", dw / dr, 0.176, 0.0005, "{:.3f}")
+    check("[kcC] over the bar (x)", dw / dr / bar, 3.5, 0.05, "{:.2f}")
+    check("[kcC] largest payload that breaks even (tok)", bar * dr, 6838, 1, "{:,.0f}")
+    check("[kcC] turns that would break even", (ka["cr"] - dw / bar) / (kb["cr"] / kb["turns"]), 3.9, 0.05, "{:.2f}")
+    check("[kcC] SEAM tool calls", kb["calls"], 8.7, 0.05, "{:.1f}")
+elif not all(kcc.values()):
+    unchecked.append(f"[kcC] figures — no kcC-ab*.[AB].jsonl under {os.path.normpath(KCC)}")
 
 print("\n## §3.2 non-API ('engine') time")
 for a in ARMS:

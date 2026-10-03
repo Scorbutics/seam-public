@@ -156,7 +156,8 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (61 checks, exit 0, no open notes).
+markers. `verify_independent.py` reports every checked figure reproducing (75 checks, exit 0, no open notes), including
+the `[kcC]` figures from `bench/grep-vs-seam/results/`.
 
 | finding | status | where |
 |---|---|---|
@@ -171,8 +172,12 @@ markers. `verify_independent.py` reports every checked figure reproducing (61 ch
 | S9 — "exactly break-even" | **applied** — "indistinguishable from break-even" | §4.1, abstract |
 
 The turn budget in §4.1 had S3's problem in a second place — the control's *cache read* (943k) divided by a
-*read + write* context per turn. It now uses total input context throughout: budgets of 11.7 and 17.1 turns,
-against 13.8 and 17.2 taken.
+*read + write* context per turn. It was then fixed to use total input context, and later removed: it restated
+the §4.1 table and assumed a fixed context per turn.
+
+Checking the `[kcC]` figures found two more: §1's bill was +17% on the agent model alone (+18% with the
+auxiliary model, as every other total is counted), and §4.2's turn reduction was 2.5x where 24.7 / 9.7 is
+2.55. Both are corrected.
 
 ## Not checked — unexamined, not passing
 

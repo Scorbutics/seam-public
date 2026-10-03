@@ -47,7 +47,7 @@ service boundary, where it ends. The working hypothesis while building it was th
 answers in fewer steps than an agent grepping its way to the same place should cost less than that agent.
 
 `[kcC]` Six paired rounds measured the first half of that and refused the second: **2.7x fewer tool calls,
-and a 17% higher bill.** Every token class the tool was built to move, moved the right way — output tokens
+and an 18% higher bill.** Every token class the tool was built to move, moved the right way — output tokens
 −19%, cache reads −19%, API time −19% — and the bill rose anyway, because the one class that went UP was the
 cache **write** (1.79x). Wall clock rose 1.09x.
 
@@ -94,7 +94,7 @@ in the argument rests on it.
 are refusals. A refusal still costs a turn — the prompt is re-sent — but the harness imposed it rather than
 the agent choosing it, so the adjusted row subtracts one prompt re-read per refusal. (Subtracting a *full*
 average turn would over-credit: the payload's cache writes happened regardless.) This is not bookkeeping.
-It is what moves the ideal arm from **losing** the context trade to **drawing** it (§4.1), so §4.3's claim
+It is what moves the ideal arm from **losing** the context trade to **drawing** it (§4.1), so §4.2's claim
 that the write premium is the entire residual depends on it. §6.2.4 states which pitch supports which row.
 
 ---
@@ -309,7 +309,7 @@ here before any algebra:
 1. **The payload inflates every remaining turn.** The conversation is re-sent in full on each turn, so
    bytes that sit in the context are paid for *again* on every turn that follows. §4.1 is this term.
 2. **The payload is written into the cache once, at twenty times the read price.** A fixed, one-time
-   charge, spread over however many turns follow it. §4.3 is this term.
+   charge, spread over however many turns follow it. §4.2 is this term.
 
 The difficulty is that **one payload moves both, in opposite directions**. The bytes that let the agent
 stop early are the same bytes every remaining turn has to carry; and the earlier it stops, the fewer turns
@@ -362,7 +362,7 @@ It had the complete answer at **346k, about a third of the control's total**. On
 by a wide margin; what brings it back to the line is the **637k the agent then spent checking an answer that
 was already complete**. That checking is the paper's result, the verification floor (§5). The shipped tool
 loses the trade either way (1.18). And because the ideal run as a whole reads about what the control reads,
-everything it costs above the control comes from the other term — the cache write (§4.3).
+everything it costs above the control comes from the other term — the cache write (§4.2).
 
 ![Total input context per run, refused calls separated](figures/02-area-not-endpoint.svg)
 
@@ -373,22 +373,12 @@ checking after it. Only that arm can be split, because only it has a completion 
 the ideal arm stops at the line, and almost two thirds of what reaches it is checking; the shipped tool
 overshoots the line either way.*
 
-The same parity, restated as a **turn budget** — the form most useful to a tool designer. The control read
-980k tokens in total, so a tool carrying 84.0k of context per turn can afford **11.7 turns** to match it;
-Seam took 13.8 adjusted. At 57.2k per turn the oracle can afford **17.1**; it took **17.2 adjusted**. *The
-denser the answer, the fewer turns it is allowed* — and the tool sets its own budget.
+### 4.2 The amortisation inversion — the ONLY surviving cost term
 
-### 4.2 The write premium and the break-even
-
-At the 1h cache TTL a write costs 2.0x input and a read 0.1x, so a tool is cheaper on that trade only if
-**every extra token it puts into context removes twenty tokens of re-reading** — a bar of 0.050. `[kcC]`,
-where turns did fall 2.5x and the trade was genuinely attempted, the ratio is **0.176**: it fails by 3.5x.
-The two escapes are both closed by arithmetic. The payload would have to fit in 6,838 tokens (the map alone
-is ~7k), or the tool would have to answer in **3.9 turns — fewer turns than it makes tool calls** (8.7).
-`[State the TTL beside the bar: at the 5m tier it is 0.080 (12.5:1), a LOWER bar. Both tiers are measured
-in §6.3.]`
-
-### 4.3 The amortisation inversion — the ONLY surviving cost term
+**The price of the write term.** At the 1h cache TTL a write costs 2.0x input and a read 0.1x. A payload pays
+for itself only if **each token it adds to the context saves at least twenty tokens of re-reading**: added
+tokens divided by saved tokens must stay under **0.050**. At the 5m TTL a write costs 1.25x input and the bar is
+0.080; both tiers are measured in §6.3.
 
 `[WRITE — §4.1 adjusted leaves the read term indistinguishable from zero. Everything the ideal tool costs above
 the control is therefore this section and nothing else:]`
@@ -433,11 +423,16 @@ it, and claim only the inversion's direction as framing. What IS new here is the
 read term measured at zero on an ideal tool, the premium is not one contributor among several but the entire
 residual.]`
 
+**What happened when the turns did fall.** `[kcC]` In the earlier six-round measurement (§1), the shipped tool
+cut turns 2.6x (24.7 to 9.7). To do it, it added 24.1k tokens of cache write and saved 136.8k of cache read: a
+ratio of **0.176, 3.5x over the bar**. To break even, its payload would have had to fit in 6,838 tokens (the
+map alone is ~7k), or it would have had to answer in **3.9 turns, fewer than its 8.7 tool calls**.
+
 `[Honesty note to preserve: this does NOT make a true one-call tool impossible on arithmetic alone. At a 36k
 payload and one turn the write is $0.36 against grep's ~$0.49 of accumulated reading — it would win. §5 is why
 that regime is never reached.]`
 
-### 4.4 Thinking doubles, and is not the cause
+### 4.3 Thinking doubles, and is not the cause
 
 `[n=5]` Read from the provider's own count (`usage.output_tokens_details.thinking_tokens`), thinking roughly
 doubles: **1,108** tokens per run in the control, **2,177** in the Seam arm (**1.97x**) and **2,145** in the ideal
@@ -449,7 +444,7 @@ token but is three orders of magnitude larger.
 Second, **the arms that think more write less of everything else.** Thinking is part of the output tokens.
 The Seam and ideal arms each think about 1,040 tokens more than the control, but write about 850 fewer
 tokens of text and tool calls, because they make fewer calls. The output term as a whole therefore rises by
-only about 190 tokens in the ideal arm. That is the +$0.0047 in §4.3, under 4% of its adjusted cost gap.
+only about 190 tokens in the ideal arm. That is the +$0.0047 in §4.2, under 4% of its adjusted cost gap.
 Pricing thinking on its own makes it look about five times larger than the output term it sits inside.
 
 **And it is not documentation density.** The ideal arm carries a 300-byte manual against 42 KB and thinks just
@@ -492,7 +487,7 @@ otherwise.
 In context, the same split is 346k to reach the answer and 637k of executed checking after it, plus the 263k of
 refusals (Figure 2): the checking alone reads 65% of what the control reads for the whole task.
 
-The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.3's mechanism inside a single
+The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.2's mechanism inside a single
 run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
 the long tail after `DONE` re-reads at a twentieth of that price.
 
