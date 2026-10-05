@@ -308,8 +308,9 @@ here before any algebra:
 
 1. **The payload inflates every remaining turn.** The conversation is re-sent in full on each turn, so
    bytes that sit in the context are paid for *again* on every turn that follows. §4.1 is this term.
-2. **The payload is written into the cache once, at twenty times the read price.** A fixed, one-time
-   charge, spread over however many turns follow it. §4.2 is this term.
+2. **Each byte of the payload is written into the cache once, at twenty times the read price.** A one-time
+   charge per byte, paid on the turn it first enters the context and spread over however many turns follow
+   it. §4.2 is this term.
 
 The difficulty is that **one payload moves both, in opposite directions**. The bytes that let the agent
 stop early are the same bytes every remaining turn has to carry; and the earlier it stops, the fewer turns
@@ -401,6 +402,12 @@ A byte written once and read *T* times costs `(10 + 0.5T)/T` per **Mtok-turn** o
 | turns following the payload | 20 | 10 | 4 | 2 | 1 |
 |---|---|---|---|---|---|
 | effective $/Mtok-turn | $1.00 | $1.50 | $3.00 | $5.50 | $10.50 |
+
+**Once per byte, not once per run.** Every turn writes what is new since the previous one: the prompt on turn
+1 (14.1k, about the same in every arm), then each tool result on the turn after it returns. The oracle's five
+steps land on turns 2 to 6, and one of them dominates: step 2, the 11.7k map, written on turn 3. The other four
+add 0.9k to 2.6k each. Grep's results are written the same way, in pieces of about 1k to 3k spread across the
+whole run. The formula applies to each piece with its own *T*.
 
 > **The better a tool gets at collapsing turns, the shorter the window over which its own payload amortises.**
 
