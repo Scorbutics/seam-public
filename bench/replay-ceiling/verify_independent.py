@@ -412,6 +412,26 @@ check("executed context after DONE [REPLAY] (k)", (adj_c - pre) / 1e3, 637, 0.5,
 check("refused context [REPLAY] (k)", (Ctot["C"] - adj_c) / 1e3, 263, 0.5, "{:.0f}")
 check("context before DONE / control", pre / Ctot["A"], 0.35, 0.005, "{:.3f}")
 check("executed checking after DONE / control", (adj_c - pre) / Ctot["A"], 0.65, 0.005, "{:.3f}")
+
+def writes_per_turn(path):
+    """cache_creation of each model turn, in order; the last usage seen for a message id is its own."""
+    per, order = {}, []
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("id"):
+            if m["id"] not in per: order.append(m["id"])
+            per[m["id"]] = (m.get("usage") or {}).get("cache_creation_input_tokens", 0)
+    return [per[i] for i in order]
+wpt = [writes_per_turn(os.path.join(RES, f"{rd}.C.jsonl")) for rd in sorted(runs["C"])]
+print("        writes, turns 1-7 (k): " + " | ".join(" ".join(f"{x/1e3:.1f}" for x in w[:7]) for w in wpt))
+check("same writes on turns 1-7 in every round [REPLAY]",
+      float(max(max(w[t] for w in wpt) - min(w[t] for w in wpt) for t in range(7)) <= 200), 1.0, 0, "{:.0f}")
+check("turn-1 write: prompt (k) [REPLAY]", sum(w[0] for w in wpt) / len(wpt) / 1e3, 14.1, 0.05, "{:.1f}")
+check("turn-3 write: step 2, the map (k) [REPLAY]", sum(w[2] for w in wpt) / len(wpt) / 1e3, 11.7, 0.05, "{:.1f}")
+check("steps 1, 3-5 writes, smallest (k)", min(w[t] for w in wpt for t in (1, 3, 4, 5)) / 1e3, 0.9, 0.05, "{:.1f}")
+check("steps 1, 3-5 writes, largest (k)", max(w[t] for w in wpt for t in (1, 3, 4, 5)) / 1e3, 2.6, 0.05, "{:.1f}")
 print("        GREP and SEAM have no completion marker, so 'calls after the answer was complete'")
 print("        does not exist for them; the paper no longer reports it, and neither does this script.")
 
