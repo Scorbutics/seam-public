@@ -354,10 +354,45 @@ print("\n## §4.3 thinking tokens — source matters")
 for a in ARMS:
     paper = {"A": 1108, "B": 2177, "C": 2145}[a]
     check(f"thinking tokens [{NAME[a]}]", M(a, "think"), paper, 5, "{:.0f}")
-    print(f"        (usage.output_tokens_details.thinking_tokens; paper uses streamed estimated_tokens)")
+print("        (usage.output_tokens_details.thinking_tokens, the provider's count; the paper uses the same)")
 for a in "BC":
     paper = {"B": 1.97, "C": 1.94}[a]
     check(f"thinking ratio vs GREP [{NAME[a]}]", M(a, "think") / M("A", "think"), paper, 0.02, "{:.2f}")
+d_think = M("C", "think") - M("A", "think")
+d_other = (M("C", "out") - M("C", "think")) - (M("A", "out") - M("A", "think"))
+check("extra thinking [REPLAY - GREP]", d_think, 1040, 10, "{:+.0f}")
+check("other output [REPLAY - GREP]", d_other, -850, 10, "{:+.0f}")
+check("net output [REPLAY - GREP]", d_think + d_other, 190, 10, "{:+.0f}")
+check("output share of cost [REPLAY] (%)", M("C", "out") * PRICE["out"] / M("C", "cost") * 100, 13, 0.5, "{:.1f}")
+check("extra thinking priced alone / output term", d_think / (d_think + d_other), 5.5, 0.5, "{:.1f}")
+
+def thinking_split(path):
+    """Provider thinking per message (message_delta usage), split at the DONE result, plus the run total."""
+    pre = post = 0; done = False; total = None
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        if d.get("type") == "result":
+            total = ((d.get("usage") or {}).get("output_tokens_details") or {}).get("thinking_tokens", 0)
+        ev = d.get("event") if d.get("type") == "stream_event" else None
+        if isinstance(ev, dict) and ev.get("type") == "message_delta":
+            th = ((ev.get("usage") or {}).get("output_tokens_details") or {}).get("thinking_tokens", 0)
+            if done: post += th
+            else: pre += th
+        m = d.get("message")
+        if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: done = True
+    return pre, post, total
+tsplit = {a: [thinking_split(os.path.join(RES, f"{rd}.{a}.jsonl")) for rd in sorted(runs[a])] for a in ARMS}
+check("per-message thinking sums to the run total, every run",
+      float(all(p + q == t for a in ARMS for p, q, t in tsplit[a])), 1.0, 0, "{:.0f}")
+tc = tsplit["C"]
+check("thinking before DONE [REPLAY]", sum(p for p, _, _ in tc) / len(tc), 19, 0.5, "{:.1f}")
+check("thinking after DONE [REPLAY]", sum(q for _, q, _ in tc) / len(tc), 2126, 0.5, "{:.1f}")
+check("share of thinking after DONE [REPLAY] (%)", sum(q for _, q, _ in tc) / sum(t for _, _, t in tc) * 100, 99, 0.5, "{:.1f}")
 
 print("\n## §5 the verification floor — arm C only, split at its own DONE")
 def done_index(path):
