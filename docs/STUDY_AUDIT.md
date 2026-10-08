@@ -156,7 +156,7 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (80 checks, exit 0, no open notes), including
+markers. `verify_independent.py` reports every checked figure reproducing (89 checks, exit 0, no open notes), including
 the `[kcC]` figures from `bench/grep-vs-seam/results/`.
 
 | finding | status | where |
@@ -178,6 +178,12 @@ the §4.1 table and assumed a fixed context per turn.
 Checking the `[kcC]` figures found two more: §1's bill was +17% on the agent model alone (+18% with the
 auxiliary model, as every other total is counted), and §4.2's turn reduction was 2.5x where 24.7 / 9.7 is
 2.55. Both are corrected.
+
+Rewriting §4.3 found two more. "Context is three orders of magnitude larger than output" was wrong: it is
+150–190x, about two. And the claim that the structured payload makes the model think more ("density is the only
+surviving explanation") did not survive measurement: split at `DONE` with the provider's per-message counts,
+99% of the ideal arm's thinking happens while it checks, not while the answer arrives. The doubling now belongs
+to the verification floor.
 
 ## Not checked — unexamined, not passing
 

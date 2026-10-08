@@ -439,26 +439,26 @@ map alone is ~7k), or it would have had to answer in **3.9 turns, fewer than its
 payload and one turn the write is $0.36 against grep's ~$0.49 of accumulated reading — it would win. §5 is why
 that regime is never reached.]`
 
-### 4.3 Thinking doubles, and is not the cause
+### 4.3 Thinking doubles, and barely moves the bill
 
-`[n=5]` Read from the provider's own count (`usage.output_tokens_details.thinking_tokens`), thinking roughly
-doubles: **1,108** tokens per run in the control, **2,177** in the Seam arm (**1.97x**) and **2,145** in the ideal
-arm (**1.94x**). It is real and reproducible, and nearly irrelevant to the bill, for two reasons.
+`[n=5]` Measured with the provider's own count, the control thinks **1,108** tokens per run, the Seam arm
+**2,177** (**1.97x**) and the ideal arm **2,145** (**1.94x**). It costs little, for two reasons.
 
-First, thinking is billed as output, and output is small next to context. Context is priced 50x lower per
-token but is three orders of magnitude larger.
+First, thinking is billed as output, and output is a small part of the bill: about 6.5k tokens per run,
+against about 1M tokens of context. In the ideal arm, output is 13% of the cost.
 
-Second, **the arms that think more write less of everything else.** Thinking is part of the output tokens.
-The Seam and ideal arms each think about 1,040 tokens more than the control, but write about 850 fewer
-tokens of text and tool calls, because they make fewer calls. The output term as a whole therefore rises by
-only about 190 tokens in the ideal arm. That is the +$0.0047 in §4.2, under 4% of its adjusted cost gap.
-Pricing thinking on its own makes it look about five times larger than the output term it sits inside.
+Second, **the extra thinking is mostly offset.** The ideal arm thinks about 1,040 tokens more than the control
+but writes about 850 fewer tokens of text and tool calls, because it makes fewer calls. Its total output rises
+by only about 190 tokens: the +$0.0047 in §4.2, under 4% of its adjusted cost gap. Counting the extra thinking
+alone would overstate it about five times.
 
-**And it is not documentation density.** The ideal arm carries a 300-byte manual against 42 KB and thinks just
-as much, so what doubles reasoning is the *structured payload itself*, not the instructions for obtaining it.
-`[Counterintuitive and worth stating plainly: giving the model a better answer makes it reason MORE. The task
-is byte-identical across arms by construction, so density is the only surviving explanation and arm C
-localises it to the payload.]`
+**Where the thinking happens.** The provider also reports thinking per message, and those counts add up to the
+run totals exactly. Split at `DONE`, the ideal arm thinks **19 tokens per run** over the six calls that bring
+the answer, and **2,126** over the turns after it. The model barely reasons while the answer arrives; it
+reasons while it checks an answer that is already complete. So the doubling is not the cost of processing a
+dense payload: it is part of the verification floor (§5). The manual is ruled out separately: the ideal arm's
+is 300 bytes against Seam's 42 KB, and both think about twice as much as the control. The Seam arm has no
+completion marker, so its thinking cannot be split the same way.
 
 ---
 
@@ -492,7 +492,8 @@ after the answer was complete" is not a quantity that exists for them, and this 
 otherwise.
 
 In context, the same split is 346k to reach the answer and 637k of executed checking after it, plus the 263k of
-refusals (Figure 2): the checking alone reads 65% of what the control reads for the whole task.
+refusals (Figure 2): the checking alone reads 65% of what the control reads for the whole task. It also holds
+99% of the arm's thinking (§4.3).
 
 The 14.8 calls are 71% of the arm's calls but 52% of its cost. That gap is §4.2's mechanism inside a single
 run. The first seven calls carry 67% of the cache write, because the payload lands there at 2.0x input, and
@@ -602,8 +603,9 @@ batch was discarded because the harness could not reach the repository from the 
   (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
   every arm.
 - Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
-  count, `usage.output_tokens_details.thinking_tokens`; the streamed `estimated_tokens` runs ~240 tokens
-  lower per run and is not used.
+  count, `usage.output_tokens_details.thinking_tokens`. Per message it is in each `message_delta` event, and
+  those add up to the run total exactly. The streamed `estimated_tokens` runs ~240 tokens lower per run and is
+  not used.
 
 ### 6.2 Design asymmetries, stated
 1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
