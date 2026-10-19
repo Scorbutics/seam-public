@@ -505,14 +505,13 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   traités n'avaient pas le droit de lire des fichiers avec `sed`, `cat` ou `ls`, alors que le contrôle
   l'avait (`results/discarded-strict-read/WHY.md`). C'est le sens du biais qui l'a disqualifié : un biais
   *contre* la conclusion ne fait que la rendre plus prudente ; un biais qui la *fabrique* la rend fausse.
-- **Les appels refusés coûtent quand même un tour.** Ils sont comptés à part, et ne sont pas confondus avec
-  une vraie contamination entre bras. L'arm idéal en paie 4,6 par round.
 - **Une même permission ne veut pas dire la même chose selon la version du CLI.** Entre Claude Code 2.1.239,
   qui a fait tourner les rounds publiés, et 2.1.270, le shell a été limité au répertoire de travail. Le
   benchmark tourne en dehors du dépôt, donc des commandes pourtant autorisées ont été refusées à tous les
   bras. Deux lots ont été touchés et écartés : le premier lot de l'arm D, où le contrôle a perdu `ls` et
   `find`, et l'arm D le `grep` qu'il était censé tester ; et le premier test sur Sonnet, où le contrôle a
-  perdu `find`, `ls` et même `grep`, et l'oracle `sed`, `awk` et `wc`. Le benchmark ajoute désormais le dépôt
+  perdu `find`, `ls` et même `grep`, et l'oracle `sed`, `awk` et `wc` (son contrôle montait ainsi à 28–41
+  appels, contre 17 à 23 dans le test propre de §6.3). Le benchmark ajoute désormais le dépôt
   aux répertoires autorisés pour tous les bras. La règle générale : **le refus d'une commande autorisée est
   une panne du dispositif, pas un comportement du modèle.**
 - **Le commit du dépôt n'avait pas été enregistré pour les rounds publiés.** Il a été retrouvé à partir des
@@ -523,10 +522,6 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   et cherche à la fois. Classée selon sa première commande, c'est une lecture ; selon n'importe laquelle,
   c'est une recherche. Ce choix a fait passer la répartition de l'arm D de 4,8 recherches et 10,8 lectures à
   6,2 et 9,6 (§5.2). La règle doit être écrite, et vérifiée par une seconde implémentation.
-- **Le texte du thinking est masqué.** On ne peut pas le lire, seulement le compter. La mesure utilise le
-  compte du fournisseur, qui existe aussi message par message et dont la somme retombe exactement sur le
-  total du run. L'estimation diffusée en streaming sous-compte d'environ 240 tokens par run et n'est pas
-  utilisée.
 
 ### 6.2 Les asymétries entre les bras
 
@@ -547,11 +542,6 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
      l'égalité (§5.2).
    - Le plancher de vérification (§5) tient dans les deux cas. La parité de §4.1 repose sur la lecture
      ajustée. **Il faut annoncer l'usage avant de citer un chiffre.**
-   - Sans recherche, l'oracle doit vérifier en lisant des fichiers entiers. La section 5.2 le mesure : avec
-     la recherche, environ la moitié des lectures deviennent des recherches et les refus disparaissent, mais
-     le nombre de vérifications bouge à peine.
-5. **L'arm D a tourné sur un autre dispositif** : une autre machine, un CLI plus récent (2.1.282) et une
-   version plus récente de Keycloak. Ses rounds sont comparés entre eux (§5.2), jamais avec ceux de §1.
 
 ### 6.3 Généralité
 
@@ -570,9 +560,6 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   1,42x selon les rounds, un écart trop grand pour en dire plus avec 3 rounds. Un plancher plus petit est
   exactement ce qui devrait rapprocher l'oracle de l'égalité, mais 3 rounds ne permettent pas de le
   distinguer du bruit.
-- **Un premier test sur Sonnet a été écarté** (§6.1) : des commandes autorisées y étaient refusées dans les
-  deux bras. Il montrait un contrôle à 28–41 appels sur Sonnet contre 21–24 sur Opus. Le contrôle du test
-  propre en fait 17 à 23 : l'écart venait du dispositif, pas du modèle.
 - **Le seuil de 20:1 dépend de la durée de vie du cache, pas du modèle.** Les prix facturés, retrouvés à
   partir des transcripts, sont de 5 / 0,5 / 10 / 25 $ par million de tokens pour Opus et de 3 / 0,3 /
   3,75 (cache 5 min) ou 6,00 (cache 1 h) / 15 $ pour Sonnet. Dans les deux cas, une lecture coûte 0,1x
