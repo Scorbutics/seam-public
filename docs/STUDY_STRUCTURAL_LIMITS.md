@@ -29,7 +29,8 @@ brought it back to parity, leaving a read excess indistinguishable from zero. Th
 tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
-turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
+turn reduction the whole trade depends on does not arrive even at the ceiling. It is present on a second
+model too, in every round, though smaller (Sonnet, n=3). Giving the ideal tool a search
 channel as well makes each check cheaper but barely changes how many checks it runs (18.4 to 15.8, not
 significant at n=5). The floor is the urge to verify; the channel only sets its price. Used alongside grep,
 the ideal tool breaks even with grep alone. Used instead of it, it loses. **The write premium is the
@@ -587,27 +588,38 @@ batch was discarded because the harness could not reach the repository from the 
 
 ### 6.1 Apparatus `[WRITE — report as a general hazard of agent A/B design]`
 - `--allowedTools`/`--disallowedTools` are **advisory for the shell**: granting one Bash pattern permits Bash
-  generally. Verbs must be named *and* audited in the transcript. This project's control broke this way four
-  times.
+  generally. Verbs must be named *and* audited in the transcript. The control broke this way four times:
+  three times in `bench/grep-vs-seam`, and once in this harness's pilot (`results/discarded-pilot/WHY.md`).
 - **A five-round batch was discarded for an asymmetric grant that biased toward this study's conclusion**
   (treatment arms denied `sed`/`cat`/`ls`, control keeping them) — `results/discarded-strict-read/WHY.md`.
   Direction is what made it disqualifying: a bias *against* a conclusion is a conservative bound; one that
   manufactures it is not.
 - Denied attempts still cost a turn; reported separately from real contamination. Arm C pays 4.6/round.
-- **A grant's meaning depends on the CLI version, not only on its flags.** From about Claude Code 2.1.28x,
-  Bash is confined to the working directory plus `--add-dir` directories. The harness runs outside the
-  repository, so on 2.1.282 every arm was refused shell verbs it had been explicitly granted. On 2.1.239,
-  which ran the published rounds, it was not. It surfaced as refusals of `ls` and `find` in the grep control,
-  and it disabled the shell `grep` arm D exists to test. The batch was discarded
-  (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
-  every arm.
+- **A grant's meaning depends on the CLI version, not only on its flags.** Somewhere between Claude Code
+  2.1.239, which ran the published rounds, and 2.1.270, Bash became confined to the working directory plus
+  `--add-dir` directories. The harness runs outside the repository, so every arm was refused shell verbs it
+  had been explicitly granted. It hit two batches. The first arm D batch (2.1.282) lost `ls` and `find` in the
+  grep control and the shell `grep` arm D exists to test
+  (`results-oracle-grep/discarded-outside-workdir/WHY.md`). The first Sonnet probe (2.1.270) lost `find`, `ls`
+  and even `grep` in the control, and `sed`, `awk` and `wc` in the oracle arm
+  (`results-sonnet-probe/WHY.md`). Both are discarded, and `run_arm` now passes `--add-dir "$REPO"` to every
+  arm. The general test: **a refusal of a verb the arm was granted is an apparatus failure, not behaviour.**
+- **The repository commit was not recorded for the published rounds.** It has been reconstructed from the
+  oracle's own output: the file and line references in its five steps match the keycloak tree from 1 to 27
+  July 2026 and stop matching after that. The clean Sonnet batch (§6.3) ran on `cd0b33e528`, the last commit
+  of that window, and `run-arms.sh` now records the commit of every round.
+- **How a command is classified can change a result.** A shell line such as `sed … && grep …` both reads and
+  searches. Classed by its first verb it is a read, by any verb a search, and the choice moved arm D's split
+  from 4.8 searches and 10.8 reads to 6.2 and 9.6 (§5.2). The rule must be stated, and checked by a second
+  implementation.
 - Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
   count, `usage.output_tokens_details.thinking_tokens`. Per message it is in each `message_delta` event, and
   those add up to the run total exactly. The streamed `estimated_tokens` runs ~240 tokens lower per run and is
   not used.
 
 ### 6.2 Design asymmetries, stated
-1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
+1. Arm B carries `SKILL.md` inline: its turn-one cache write is 30.9k tokens against the control's 14.0k
+   (+16.8k, the same in every round), resident for the whole run. That is the real product surface.
 2. Arm B has a cache to pre-warm; A and C have nothing. **Favours B.**
 3. Arm C's oracle was assembled from arm B's own recorded output, choosing the five results whose union covers
    all ground truth. Idealised *selection*, verbatim *content*.
@@ -619,42 +631,46 @@ batch was discarded because the harness could not reach the repository from the 
      apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure. Arm D now measures this pitch
      directly instead of by adjustment. The ideal tool plus grep costs **0.91x** grep alone, which is not
      distinguishable from parity (§5.2).
-   - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
+   - The verification floor (§5) holds under both, and §4.1's parity result depends on the adjusted
      reading. **State the pitch before quoting a number.**
    - Arm C's verification is forced through whole-file `Read`s rather than targeted search. §5.2 measures it:
      with search, about half the reads become searches and the refusals stop, but the number of checks that
      run barely moves.
+5. Arm D ran on a different machine, a newer CLI (2.1.282) and a newer keycloak checkout than the published
+   rounds. Its batch is paired internally (§5.2), and its figures are never compared with §1's.
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at
-  n=2,908 by 2607.12161). **§5's floor was an empirical behaviour on one task and one model** — the
-  *definitional* argument in §5.1 always transferred; its size had not been tested.
-- **The second model has now been run, and the floor holds.** `[n=3, probe]` Three rounds of arms A and C
-  on `claude-sonnet-5`, same harness and task: calls after `DONE` were **12, 15, 12** against Opus's
-  **14, 13, 10, 20, 17**. Every Sonnet round falls inside the Opus per-round range, with the structure
-  identical — `DONE` at call #6 every time, every refusal after it and none before. One Opus round
-  verified *less* than any Sonnet round. Full apparatus, limits and caveats:
-  [`bench/replay-ceiling/results-sonnet-probe/WHY.md`](../bench/replay-ceiling/results-sonnet-probe/WHY.md).
-  `[WRITE — state the limits in the text, not only by reference: different machine, a keycloak six days
-  newer, n=3, no arm B. This RAISES §5 from "one model" to "two models, same behaviour", which is what
-  §5.1's definitional argument predicted; it does not make the MAGNITUDE general.]`
-- **The 20:1 bar is a property of the cache TTL, not of the model**, and this is now measured rather than
-  asserted. Fitting billed prices from the transcripts: Opus `5 / 0.5 / 10 / 25` (residual 1e-15, n=118),
-  Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) / 15` (residual 4e-16, n=110). Cache read is 0.1x input and a 1h
-  write 2.0x input on BOTH, so the bar is 0.050 on both and the price level cancels — Sonnet is uniformly
-  3x cheaper and the trade is identical. At the 5m TTL it is 0.080 (12.5:1), a LOWER bar, so the trade is
-  easier to win there. `[WRITE — quote the TTL every time the 20:1 appears. Sonnet mixes both TTLs, which
-  is why a four-price fit of it returns a NEGATIVE input price; Opus is 100% 1h, which is why four terms
-  ever worked.]`
+  n=2,908 by 2607.12161). **§5's floor is a measured behaviour**, not a definitional one: its existence and
+  its size have to be measured on each model.
+- **On a second model the floor is present in every round, and smaller.** `[n=3]` A clean batch of arms A
+  and C on `claude-sonnet-5`: `DONE` at call 6 in every round, every refusal after it and none before, and
+  **9, 4 and 8 checks that ran after the complete answer**, against 6 to 14 on Opus (mean 7.0 against
+  10.2). One Sonnet round sits below the Opus range, so the floor's size depends on the model even though its
+  existence does not. Limits, stated here rather than only by reference: n=3, no arm B, a different machine,
+  a newer CLI (2.1.303) than the published rounds, and keycloak pinned to `cd0b33e528`, the commit
+  reconstructed from the oracle's own line references (§6.1). No granted verb was refused in any run
+  ([`bench/replay-ceiling/results-sonnet-clean/WHY.md`](../bench/replay-ceiling/results-sonnet-clean/WHY.md)).
+  This raises §5 from one model to two for the floor's *existence*, not for its *magnitude*.
+- **On cost, the Sonnet oracle is at parity with its control**: 0.97x (ratio of means; per round 1.06x, 0.58x
+  and 1.42x, a spread too wide at n=3 to say more). A smaller floor is what §4 and §5 predict would move the
+  ratio toward parity, but three rounds cannot separate that from noise.
+- **A first Sonnet probe was discarded** (§6.1): granted verbs were refused in both arms. It had reported
+  the control taking 28–41 calls on Sonnet against 21–24 on Opus. The clean batch's control takes 17 to 23.
+  The difference was the apparatus, not the model.
+- **The 20:1 bar is a property of the cache TTL, not of the model.** Fitting billed prices from the
+  transcripts: Opus `5 / 0.5 / 10 / 25` (residual 1e-15, n=118), Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) /
+  15` (residual 4e-16, n=110). Cache read is 0.1x input and a 1h write 2.0x input on BOTH, so the bar is
+  0.050 on both and the price level cancels — Sonnet is uniformly 3x cheaper and the trade is identical. At
+  the 5m TTL it is 0.080 (12.5:1), a LOWER bar, so the trade is easier to win there. `[WRITE — quote the TTL
+  every time the 20:1 appears. Sonnet mixes both TTLs, which is why a four-price fit of it returns a NEGATIVE
+  input price; Opus is 100% 1h, which is why four terms ever worked.]`
 - `[Falsifiers still open: a pricing regime without a write premium; a conversation long enough that
   amortisation dominates; a task where the control's context grows faster than the payload. The
-  "model that does not re-verify" falsifier has been looked for twice and not found: empirically on a second
-  model (above), and in the literature, where the closest candidate (2606.14476) turns out to measure
-  adopt-vs-weigh in a regime with no independent check available — a different variable in a different
-  regime, as §2 sets out.]`
-- The probe also found something nobody was looking for — arm A, the CONTROL, taking **28-41 calls on Sonnet
-  against 21-24 on Opus**, which moves the cost ratio toward the oracle with nothing in §4 having changed.
-  That is a follow-up rather than a threat, and it is stated in §8.2.
+  "model that does not re-verify" falsifier has been looked for twice and not found: on a second model
+  (above — the floor is smaller there, but present in every round), and in the literature, where the closest
+  candidate (2606.14476) turns out to measure adopt-vs-weigh in a regime with no independent check
+  available — a different variable in a different regime, as §2 sets out.]`
 
 ---
 
@@ -679,12 +695,11 @@ batch was discarded because the harness could not reach the repository from the 
    it is the only lever that touches the sole surviving term. Everything else — a faster engine, a better
    answer, a shorter payload — is bounded by §5. `[Open question, not a plan: is that reachable under current
    cache semantics?]`
-2. **How much of the result is the CONTROL's competence?** The Sonnet probe (§6.3) found the grep arm taking
-   28–41 calls where Opus took 21–24, moving the cost ratio toward the oracle with nothing in §4 having
-   changed. If that survives its own rounds it is a claim this study does not make: *a retrieval tool's
-   measured cost advantage is partly a function of how good the baseline model is at searching.* It needs
-   arm A on both models and no arm C at all, so it is cheap. `[The highest-value follow-up now that §5's
-   model replication is done.]`
+2. **Does the floor's size depend on the model?** On Sonnet the oracle ran fewer checks after `DONE` (mean
+   7.0 against 10.2, n=3) and cost about the same as its control instead of 1.26x (§6.3). If that holds at
+   n=5, part of a retrieval tool's measured value is set by how much the model verifies, not by the tool. It
+   needs arms A and C at n=5 or more on both models, on one rig. `[This replaces an earlier follow-up built on
+   the discarded probe's control count, which the clean batch did not reproduce.]`
 3. `[Anything the data suggests that this skeleton did not anticipate.]`
 
 ---
@@ -702,8 +717,10 @@ every figure in this paper; where they first disagreed, and what changed, is in
 ## Appendix B — discarded batches, and what they bought
 `results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md` ·
 `results-oracle-grep/discarded-outside-workdir/WHY.md` — a newer CLI confined Bash to the working directory,
-disabling granted shell verbs on every arm (§6.1). Its hint pointed the wrong way — that search barely cut
-post-answer calls — because arm D's own shell `grep` was among the verbs refused.
+disabling granted shell verbs on every arm (§6.1). Its hint, that search barely changes the number of checks,
+turned out to agree with the clean batch, but it was reached through a broken apparatus, so it is not
+evidence. · `results-sonnet-probe/WHY.md` — the first Sonnet probe, discarded for the same confinement
+(§6.1, §6.3).
 ## Appendix C — external review
 The denial adjustment (§1, §4.1) came from external review, which caught refused turns being counted as
 behaviour. The lesson generalises: a contamination audit checks that the control held; it does not check

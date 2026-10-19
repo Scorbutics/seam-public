@@ -156,7 +156,7 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (125 checks, exit 0, no open notes), including
+markers. `verify_independent.py` reports every checked figure reproducing (137 checks, exit 0, no open notes), including
 the `[kcC]` figures from `bench/grep-vs-seam/results/`.
 
 | finding | status | where |
@@ -196,6 +196,12 @@ and 10.8). The arm D figures are now in `verify_independent.py`.
 Reviewing the French rewrite found one more in §1: the per-round table said both tools were more expensive
 than grep in "5 of 5" rounds, but Seam's round 1 (1.007x) and the oracle's round 3 (1.003x) are level. It now
 reads "4 of 5, 1 level", and the verifier checks the counts.
+
+Reviewing §6 found that the first Sonnet probe ran on a CLI that refused granted shell verbs in both arms,
+the failure that had discarded the first arm D batch. It is discarded too, and a clean batch replaces it
+(`results-sonnet-clean/`): the floor is present on Sonnet in every round but smaller, and the control's
+28–41 calls in the discarded probe did not reproduce (17–23). §6.3 and §8.2 are rewritten on the clean batch,
+whose figures the verifier now checks. The same review sourced or corrected four smaller §6 claims.
 
 ## Not checked — unexamined, not passing
 

@@ -60,7 +60,7 @@ result a real Seam run produced on this exact question and this exact repo commi
 - **zero engine latency** — a `cat`, against Seam's ~2-3s warm per call
 - **zero wrong turns** — the step order is the one that worked, fixed in advance, forced sequential
 - **zero anchor risk** — there is no anchor to choose
-- **zero discovery cost** — ~300 bytes of doc, against `SKILL.md`'s 42 KB (+15.3k tokens resident on turn one)
+- **zero discovery cost** — ~300 bytes of doc, against `SKILL.md`'s 42 KB (+16.8k tokens of turn-one cache write, measured)
 
 The step SELECTION is idealised; the step CONTENT is not. No line was written for the benchmark and nothing
 was added that Seam did not produce. Five recorded outputs were chosen because their union covers all 12
@@ -93,7 +93,7 @@ and no amount of engine work closes it.**
 
 ## Known asymmetries, stated rather than hidden
 
-1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident for the whole run). That is the real
+1. Arm B carries `SKILL.md` inline (+16.8k tokens of turn-one cache write, measured, resident for the whole run). That is the real
    product surface, so removing it would be the unfair run in the other direction — but it means B's density
    is partly documentation, not map. Arm C is the arm where that density is absent.
 2. Arm B has a cache to warm; A and C have nothing. The asymmetry favours B.

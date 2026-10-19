@@ -599,12 +599,70 @@ if PAPER_SET and all(org.values()):
 elif not all(org.values()):
     unchecked.append(f"§5.2 arm D figures — no h?.[ACD].jsonl under {ORG}")
 
+print("\n## §6.3 the clean Sonnet batch — results-sonnet-clean/ (a second model; never averaged with the paper)")
+SON = os.path.join(_HERE, "results-sonnet-clean")
+def son_run(path, arm):
+    calls, done_at, res, ver = [], None, None, None
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        if d.get("type") == "system" and d.get("subtype") == "init": ver = d.get("claude_code_version")
+        m = d.get("message")
+        if isinstance(m, dict) and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if not isinstance(b, dict): continue
+                if m.get("role") == "assistant" and b.get("type") == "tool_use":
+                    calls.append((b["id"], b.get("name", ""), (b.get("input") or {}).get("command", "")))
+                elif m.get("role") == "user" and b.get("type") == "tool_result" and done_at is None:
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: done_at = len(calls)
+        if d.get("type") == "result": res = d
+    refused = {x.get("tool_use_id") for x in res.get("permission_denials") or []}
+    def is_search(name, cmd):
+        if name in ("Grep", "Glob"): return True
+        words = cmd.replace("&&", "|").replace(";", "|").split("|")
+        return any(w.split() and w.split()[0] in ("rg", "grep", "egrep", "fgrep", "ag", "ack", "fd") for w in words)
+    granted_refused = sum(1 for i, n, c in calls if i in refused and not (arm == "C" and is_search(n, c)))
+    pos = {i: k for k, (i, _, _) in enumerate(calls)}
+    return dict(calls=len(calls), done=done_at, ver=ver, cost=res.get("total_cost_usd", 0.0),
+                ran_after=sum(1 for i, _, _ in calls[done_at:] if i not in refused) if done_at is not None else None,
+                refused_before=sum(1 for i in refused if done_at is not None and pos.get(i, 10**6) < done_at),
+                granted_refused=granted_refused,
+                models=[k for k in (res.get("modelUsage") or {}) if "haiku" not in k])
+son = {a: [son_run(f, a) for f in sorted(glob.glob(os.path.join(SON, f"c?.{a}.jsonl")))] for a in "AC"}
+if son["A"] and son["C"]:
+    allr = son["A"] + son["C"]
+    print(f"        CLI {sorted({r['ver'] for r in allr})}  models {sorted({m for r in allr for m in r['models']})}")
+    check("Sonnet: rounds", min(len(son["A"]), len(son["C"])), 3, 0, "{:.0f}")
+    check("Sonnet: every run is claude-sonnet-5", float(all(r["models"] == ["claude-sonnet-5"] for r in allr)), 1.0, 0, "{:.0f}")
+    check("Sonnet: granted verbs refused, all runs", sum(r["granted_refused"] for r in allr), 0, 0, "{:.0f}")
+    check("Sonnet: DONE at call 6 in every round", float(all(r["done"] == ORACLE_DONE_STEP for r in son["C"])), 1.0, 0, "{:.0f}")
+    check("Sonnet: refusals before DONE", sum(r["refused_before"] for r in son["C"]), 0, 0, "{:.0f}")
+    ran = [r["ran_after"] for r in son["C"]]
+    print(f"        checks that ran after DONE, per round: {ran}")
+    check("Sonnet: checks that ran after DONE, mean", sum(ran) / len(ran), 7.0, 0.05)
+    check("Sonnet: rounds below the Opus range (6-14)", sum(1 for x in ran if x < 6), 1, 0, "{:.0f}")
+    ctl = [r["calls"] for r in son["A"]]
+    print(f"        control calls, per round: {ctl}")
+    check("Sonnet: control calls, min", min(ctl), 17, 0, "{:.0f}")
+    check("Sonnet: control calls, max", max(ctl), 23, 0, "{:.0f}")
+    ca = sum(r["cost"] for r in son["C"]) / sum(r["cost"] for r in son["A"])
+    check("Sonnet: cost C/A, ratio of means", ca, 0.97, 0.005, "{:.3f}")
+    per = [c["cost"] / a["cost"] for a, c in zip(son["A"], son["C"])]
+    print(f"        cost C/A per round: {[round(x, 2) for x in per]}")
+    check("Sonnet: cost C/A per round, min", min(per), 0.58, 0.005, "{:.3f}")
+    check("Sonnet: cost C/A per round, max", max(per), 1.42, 0.005, "{:.3f}")
+else:
+    unchecked.append(f"§6.3 Sonnet figures — no c?.[AC].jsonl under {SON}")
+
 print("\n## §3.2 non-API ('engine') time")
 for a in ARMS:
     print(f"        {NAME[a]:7} wall {M(a,'wall_ms'):6.1f}s   api {M(a,'api'):6.1f}s   non-API {M(a,'wall_ms')-M(a,'api'):+6.1f}s")
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
 unchecked.insert(0, "answer F1 / precision / recall (needs re-scoring answers against truth.txt)")
+unchecked.append("§6.3 price fits over every recorded run (Opus n=118, Sonnet n=110) — not re-derived "
+                 "by this script, which fits Opus prices from the published rounds only")
 if tabled:
     unchecked.append(f"{len(tabled)} figure(s) printed above as a table — {MODEL} is not the set "
                      f"docs/STUDY_STRUCTURAL_LIMITS.md documents, which publishes no figure they "

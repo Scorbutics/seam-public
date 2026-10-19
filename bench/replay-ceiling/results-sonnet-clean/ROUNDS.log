@@ -1,0 +1,15 @@
+=== round c1 start 17:17:56 ===
+  arm order: AC
+  arm A: 56s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c1.A.jsonl
+  arm C: 42s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c1.C.jsonl
+round done: c1
+=== round c2 start 17:19:34 ===
+  arm order: CA
+  arm C: 36s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c2.C.jsonl
+  arm A: 54s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c2.A.jsonl
+round done: c2
+=== round c3 start 17:21:04 ===
+  arm order: AC
+  arm A: 57s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c3.A.jsonl
+  arm C: 51s -> /home/user/seam/bench/replay-ceiling/results-sonnet-clean/c3.C.jsonl
+round done: c3

@@ -33,7 +33,8 @@ En chiffres, sur 5 rounds appariés :
 - après une réponse complète, l'agent fait encore **14,8 appels** (10,2 exécutés, 4,6 refusés), qui
   représentent **52 %** du coût du run ;
 - lui donner en plus un moyen de recherche rend chaque vérification moins chère, mais ne change presque
-  pas le nombre de vérifications.
+  pas le nombre de vérifications ;
+- ce plancher se retrouve sur un second modèle (Sonnet, 3 rounds), dans chaque round, mais plus petit.
 
 ---
 
