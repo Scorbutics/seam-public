@@ -1,10 +1,8 @@
 # Ce que coûte un outil de navigation de code idéal : le plancher de vérification et la prime d'écriture
 
 > Version française, rédigée par l'auteur avec ses propres mots puis corrigée. Elle sert de base à la
-> traduction anglaise destinée à arXiv. La version de référence des chiffres reste
-> [`STUDY_STRUCTURAL_LIMITS.md`](STUDY_STRUCTURAL_LIMITS.md), dont chaque figure est recalculée par
-> `bench/replay-ceiling/verify_independent.py`. Sa traduction anglaise finale est
-> [`STUDY_STRUCTURAL_LIMITS_FINAL.md`](STUDY_STRUCTURAL_LIMITS_FINAL.md).
+> traduction anglaise, [`STUDY_STRUCTURAL_LIMITS.md`](STUDY_STRUCTURAL_LIMITS.md), dont chaque chiffre est
+> recalculé par `bench/replay-ceiling/verify_independent.py`.
 
 Une étude récente (arXiv 2607.12161) a montré qu'une réduction du nombre de tokens n'implique pas
 forcément une réduction des coûts.

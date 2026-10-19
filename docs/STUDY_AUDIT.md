@@ -1,5 +1,9 @@
 # Audit of STUDY_STRUCTURAL_LIMITS.md — an independent re-derivation
 
+> **This audit is of an earlier draft of the study.** Its section numbers and some figures refer to that
+> draft, which the published paper (`STUDY_STRUCTURAL_LIMITS.md`) replaced. Every finding below was applied;
+> the trail is kept because it shows what the independent re-derivation caught and how it was fixed.
+
 *Every figure in the study re-computed from `bench/replay-ceiling/results/r?.?.jsonl` by a second
 implementation that shares no code with `measure.py`. No runs were repeated.*
 

@@ -6,6 +6,10 @@ HTTP route or a config key, with no import and no call between them.***
 
 Offline and deterministic by default. No API key, no index server, no model required.
 
+> **The study.** [*What an ideal code-navigation tool costs*](docs/STUDY_STRUCTURAL_LIMITS.md) measures why
+> cutting an agent's tool calls did not lower its bill, using an ideal replay of this tool as the ceiling.
+> Raw transcripts, the harness and an independent verifier are in [`bench/replay-ceiling/`](bench/replay-ceiling/).
+
 ```bash
 seam --repo . --scan --query coupling --anchor-file app/api/admin/report-snapshots/route.ts
 ```
