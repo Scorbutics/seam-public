@@ -647,6 +647,25 @@ de l'outil. Il faudrait les bras A et C sur 5 rounds ou plus, sur les deux modè
 
 ---
 
+## Déclaration d'usage de l'IA
+
+Cette étude a été menée avec l'aide de Claude Code (Anthropic), sous ma direction. L'outil Seam, le dispositif
+de benchmark, l'oracle de replay, les scripts d'analyse et le vérificateur indépendant ont été écrits par
+l'agent à partir de mes instructions ; l'agent a aussi aidé à relire, corriger et traduire le texte.
+
+Ce qui relève de l'auteur : la question de départ, née d'une observation faite en construisant Seam ; la
+conception des expériences (l'oracle, les bras D et E, le second modèle) ; les décisions de méthode, comme
+écarter un lot ou exiger une seconde implémentation ; et le texte, réécrit avec mes propres mots avant d'être
+corrigé. J'assume l'entière responsabilité du contenu.
+
+Deux limites en découlent, et je les signale. Le vérificateur indépendant ne partage aucun code avec le
+dispositif, mais il a été écrit par le même type d'agent : il est indépendant par son code, pas par son
+auteur, et peut partager les mêmes angles morts. Et l'agent étudié comme l'assistant viennent du même
+fournisseur. Les mesures, elles, ne dépendent pas de l'assistant : elles viennent des comptes de tokens et
+des coûts facturés que le fournisseur enregistre dans chaque transcript, et ces transcripts sont publiés.
+
+---
+
 ## Références
 
 - arXiv **2607.12161** — *Token Reduction Is Not Cost Reduction.* Le travail principal sur le mécanisme de

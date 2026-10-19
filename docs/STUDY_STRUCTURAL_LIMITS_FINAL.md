@@ -661,6 +661,25 @@ whether the apparatus's own costs are being charged to the treatment.
 
 ---
 
+## AI use statement
+
+This study was carried out with the help of Claude Code (Anthropic), under my direction. The Seam tool, the
+benchmark harness, the replay oracle, the analysis scripts and the independent verifier were written by the
+agent from my instructions; the agent also helped review, correct and translate the text.
+
+What is the author's: the starting question, which came from an observation made while building Seam; the
+design of the experiments (the oracle, arms D and E, the second model); the methodological decisions, such as
+discarding a batch or requiring a second implementation; and the text, rewritten in my own words before being
+corrected. I take full responsibility for the content.
+
+Two limits follow, and I state them. The independent verifier shares no code with the harness, but it was
+written by the same kind of agent: it is independent in its code, not in its author, and may share the same
+blind spots. And the agent under study and the assistant come from the same provider. The measurements do
+not depend on the assistant: they come from the token counts and billed costs the provider records in every
+transcript, and those transcripts are published.
+
+---
+
 ## References
 
 - arXiv **2607.12161** — *Token Reduction Is Not Cost Reduction: An Empirical Study of End-to-End Efficiency
