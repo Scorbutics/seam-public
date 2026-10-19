@@ -640,34 +640,36 @@ batch was discarded because the harness could not reach the repository from the 
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at
-  n=2,908 by 2607.12161). **§5's floor was an empirical behaviour on one task and one model** — the
-  *definitional* argument in §5.1 always transferred; its size had not been tested.
-- **The second model has now been run, and the floor holds.** `[n=3, probe]` Three rounds of arms A and C
-  on `claude-sonnet-5`, same harness and task: calls after `DONE` were **12, 15, 12** against Opus's
-  **14, 13, 10, 20, 17**. Every Sonnet round falls inside the Opus per-round range, with the structure
-  identical — `DONE` at call #6 every time, every refusal after it and none before. One Opus round
-  verified *less* than any Sonnet round. Full apparatus, limits and caveats:
-  [`bench/replay-ceiling/results-sonnet-probe/WHY.md`](../bench/replay-ceiling/results-sonnet-probe/WHY.md).
-  `[WRITE — state the limits in the text, not only by reference: different machine, a keycloak six days
-  newer, n=3, no arm B. This RAISES §5 from "one model" to "two models, same behaviour", which is what
-  §5.1's definitional argument predicted; it does not make the MAGNITUDE general.]`
-- **The 20:1 bar is a property of the cache TTL, not of the model**, and this is now measured rather than
-  asserted. Fitting billed prices from the transcripts: Opus `5 / 0.5 / 10 / 25` (residual 1e-15, n=118),
-  Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) / 15` (residual 4e-16, n=110). Cache read is 0.1x input and a 1h
-  write 2.0x input on BOTH, so the bar is 0.050 on both and the price level cancels — Sonnet is uniformly
-  3x cheaper and the trade is identical. At the 5m TTL it is 0.080 (12.5:1), a LOWER bar, so the trade is
-  easier to win there. `[WRITE — quote the TTL every time the 20:1 appears. Sonnet mixes both TTLs, which
-  is why a four-price fit of it returns a NEGATIVE input price; Opus is 100% 1h, which is why four terms
-  ever worked.]`
+  n=2,908 by 2607.12161). **§5's floor is a measured behaviour**, not a definitional one: its existence and
+  its size have to be measured on each model.
+- **On a second model the floor is present in every round, and smaller.** `[n=3]` A clean batch of arms A
+  and C on `claude-sonnet-5`: `DONE` at call 6 in every round, every refusal after it and none before, and
+  **9, 4 and 8 checks that ran after the complete answer**, against 6 to 14 on Opus (mean 7.0 against
+  10.2). One Sonnet round sits below the Opus range, so the floor's size depends on the model even though its
+  existence does not. Limits, stated here rather than only by reference: n=3, no arm B, a different machine,
+  a newer CLI (2.1.303) than the published rounds, and keycloak pinned to `cd0b33e528`, the commit
+  reconstructed from the oracle's own line references (§6.1). No granted verb was refused in any run
+  ([`bench/replay-ceiling/results-sonnet-clean/WHY.md`](../bench/replay-ceiling/results-sonnet-clean/WHY.md)).
+  This raises §5 from one model to two for the floor's *existence*, not for its *magnitude*.
+- **On cost, the Sonnet oracle is at parity with its control**: 0.97x (ratio of means; per round 1.06x, 0.58x
+  and 1.42x, a spread too wide at n=3 to say more). A smaller floor is what §4 and §5 predict would move the
+  ratio toward parity, but three rounds cannot separate that from noise.
+- **A first Sonnet probe was discarded** (§6.1): granted verbs were refused in both arms. It had reported
+  the control taking 28–41 calls on Sonnet against 21–24 on Opus. The clean batch's control takes 17 to 23.
+  The difference was the apparatus, not the model.
+- **The 20:1 bar is a property of the cache TTL, not of the model.** Fitting billed prices from the
+  transcripts: Opus `5 / 0.5 / 10 / 25` (residual 1e-15, n=118), Sonnet `3 / 0.3 / 3.75 (5m) / 6.00 (1h) /
+  15` (residual 4e-16, n=110). Cache read is 0.1x input and a 1h write 2.0x input on BOTH, so the bar is
+  0.050 on both and the price level cancels — Sonnet is uniformly 3x cheaper and the trade is identical. At
+  the 5m TTL it is 0.080 (12.5:1), a LOWER bar, so the trade is easier to win there. `[WRITE — quote the TTL
+  every time the 20:1 appears. Sonnet mixes both TTLs, which is why a four-price fit of it returns a NEGATIVE
+  input price; Opus is 100% 1h, which is why four terms ever worked.]`
 - `[Falsifiers still open: a pricing regime without a write premium; a conversation long enough that
   amortisation dominates; a task where the control's context grows faster than the payload. The
-  "model that does not re-verify" falsifier has been looked for twice and not found: empirically on a second
-  model (above), and in the literature, where the closest candidate (2606.14476) turns out to measure
-  adopt-vs-weigh in a regime with no independent check available — a different variable in a different
-  regime, as §2 sets out.]`
-- The probe also found something nobody was looking for — arm A, the CONTROL, taking **28-41 calls on Sonnet
-  against 21-24 on Opus**, which moves the cost ratio toward the oracle with nothing in §4 having changed.
-  That is a follow-up rather than a threat, and it is stated in §8.2.
+  "model that does not re-verify" falsifier has been looked for twice and not found: on a second model
+  (above — the floor is smaller there, but present in every round), and in the literature, where the closest
+  candidate (2606.14476) turns out to measure adopt-vs-weigh in a regime with no independent check
+  available — a different variable in a different regime, as §2 sets out.]`
 
 ---
 
@@ -692,12 +694,11 @@ batch was discarded because the harness could not reach the repository from the 
    it is the only lever that touches the sole surviving term. Everything else — a faster engine, a better
    answer, a shorter payload — is bounded by §5. `[Open question, not a plan: is that reachable under current
    cache semantics?]`
-2. **How much of the result is the CONTROL's competence?** The Sonnet probe (§6.3) found the grep arm taking
-   28–41 calls where Opus took 21–24, moving the cost ratio toward the oracle with nothing in §4 having
-   changed. If that survives its own rounds it is a claim this study does not make: *a retrieval tool's
-   measured cost advantage is partly a function of how good the baseline model is at searching.* It needs
-   arm A on both models and no arm C at all, so it is cheap. `[The highest-value follow-up now that §5's
-   model replication is done.]`
+2. **Does the floor's size depend on the model?** On Sonnet the oracle ran fewer checks after `DONE` (mean
+   7.0 against 10.2, n=3) and cost about the same as its control instead of 1.26x (§6.3). If that holds at
+   n=5, part of a retrieval tool's measured value is set by how much the model verifies, not by the tool. It
+   needs arms A and C at n=5 or more on both models, on one rig. `[This replaces an earlier follow-up built on
+   the discarded probe's control count, which the clean batch did not reproduce.]`
 3. `[Anything the data suggests that this skeleton did not anticipate.]`
 
 ---
