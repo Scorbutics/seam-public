@@ -490,7 +490,103 @@ pouvait pas atteindre le dépôt depuis le shell (`results-oracle-grep/discarded
 
 ## 6. Menaces à la validité
 
-*À reprendre. Voir la section 6 de la version anglaise.*
+### 6.1 Le dispositif
+
+Comparer des agents entre eux est plus fragile qu'il n'y paraît : une mauvaise configuration ne fait pas
+planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pièges rencontrés, et ce qui a
+été fait à chaque fois.
+
+- **Les permissions du shell sont indicatives.** Les options `--allowedTools` et `--disallowedTools` ne
+  verrouillent pas vraiment le shell : autoriser une seule commande Bash autorise Bash en général. Chaque
+  commande doit donc être nommée, puis vérifiée dans les transcripts. Le contrôle a été cassé de cette façon
+  quatre fois : trois fois dans `bench/grep-vs-seam`, et une fois dans le pilote de ce benchmark
+  (`results/discarded-pilot/WHY.md`).
+- **Un lot de cinq rounds a été écarté parce qu'il penchait dans le sens de notre conclusion.** Les bras
+  traités n'avaient pas le droit de lire des fichiers avec `sed`, `cat` ou `ls`, alors que le contrôle
+  l'avait (`results/discarded-strict-read/WHY.md`). C'est le sens du biais qui l'a disqualifié : un biais
+  *contre* la conclusion ne fait que la rendre plus prudente ; un biais qui la *fabrique* la rend fausse.
+- **Les appels refusés coûtent quand même un tour.** Ils sont comptés à part, et ne sont pas confondus avec
+  une vraie contamination entre bras. L'arm idéal en paie 4,6 par round.
+- **Une même permission ne veut pas dire la même chose selon la version du CLI.** Entre Claude Code 2.1.239,
+  qui a fait tourner les rounds publiés, et 2.1.270, le shell a été limité au répertoire de travail. Le
+  benchmark tourne en dehors du dépôt, donc des commandes pourtant autorisées ont été refusées à tous les
+  bras. Deux lots ont été touchés et écartés : le premier lot de l'arm D, où le contrôle a perdu `ls` et
+  `find`, et l'arm D le `grep` qu'il était censé tester ; et le premier test sur Sonnet, où le contrôle a
+  perdu `find`, `ls` et même `grep`, et l'oracle `sed`, `awk` et `wc`. Le benchmark ajoute désormais le dépôt
+  aux répertoires autorisés pour tous les bras. La règle générale : **le refus d'une commande autorisée est
+  une panne du dispositif, pas un comportement du modèle.**
+- **Le commit du dépôt n'avait pas été enregistré pour les rounds publiés.** Il a été retrouvé à partir des
+  sorties de l'oracle elles-mêmes : leurs références fichier:ligne correspondent au code de Keycloak entre le
+  1er et le 27 juillet 2026, et plus après. Le second test sur Sonnet (§6.3) a tourné sur le dernier commit
+  de cette période, et le benchmark enregistre désormais le commit de chaque round.
+- **La façon de classer une commande peut changer un résultat.** Une commande comme `sed … && grep …` lit
+  et cherche à la fois. Classée selon sa première commande, c'est une lecture ; selon n'importe laquelle,
+  c'est une recherche. Ce choix a fait passer la répartition de l'arm D de 4,8 recherches et 10,8 lectures à
+  6,2 et 9,6 (§5.2). La règle doit être écrite, et vérifiée par une seconde implémentation.
+- **Le texte du thinking est masqué.** On ne peut pas le lire, seulement le compter. La mesure utilise le
+  compte du fournisseur, qui existe aussi message par message et dont la somme retombe exactement sur le
+  total du run. L'estimation diffusée en streaming sous-compte d'environ 240 tokens par run et n'est pas
+  utilisée.
+
+### 6.2 Les asymétries entre les bras
+
+1. **Seam emporte sa documentation.** Son `SKILL.md` est inclus dans le prompt : au premier tour, Seam écrit
+   30,9k tokens dans le cache contre 14,0k pour grep (+16,8k, identique dans les 5 rounds), et ce texte reste
+   présent pendant tout le run. C'est le produit tel qu'il est livré, donc l'enlever serait injuste dans
+   l'autre sens.
+2. **Seam a un cache à préchauffer** ; grep et l'oracle n'en ont pas. Cela **favorise Seam**.
+3. **L'oracle est construit à partir des sorties de Seam**, en choisissant les cinq résultats qui couvrent
+   ensemble toute la vérité terrain. Le choix est idéalisé ; le contenu est exact.
+4. **Seam et l'oracle n'ont pas accès à la recherche : il faut dire sur quel coût repose chaque
+   affirmation.**
+   - Si l'outil est présenté comme un **remplaçant** de grep, les refus sont une vraie gêne qu'un
+     utilisateur rencontrerait, et c'est la ligne brute qui compte (Seam 1,42x, l'oracle 1,26x).
+   - S'il est présenté comme un **complément** de grep, ce qui est le cas de Seam, les refus viennent du
+     dispositif, et c'est la ligne ajustée qui compte (1,36x et 1,13x). L'arm D mesure directement ce cas au
+     lieu de l'ajuster : l'outil idéal avec grep coûte **0,91x** grep seul, ce qui n'est pas distinguable de
+     l'égalité (§5.2).
+   - Le plancher de vérification (§5) tient dans les deux cas. La parité de §4.1 repose sur la lecture
+     ajustée. **Il faut annoncer l'usage avant de citer un chiffre.**
+   - Sans recherche, l'oracle doit vérifier en lisant des fichiers entiers. La section 5.2 le mesure : avec
+     la recherche, environ la moitié des lectures deviennent des recherches et les refus disparaissent, mais
+     le nombre de vérifications bouge à peine.
+5. **L'arm D a tourné sur un autre dispositif** : une autre machine, un CLI plus récent (2.1.282) et une
+   version plus récente de Keycloak. Ses rounds sont comparés entre eux (§5.2), jamais avec ceux de §1.
+
+### 6.3 Généralité
+
+- **Une tâche, un dépôt, 5 rounds par bras.** Le mécanisme de coût de la section 4 est de l'arithmétique :
+  il se généralise, et 2607.12161 l'observe sur 2 908 runs. Le plancher de la section 5, lui, est un
+  comportement **mesuré** : son existence et sa taille doivent être mesurées sur chaque modèle.
+- **Sur un second modèle, le plancher est présent dans chaque round, mais plus petit.** Trois rounds de
+  grep et de l'oracle sur Sonnet : `DONE` au 6e appel à chaque fois, tous les refus après lui et aucun avant,
+  puis **9, 4 et 8 vérifications exécutées** après la réponse complète, contre 6 à 14 sur Opus (moyenne 7,0
+  contre 10,2). Un round passe sous la fourchette d'Opus : la taille du plancher dépend donc du modèle, son
+  existence non. Les limites : 3 rounds, pas de bras Seam, une autre machine, un CLI plus récent (2.1.303),
+  et Keycloak fixé au commit retrouvé en §6.1. Aucune commande autorisée n'a été refusée
+  (`bench/replay-ceiling/results-sonnet-clean/WHY.md`). L'étude passe ainsi d'un modèle à deux pour
+  l'*existence* du plancher, pas pour sa *taille*.
+- **En coût, l'oracle sur Sonnet est au niveau de son contrôle** : 0,97x en moyenne, mais 1,06x, 0,58x et
+  1,42x selon les rounds, un écart trop grand pour en dire plus avec 3 rounds. Un plancher plus petit est
+  exactement ce qui devrait rapprocher l'oracle de l'égalité, mais 3 rounds ne permettent pas de le
+  distinguer du bruit.
+- **Un premier test sur Sonnet a été écarté** (§6.1) : des commandes autorisées y étaient refusées dans les
+  deux bras. Il montrait un contrôle à 28–41 appels sur Sonnet contre 21–24 sur Opus. Le contrôle du test
+  propre en fait 17 à 23 : l'écart venait du dispositif, pas du modèle.
+- **Le seuil de 20:1 dépend de la durée de vie du cache, pas du modèle.** Les prix facturés, retrouvés à
+  partir des transcripts, sont de 5 / 0,5 / 10 / 25 $ par million de tokens pour Opus et de 3 / 0,3 /
+  3,75 (cache 5 min) ou 6,00 (cache 1 h) / 15 $ pour Sonnet. Dans les deux cas, une lecture coûte 0,1x
+  l'entrée et une écriture avec un cache d'une heure 2,0x : le seuil est de 0,050 pour les deux modèles, et
+  le niveau de prix s'annule. Sonnet est simplement 3 fois moins cher partout, et l'échange est identique.
+  Avec un cache de 5 minutes, le seuil passe à 0,080 (12,5:1) : l'échange y est plus facile à gagner.
+- **Ce qui pourrait encore contredire l'étude :**
+  - une tarification sans prime d'écriture ;
+  - une conversation assez longue pour que l'amortissement l'emporte ;
+  - une tâche où le contexte du contrôle grossit plus vite que le payload.
+
+  Un modèle qui ne revérifierait pas a été cherché deux fois, sans succès : sur un second modèle (le plancher
+  y est plus petit, mais présent dans chaque round), et dans la littérature, où l'article le plus proche
+  (2606.14476) mesure un autre régime, sans aucun moyen de vérifier (§2).
 
 ---
 
