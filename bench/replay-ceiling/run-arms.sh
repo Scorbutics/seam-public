@@ -107,7 +107,7 @@ Use ripgrep/grep and file reads to answer. Work from the repo root: $REPO
 A scratch directory you may write to (identical for every arm): $OUT/.scratch-A
   — use it if you want to save output to a file rather than re-running a command.
 $CONTRACT"
-DENY_A=("${COMMON_DENY[@]}" "Bash(bun:*)" "Bash(node:*)" "Bash(npx:*)" "Bash($HERE/call-flow:*)")
+DENY_A=("${COMMON_DENY[@]}" "Bash(bun:*)" "Bash(node:*)" "Bash(npx:*)" "Bash($HERE/call-flow:*)" "Bash($HERE/call-flow-min:*)")
 ARM_A () { run_arm A PROMPT_A DENY_A "Bash(rg:*)" "Bash(grep:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)" \
         "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" \
         "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read Glob Grep; }
@@ -148,7 +148,7 @@ structural facts about this flow. Do not skip steps.
 A scratch directory you may write to (identical for every arm): $OUT/.scratch-C
   — use it if you want to save output to a file rather than re-running a command.
 $CONTRACT"
-DENY_C=("${COMMON_DENY[@]}" "${NO_SEARCH[@]}" "Bash(bun:*)")
+DENY_C=("${COMMON_DENY[@]}" "${NO_SEARCH[@]}" "Bash(bun:*)" "Bash($HERE/call-flow-min:*)")
 ARM_C () { run_arm C PROMPT_C DENY_C "Bash($HERE/call-flow:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" \
         "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read; }
 
@@ -175,6 +175,26 @@ DENY_D=("${COMMON_DENY[@]}" "Bash(bun:*)")
 ARM_D () { run_arm D PROMPT_D DENY_D "Bash($HERE/call-flow:*)" "Bash(rg:*)" "Bash(grep:*)" "Bash(cat:*)" "Bash(sed:*)" \
         "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" \
         "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read Glob Grep; }
+
+# ── ARM E: the MINIMAL-PAYLOAD ceiling ─────────────────────────────────────────────────────────────────
+# Arm C is optimal on latency, step order and recall, but not on SIZE: it serves Seam's real ~13k-token output.
+# Arm E is arm C with only the payload changed: ONE step holding only the answer (the ground-truth locations,
+# ~1.7 KB, hand-built — see call-flow-min), then DONE. Same manual wording, same denials, no search. If it still
+# does not beat grep, the cost is the checking, not the payload's size.
+PROMPT_E="You are working in the repository at $REPO.
+
+TASK: $TASK
+
+You have a flow-tracing tool. Invoke it as:  $HERE/call-flow-min --step N
+Start at --step 1 and work through the steps IN ORDER (1, 2, 3, ...) until it prints DONE. Each step returns
+structural facts about this flow. Do not skip steps.
+
+A scratch directory you may write to (identical for every arm): $OUT/.scratch-E
+  — use it if you want to save output to a file rather than re-running a command.
+$CONTRACT"
+DENY_E=("${COMMON_DENY[@]}" "${NO_SEARCH[@]}" "Bash(bun:*)" "Bash($HERE/call-flow:*)")
+ARM_E () { run_arm E PROMPT_E DENY_E "Bash($HERE/call-flow-min:*)" "Bash(cat:*)" "Bash(sed:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" \
+        "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read; }
 
 # ── RANDOMISED ARM ORDER ─────────────────────────────────────────────────────────────────────────────────
 # bench/grep-vs-seam ran its arms in a FIXED order (grep first, always), which leaves an order confound

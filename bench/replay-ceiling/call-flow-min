@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# ARM E — the MINIMAL-PAYLOAD oracle. Same protocol as ./call-flow, but the whole answer arrives in ONE step,
+# and it is ONLY the answer: the ground-truth locations as file:line#symbol, plus the REST crossing.
+#
+# WHY. Arm C's oracle is optimal on latency, step order and recall, but not on SIZE: it serves Seam's real
+# ~13k-token output. A tool that returned only the answer would pay almost no cache-write premium. Arm E
+# tests whether the ceiling still holds when the payload is as small as it can be.
+#
+# UNLIKE ./call-flow, THE CONTENT IS HAND-BUILT: steps-min/answer.txt was written from truth.txt, with line
+# numbers read at keycloak cd0b33e528. It is the best conceivable answer, not any tool's output — a more
+# idealised bound than arm C, and reported as such.
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+usage () { echo "usage: call-flow-min --step N   (N = 1)" >&2; exit 2; }
+[ "${1:-}" = "--step" ] || usage
+N="${2:-}"
+[[ "$N" =~ ^[0-9]+$ ]] || usage
+if [ "$N" -gt 1 ]; then
+  echo "DONE — no further steps. You have everything the trace can give you."
+  exit 0
+fi
+echo "=== step 1 of 1 ==="
+cat "$HERE/steps-min/answer.txt"
+echo
+echo "DONE — no further steps. You have everything the trace can give you."

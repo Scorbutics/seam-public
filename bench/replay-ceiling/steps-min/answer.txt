@@ -1,0 +1,19 @@
+# Trace: admin UI reads and updates a realm (TypeScript admin client -> Java server)
+
+## TypeScript — admin UI and admin client
+js/apps/admin-ui/src/authentication/policies/OtpPolicy.tsx:86   onSubmit -> adminClient.realms.update(...)   (one of ~20 UI callers)
+js/libs/keycloak-admin-client/src/resources/realms.ts:50         #update      makeUpdateRequest, PUT /{realm}
+js/libs/keycloak-admin-client/src/resources/realms.ts:40         #findOne     makeRequest, GET /{realm}
+js/libs/keycloak-admin-client/src/resources/resource.ts:30       #makeUpdateRequest
+js/libs/keycloak-admin-client/src/resources/agent.ts:75          #request     the HTTP call
+
+## The crossing — REST, /admin/realms/{realm}
+services/src/main/java/org/keycloak/services/resources/admin/RealmsAdminResource.java:209   #getRealmAdmin   @Path("{realm}")
+
+## Java — server
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:429    #getRealm        GET  -> ModelToRepresentation
+services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java:474    #updateRealm     PUT  -> RepresentationToModel
+server-spi-private/src/main/java/org/keycloak/models/utils/RepresentationToModel.java:285  #updateRealm
+server-spi-private/src/main/java/org/keycloak/models/utils/ModelToRepresentation.java:486  #toRepresentation
+rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/UIRealmResource.java:71         #updateRealm     admin-UI extension, delegates to RealmAdminResource
+model/jpa/src/main/java/org/keycloak/models/jpa/RealmAdapter.java:118                      #RealmAdapter    persistence
