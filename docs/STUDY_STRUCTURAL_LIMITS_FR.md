@@ -29,13 +29,16 @@ tokens.
 
 En chiffres, sur 5 rounds appariés :
 
-- l'outil parfait coûte **1,13x** le contrôle grep (1,26x en brut, appels refusés compris) ;
+- l'outil parfait, avec le payload de Seam, coûte **1,13x** le contrôle grep (1,26x en brut, appels refusés
+  compris) ;
 - la totalité du surcoût restant, **+13 %**, vient de l'écriture dans le cache ;
 - après une réponse complète, l'agent fait encore **14,8 appels** (10,2 exécutés, 4,6 refusés), qui
   représentent **52 %** du coût du run ;
 - lui donner en plus un moyen de recherche rend chaque vérification moins chère, mais ne change presque
   pas le nombre de vérifications ;
-- ce plancher se retrouve sur un second modèle (Sonnet, 3 rounds), dans chaque round, mais plus petit.
+- ce plancher se retrouve sur un second modèle (Sonnet, 3 rounds), dans chaque round, mais plus petit ;
+- en revanche, réduit à la réponse seule, le même oracle coûte **0,45x** grep (§8) : c'est la taille du
+  payload de Seam qui fait perdre l'outil idéal. Le plancher, lui, est toujours là.
 
 ---
 
@@ -193,14 +196,16 @@ place de l'agent** : il est honnête sur ce qu'il ne peut pas réduire, et cette
 **Pourquoi c'est le bon instrument.** Tant qu'on compare des outils imparfaits, un résultat décevant peut
 toujours s'expliquer par un outil « pas encore assez bon », et cette hypothèse ne peut jamais être réfutée,
 puisqu'il y a toujours une amélioration possible. L'oracle donne la réponse complète, sans délai ni erreur :
-aucun outil de ce type ne peut faire mieux sur cette tâche. **Donc si l'oracle ne bat pas grep, aucune
-version de l'outil ne le battra.** La question n'est plus « le moteur est-il assez bon ? », mais porte sur
-toute la catégorie d'outils.
+aucun outil qui renvoie ce payload ne peut faire mieux sur cette tâche. **Donc si l'oracle ne bat pas grep,
+aucune version de l'outil qui renvoie un payload de cette taille ne le battra.** La question n'est plus « le
+moteur est-il assez bon ? », mais « que coûte un tel payload, quel que soit le moteur ? ».
 
 **Ce que la borne couvre, et ce qu'elle ne couvre pas.** Elle ne vaut que pour les outils qui répondent en
 **injectant du texte dans le contexte de l'agent**. Elle ne dit rien d'un outil qui changerait ce que
 l'agent fait d'une réponse : un outil qui l'empêcherait de revérifier, ou qui garderait son payload d'une
-conversation à l'autre au lieu de le réécrire à chaque fois.
+conversation à l'autre au lieu de le réécrire à chaque fois. Elle ne couvre pas non plus un outil qui
+renverrait moins : l'oracle est optimal en latence, en ordre et en rappel, mais pas en taille. Réduit à la
+réponse seule, il bat grep (§8).
 
 **Coût pour le reproduire sur n'importe quel outil :** figer les sorties de l'outil sur une tâche, les
 servir avec `cat`, écrire un manuel de 300 octets.
@@ -347,7 +352,8 @@ fallu répondre en **3,9 tours, moins que ses 8,7 appels d'outils**.
 
 **Note d'honnêteté.** Ce calcul ne rend pas impossible un vrai outil à un seul appel. Avec un payload
 hypothétique de 36k tokens et un seul tour, l'écriture coûte 0,36 $, contre environ 0,49 $ de lecture
-accumulée pour grep : il gagnerait. La section 5 explique pourquoi ce régime n'est jamais atteint.
+accumulée pour grep : il gagnerait. La section 8 le mesure : réduit à la réponse seule, l'oracle gagne,
+dans la limite du plancher de la section 5.
 
 ### 4.3 Le thinking double, et ne pèse presque pas sur la facture
 
@@ -561,6 +567,83 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   Un modèle qui ne revérifierait pas a été cherché deux fois, sans succès : sur un second modèle (le plancher
   y est plus petit, mais présent dans chaque round), et dans la littérature, où l'article le plus proche
   (2606.14476) mesure un autre régime, sans aucun moyen de vérifier (§2).
+
+---
+
+## 7. Ce que cette étude ne dit pas
+
+- **Ce n'est pas un verdict sur un outil en particulier.** L'outil livré est l'arm B, et il n'est là que
+  parce que l'oracle devait être construit à partir des sorties enregistrées d'un vrai outil. Savoir si cet
+  outil vaut la peine d'être utilisé est une autre question (portée, honnêteté, cohérence sur des questions
+  qu'un serveur de langage ne sait pas traiter), qui demande d'autres preuves et n'est pas tranchée ici.
+  L'affirmation porte sur une **catégorie** : ce que coûte un outil qui répond en injectant un payload de
+  cette taille, borné par ce que coûte le meilleur outil concevable qui renvoie ce payload.
+- **Elle ne dit pas que tout outil de récupération perd.** Un outil réduit à la réponse seule gagne
+  nettement (§8).
+- **Elle ne dit pas que le nombre d'appels est une mauvaise mesure.** La réduction de 36 % est réelle. Ce
+  n'est simplement **pas une mesure du coût**, et ici les deux axes vont en sens opposé.
+- **Ce n'est pas un nouveau mécanisme de coût.** La section 4 reprend un mécanisme connu (§2).
+
+---
+
+## 8. Ouverture
+
+### 8.1 Un outil réduit à la réponse : l'arm E
+
+L'oracle de cette étude est optimal en latence, en ordre et en rappel, mais pas en taille : il sert les
+~13k tokens réels de Seam. **L'arm E est le même oracle réduit à la réponse seule** : un seul appel, qui
+renvoie les 12 emplacements de la vérité terrain (`fichier:ligne#symbole`) et le passage REST, soit 1,7 Ko
+(environ 500 tokens), puis `DONE`. Même prompt, mêmes commandes autorisées, pas de recherche. Les bras A, C
+et E ont tourné ensemble, cinq rounds appariés dans un ordre tiré au hasard, sur Opus et sur une même
+machine (`bench/replay-ceiling/results-min-payload/`).
+
+| par run | GREP | REPLAY (C) | REPLAY réduit (E) |
+|---|---|---|---|
+| coût vs GREP | 1,00 | 1,25 | **0,45** |
+| rounds moins chers que grep | — | 1 sur 5 | **5 sur 5** |
+| écriture dans le cache | 45k | 48k | 22k |
+| vérifications exécutées après `DONE` | — | 20,4 | 10,2 |
+
+- **Réduit à la réponse, l'outil idéal bat grep d'un facteur deux**, dans les 5 rounds. Son écriture dans le
+  cache est même plus faible que celle de grep. C'est ce que prévoyait le calcul de §4.2 : un payload n'est
+  rentable que sous ~6,8k tokens ; celui de C en fait ~13k, celui de E ~0,5k.
+- **Le plancher est toujours là.** Avec la réponse complète dès le premier appel, l'agent vérifie encore 10
+  fois en moyenne, et 25 fois dans un round, où son coût remonte au niveau de grep (0,99x). Le plancher
+  n'annule pas le gain, mais il le plafonne et le rend imprévisible. Il apparaît ainsi dans trois
+  situations : l'oracle complet, un second modèle, et la réponse parfaite en un seul appel.
+- **La limite :** le contenu de E est construit à la main à partir de la vérité terrain. C'est la meilleure
+  réponse concevable, pas la sortie d'un outil. (Deux appels autorisés ont été refusés au premier round ;
+  sans ce round, le résultat est le même, 0,43x.)
+
+**La question ouverte : un tel outil est-il constructible ?** Pour réduire le payload à la réponse, il faut
+trier les données utiles des superflues. Or ce tri dépend de la question de l'utilisateur, posée en langage
+naturel : c'est un jugement sémantique, pas un fait structurel. Construire exactement E revient à résoudre
+la tâche ; au sens strict, il n'est donc pas constructible. Mais on peut s'en approcher, et deux repères
+cadrent la question :
+
+- **la cible n'est pas la réponse parfaite**, c'est un payload sous ~7k tokens avec un rappel complet. La
+  carte de l'étape 2 pèse à elle seule près des deux tiers du payload de C ; les quatre autres étapes font
+  entre 5k et 7,5k tokens selon qu'on compte les octets ou les écritures mesurées, soit autour du seuil. Un
+  élagage purement structurel pourrait donc suffire, ou de justesse — c'est une hypothèse, à tester ;
+- **le tri peut être payé ailleurs que dans le contexte de l'agent** : par un petit modèle, dans un contexte
+  séparé, une seule fois, au lieu d'être fait par l'agent principal, qui relit tout le payload à chaque tour.
+
+Et même un tri parfait reste plafonné par le plancher de vérification.
+
+### 8.2 Une mise en cache d'une session à l'autre
+
+Avec l'ajustement de §4.1, la lecture est neutre pour l'oracle complet : tout l'écart est une prime
+d'écriture payée **à chaque conversation**. Un payload mis en cache *d'une session à l'autre*, au lieu d'être
+réécrit dans chaque conversation, transformerait cette prime répétée en un coût unique. C'est un second
+levier, à côté de la taille du payload. Savoir s'il est atteignable avec la sémantique de cache actuelle
+reste une question ouverte.
+
+### 8.3 La taille du plancher dépend-elle du modèle ?
+
+Sur Sonnet, l'oracle a fait moins de vérifications après `DONE` (7,0 en moyenne contre 10,2, sur 3 rounds)
+et a coûté à peu près autant que son contrôle, au lieu de 1,26x (§6.3). Si cela se confirme à 5 rounds, une
+partie de la valeur mesurée d'un outil de récupération dépend de la quantité de vérification du modèle, pas
+de l'outil. Il faudrait les bras A et C sur 5 rounds ou plus, sur les deux modèles, sur une même machine.
 
 ---
 

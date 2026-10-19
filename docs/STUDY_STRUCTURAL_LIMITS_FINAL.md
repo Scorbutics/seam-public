@@ -7,8 +7,8 @@ does *injecting* a high-quality structural payload reduce it? — and finds it d
 compression literature identifies as a mechanism but does not isolate.
 
 I build a **replay oracle**: a tool that serves a real structural tool's recorded output with zero latency,
-zero wrong turns, perfect recall and a 300-byte manual. It is an upper bound on the entire class of retrieval
-tools that answer by injecting a payload, not a proxy for one.
+zero wrong turns, perfect recall and a 300-byte manual. It is an upper bound for tools that return a payload
+of this size, not a proxy for one.
 
 Given a provably complete answer, the agent makes **14.8 further calls** — 10.2 executed, 4.6 refused, every
 refusal landing after the oracle said `DONE` — costing 52% of the run and finishing in **21.8 model turns
@@ -23,9 +23,12 @@ the turn reduction the whole trade depends on does not arrive even at the ceilin
 model too, in every round, though smaller (Sonnet, n=3). Giving the ideal tool a search channel as well makes
 each check cheaper but barely changes how many checks it runs (18.4 to 15.8, not significant at n=5). The
 floor is the urge to verify; the channel only sets its price. Used alongside grep, the ideal tool breaks even
-with grep alone; used instead of it, it loses. **The write premium is the whole residual**: an ideal retrieval
-tool reads about as much as grep over a run, and loses by exactly the premium it paid to put its answer into the
-context. I report the ceiling method as the transferable result: any tool builder can freeze their tool's
+with grep alone; used instead of it, it loses. **The write premium is the whole residual**: an ideal tool
+returning this payload reads about as much as grep over a run, and loses by exactly the premium it paid to put
+its answer into the context. The bound is about payload size: the same oracle reduced to the answer alone
+costs 0.45x grep, cheaper in all 5 rounds, yet the agent still checks about 10 times after a complete one-call
+answer. Whether a real tool can approach that answer — which takes a semantic judgement on the user's
+question — is left open (§8). I report the ceiling method as the transferable result: any tool builder can freeze their tool's
 outputs and measure this bound before investing in an engine.
 
 ---
@@ -51,12 +54,15 @@ tends to re-check it and to keep going, consuming more tokens.
 
 In numbers, over 5 paired rounds:
 
-- the perfect tool costs **1.13x** the grep control (1.26x raw, refused calls included);
+- the perfect tool, with Seam's payload, costs **1.13x** the grep control (1.26x raw, refused calls
+  included);
 - all of the remaining extra cost, **+13%**, comes from cache writes;
 - after a complete answer, the agent still makes **14.8 calls** (10.2 executed, 4.6 refused), which account
   for **52%** of the run's cost;
 - also giving it a way to search makes each check cheaper, but barely changes the number of checks;
-- this floor is also found on a second model (Sonnet, 3 rounds), in every round, but smaller.
+- this floor is also found on a second model (Sonnet, 3 rounds), in every round, but smaller;
+- on the other hand, reduced to the answer alone, the same oracle costs **0.45x** grep (§8): it is the size
+  of Seam's payload that makes the ideal tool lose. The floor is still there.
 
 ---
 
@@ -207,14 +213,15 @@ in the agent's place**: it is honest about what it cannot narrow down, and that 
 **Why this is the right instrument.** As long as imperfect tools are compared, a disappointing result can
 always be explained by a tool that is "not good enough yet", and that hypothesis can never be refuted, since
 there is always another improvement to make. The oracle gives the complete answer, with no delay and no
-error: no tool of this kind can do better on this task. **So if the oracle does not beat grep, no version of
-the tool will.** The question is no longer "is the engine good enough?"; it is about the whole category of
-tools.
+error: no tool returning this payload can do better on this task. **So if the oracle does not beat grep, no
+version of the tool that returns a payload of this size will.** The question is no longer "is the engine good
+enough?" but "what does such a payload cost, whatever the engine?".
 
 **What the bound covers, and what it does not.** It holds only for tools that answer by **injecting text into
 the agent's context**. It says nothing about a tool that would change what the agent does with an answer: a
 tool that stopped it re-checking, or that kept its payload from one conversation to the next instead of
-writing it again each time.
+writing it again each time. Nor does it cover a tool that returns less: the oracle is optimal on latency,
+order and recall, but not on size. Reduced to the answer alone, it beats grep (§8).
 
 **Cost of reproducing it for any tool:** freeze the tool's outputs on one task, serve them with `cat`, write a
 300-byte manual.
@@ -356,7 +363,8 @@ tool calls**.
 
 **An honesty note.** This calculation does not make a genuine one-call tool impossible. With a hypothetical
 36k-token payload and a single turn, the write costs $0.36, against about $0.49 of accumulated reading for
-grep: it would win. Section 5 explains why that regime is never reached.
+grep: it would win. Section 8 measures it: reduced to the answer alone, the oracle wins, within the limit of
+section 5's floor.
 
 ### 4.3 Thinking doubles, and barely affects the bill
 
@@ -562,29 +570,73 @@ changes what it measures. Here are the traps encountered, and what was done each
 
 ## 7. What this does not say
 
-- **It is not a verdict on any particular tool.** The shipped tool is arm B, and arm B is here only because
-  the oracle had to be built from *some* real tool's recorded output. Whether that tool is worth using is a
-  question about reach, honesty and consistency on questions a language server cannot answer — a different
-  question, settled by different evidence, and not settled here. The claim is about the **class**: what any
-  tool that answers by injecting a payload costs, bounded by what the best conceivable one costs.
-- **It does not say tool calls are a bad metric.** The 36% reduction is real. It is **not a cost proxy**, and
-  here the two axes move in opposite directions.
-- **It is not a new cost mechanism.** Section 4 is background; see §2.
+- **It is not a verdict on any particular tool.** The shipped tool is arm B, and it is here only because the
+  oracle had to be built from a real tool's recorded output. Whether that tool is worth using is a different
+  question (reach, honesty, consistency on questions a language server cannot handle), which needs other
+  evidence and is not settled here. The claim is about a **category**: what a tool that answers by injecting
+  a payload of this size costs, bounded by what the best conceivable tool returning that payload costs.
+- **It does not say every retrieval tool loses.** A tool reduced to the answer alone clearly wins (§8).
+- **It does not say tool calls are a bad metric.** The 36% reduction is real. It is simply **not a cost
+  proxy**, and here the two axes move in opposite directions.
+- **It is not a new cost mechanism.** Section 4 restates a known mechanism (§2).
 
 ---
 
-## 8. What follows
+## 8. Open questions
 
-1. **The one arithmetic way out.** With §4.1's adjustment, reading is neutral at the ceiling, so the whole
-   gap is a write premium paid **once per conversation**. A payload cached *across* sessions instead of being
-   written again in each conversation would turn that repeated premium into a one-time cost. It is the only
-   lever that acts on the one remaining cost term. Everything else — a faster engine, a better answer, a
-   shorter payload — is bounded by §5. Whether it is reachable under current cache semantics is an open
-   question.
-2. **Does the floor's size depend on the model?** On Sonnet the oracle ran fewer checks after `DONE` (mean 7.0
-   against 10.2, n=3) and cost about the same as its control instead of 1.26x (§6.3). If that holds at n=5,
-   part of a retrieval tool's measured value is set by how much the model checks, not by the tool. It needs
-   arms A and C at n=5 or more on both models, on one machine.
+### 8.1 A tool reduced to the answer: arm E
+
+This study's oracle is optimal on latency, order and recall, but not on size: it serves Seam's real ~13k
+tokens. **Arm E is the same oracle reduced to the answer alone**: a single call that returns the 12
+ground-truth locations (`file:line#symbol`) and the REST crossing, 1.7 KB (about 500 tokens), then `DONE`.
+Same prompt, same permitted commands, no search. Arms A, C and E ran together, five paired rounds in
+randomised order, on Opus and on one machine (`bench/replay-ceiling/results-min-payload/`).
+
+| per run | GREP | REPLAY (C) | REPLAY reduced (E) |
+|---|---|---|---|
+| cost vs GREP | 1.00 | 1.25 | **0.45** |
+| rounds cheaper than grep | — | 1 of 5 | **5 of 5** |
+| cache write | 45k | 48k | 22k |
+| checks that ran after `DONE` | — | 20.4 | 10.2 |
+
+- **Reduced to the answer, the ideal tool beats grep by a factor of two**, in all 5 rounds. Its cache write
+  is even lower than grep's. This is what §4.2's calculation predicted: a payload pays for itself only below
+  ~6.8k tokens; C's is ~13k, E's ~0.5k.
+- **The floor is still there.** With the complete answer in its first call, the agent still checks 10 times
+  on average, and 25 times in one round, where its cost rises back to grep's level (0.99x). The floor does
+  not cancel the gain, but it caps it and makes it unpredictable. It now appears in three situations: the full
+  oracle, a second model, and the perfect answer in a single call.
+- **The limit:** E's content is hand-built from the ground truth. It is the best conceivable answer, not any
+  tool's output. (Two permitted calls were refused in the first round; without that round the result is the
+  same, 0.43x.)
+
+**The open question: can such a tool be built?** Reducing the payload to the answer means separating the
+useful data from the superfluous. That sorting depends on the user's question, asked in natural language: it
+is a semantic judgement, not a structural fact. Building E exactly amounts to solving the task; in the strict
+sense, then, it cannot be built. But it can be approached, and two markers frame the question:
+
+- **the target is not the perfect answer**, but a payload under ~7k tokens with complete recall. Step 2's map
+  alone is nearly two thirds of C's payload; the other four steps come to between 5k and 7.5k tokens,
+  depending on whether bytes or measured writes are counted — around the bar. A purely structural pruning
+  might therefore be enough, or only just — a hypothesis to test;
+- **the sorting can be paid for outside the agent's context**: by a small model, in a separate context, once,
+  instead of by the main agent, which re-reads the whole payload on every turn.
+
+And even a perfect sort stays capped by the verification floor.
+
+### 8.2 Caching across sessions
+
+With §4.1's adjustment, reading is neutral for the full oracle: the whole gap is a write premium paid **in
+every conversation**. A payload cached *across* sessions, instead of being written again in each
+conversation, would turn that repeated premium into a one-time cost. It is a second lever, alongside payload
+size. Whether it is reachable under current cache semantics is an open question.
+
+### 8.3 Does the floor's size depend on the model?
+
+On Sonnet the oracle ran fewer checks after `DONE` (7.0 on average against 10.2, over 3 rounds) and cost about
+as much as its control instead of 1.26x (§6.3). If that holds at 5 rounds, part of a retrieval tool's measured
+value depends on how much the model checks, not on the tool. It needs arms A and C at 5 rounds or more, on
+both models, on one machine.
 
 ---
 
