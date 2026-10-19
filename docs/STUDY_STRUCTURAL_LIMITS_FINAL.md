@@ -601,15 +601,7 @@ python3 bench/replay-ceiling/verify_independent.py   # a second implementation, 
 every figure; where they first disagreed, and what changed, is in [`STUDY_AUDIT.md`](STUDY_AUDIT.md). Per-round
 tables are printed by both scripts.
 
-## Appendix B — Discarded batches
-
-Four batches were run and not used, each documented in its own `WHY.md`: the pilot
-(`results/discarded-pilot/`) and the five rounds with an asymmetric read grant (`results/discarded-strict-read/`),
-both covered in §6.1; and two batches in which a newer CLI refused shell commands the arms had been granted —
-the first arm D batch (`results-oracle-grep/discarded-outside-workdir/`) and the first Sonnet probe
-(`results-sonnet-probe/`). The batches in §5.2 and §6.3 replace the last two.
-
-## Appendix C — External review
+## Appendix B — External review
 
 The refusal adjustment (§1, §4.1) came from external review, which caught refused turns being counted as
 behaviour. The lesson generalises: a contamination audit checks that the control held; it does not check
