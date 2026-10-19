@@ -29,7 +29,8 @@ brought it back to parity, leaving a read excess indistinguishable from zero. Th
 tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
-turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
+turn reduction the whole trade depends on does not arrive even at the ceiling. It is present on a second
+model too, in every round, though smaller (Sonnet, n=3). Giving the ideal tool a search
 channel as well makes each check cheaper but barely changes how many checks it runs (18.4 to 15.8, not
 significant at n=5). The floor is the urge to verify; the channel only sets its price. Used alongside grep,
 the ideal tool breaks even with grep alone. Used instead of it, it loses. **The write premium is the
