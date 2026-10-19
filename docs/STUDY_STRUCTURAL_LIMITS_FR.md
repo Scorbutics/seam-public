@@ -483,8 +483,7 @@ Trois résultats :
 le nombre d'appels publié (GREP 35,2 contre 22,4), et la vérification après `DONE` de l'arm idéal est 1,77x
 plus longue (26,2 contre 14,8). Le CLI a 43 versions de plus et Keycloak six jours de plus. L'*existence* du
 plancher se reproduit — il est même plus grand ici — mais sa *taille* dépend de la machine, et seules les
-comparaisons à l'intérieur de ce lot sont appariées. Un premier lot a été écarté parce que le dispositif ne
-pouvait pas atteindre le dépôt depuis le shell (`results-oracle-grep/discarded-outside-workdir/WHY.md`).
+comparaisons à l'intérieur de ce lot sont appariées.
 
 ---
 
