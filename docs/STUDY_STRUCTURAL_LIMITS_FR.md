@@ -505,19 +505,6 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   traités n'avaient pas le droit de lire des fichiers avec `sed`, `cat` ou `ls`, alors que le contrôle
   l'avait (`results/discarded-strict-read/WHY.md`). C'est le sens du biais qui l'a disqualifié : un biais
   *contre* la conclusion ne fait que la rendre plus prudente ; un biais qui la *fabrique* la rend fausse.
-- **Une même permission ne veut pas dire la même chose selon la version du CLI.** Entre Claude Code 2.1.239,
-  qui a fait tourner les rounds publiés, et 2.1.270, le shell a été limité au répertoire de travail. Le
-  benchmark tourne en dehors du dépôt, donc des commandes pourtant autorisées ont été refusées à tous les
-  bras. Deux lots ont été touchés et écartés : le premier lot de l'arm D, où le contrôle a perdu `ls` et
-  `find`, et l'arm D le `grep` qu'il était censé tester ; et le premier test sur Sonnet, où le contrôle a
-  perdu `find`, `ls` et même `grep`, et l'oracle `sed`, `awk` et `wc` (son contrôle montait ainsi à 28–41
-  appels, contre 17 à 23 dans le test propre de §6.3). Le benchmark ajoute désormais le dépôt
-  aux répertoires autorisés pour tous les bras. La règle générale : **le refus d'une commande autorisée est
-  une panne du dispositif, pas un comportement du modèle.**
-- **Le commit du dépôt n'avait pas été enregistré pour les rounds publiés.** Il a été retrouvé à partir des
-  sorties de l'oracle elles-mêmes : leurs références fichier:ligne correspondent au code de Keycloak entre le
-  1er et le 27 juillet 2026, et plus après. Le second test sur Sonnet (§6.3) a tourné sur le dernier commit
-  de cette période, et le benchmark enregistre désormais le commit de chaque round.
 - **La façon de classer une commande peut changer un résultat.** Une commande comme `sed … && grep …` lit
   et cherche à la fois. Classée selon sa première commande, c'est une lecture ; selon n'importe laquelle,
   c'est une recherche. Ce choix a fait passer la répartition de l'arm D de 4,8 recherches et 10,8 lectures à
@@ -553,8 +540,8 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   puis **9, 4 et 8 vérifications exécutées** après la réponse complète, contre 6 à 14 sur Opus (moyenne 7,0
   contre 10,2). Un round passe sous la fourchette d'Opus : la taille du plancher dépend donc du modèle, son
   existence non. Les limites : 3 rounds, pas de bras Seam, une autre machine, un CLI plus récent (2.1.303),
-  et Keycloak fixé au commit retrouvé en §6.1. Aucune commande autorisée n'a été refusée
-  (`bench/replay-ceiling/results-sonnet-clean/WHY.md`). L'étude passe ainsi d'un modèle à deux pour
+  et Keycloak dans le même état de juillet 2026 que les rounds publiés. Aucune commande autorisée n'a été
+  refusée (`bench/replay-ceiling/results-sonnet-clean/WHY.md`). L'étude passe ainsi d'un modèle à deux pour
   l'*existence* du plancher, pas pour sa *taille*.
 - **En coût, l'oracle sur Sonnet est au niveau de son contrôle** : 0,97x en moyenne, mais 1,06x, 0,58x et
   1,42x selon les rounds, un écart trop grand pour en dire plus avec 3 rounds. Un plancher plus petit est
