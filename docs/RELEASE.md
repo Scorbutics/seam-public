@@ -1,8 +1,7 @@
 # Releasing Seam
 
 A short, mechanical checklist. The whole point is that **none of this is judgement** — it either
-passes or it doesn't. CI (`.github/workflows/ci.yml`) runs the same checks on every push; this is
-how you run them yourself before tagging.
+passes or it doesn't. Run them yourself before tagging.
 
 ## One-time prerequisites
 
