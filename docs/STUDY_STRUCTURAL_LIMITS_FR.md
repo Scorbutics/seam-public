@@ -3,7 +3,8 @@
 > Version française, rédigée par l'auteur avec ses propres mots puis corrigée. Elle sert de base à la
 > traduction anglaise destinée à arXiv. La version de référence des chiffres reste
 > [`STUDY_STRUCTURAL_LIMITS.md`](STUDY_STRUCTURAL_LIMITS.md), dont chaque figure est recalculée par
-> `bench/replay-ceiling/verify_independent.py`. La section 6 reste à reprendre.
+> `bench/replay-ceiling/verify_independent.py`. Sa traduction anglaise finale est
+> [`STUDY_STRUCTURAL_LIMITS_FINAL.md`](STUDY_STRUCTURAL_LIMITS_FINAL.md).
 
 Une étude récente (arXiv 2607.12161) a montré qu'une réduction du nombre de tokens n'implique pas
 forcément une réduction des coûts.
@@ -80,8 +81,8 @@ Round par round (coût brut), pour montrer que ce n'est pas un effet de moyenne 
 
 « À égalité » signifie à moins de 1 % du contrôle. Aucun round n'est moins cher que grep.
 
-La qualité des réponses est comparable entre les bras. Elle est rapportée en §7 comme une tendance (n=5,
-intervalles qui se recouvrent), et rien dans l'argument ne repose dessus.
+La qualité des réponses a été notée mais ne joue aucun rôle dans l'argument : à n=5, ses intervalles se
+recouvrent entre les bras, et c'est le seul chiffre que le vérificateur indépendant ne recalcule pas.
 
 **Le chiffre qui résume la section 4.** Sans les appels refusés, l'arm idéal lit au total **983k tokens de
 contexte, contre 980k pour grep**. Mais il avait la réponse complète à **346k**, soit environ un tiers de ce
@@ -483,8 +484,7 @@ Trois résultats :
 le nombre d'appels publié (GREP 35,2 contre 22,4), et la vérification après `DONE` de l'arm idéal est 1,77x
 plus longue (26,2 contre 14,8). Le CLI a 43 versions de plus et Keycloak six jours de plus. L'*existence* du
 plancher se reproduit — il est même plus grand ici — mais sa *taille* dépend de la machine, et seules les
-comparaisons à l'intérieur de ce lot sont appariées. Un premier lot a été écarté parce que le dispositif ne
-pouvait pas atteindre le dépôt depuis le shell (`results-oracle-grep/discarded-outside-workdir/WHY.md`).
+comparaisons à l'intérieur de ce lot sont appariées.
 
 ---
 
@@ -505,19 +505,6 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   traités n'avaient pas le droit de lire des fichiers avec `sed`, `cat` ou `ls`, alors que le contrôle
   l'avait (`results/discarded-strict-read/WHY.md`). C'est le sens du biais qui l'a disqualifié : un biais
   *contre* la conclusion ne fait que la rendre plus prudente ; un biais qui la *fabrique* la rend fausse.
-- **Une même permission ne veut pas dire la même chose selon la version du CLI.** Entre Claude Code 2.1.239,
-  qui a fait tourner les rounds publiés, et 2.1.270, le shell a été limité au répertoire de travail. Le
-  benchmark tourne en dehors du dépôt, donc des commandes pourtant autorisées ont été refusées à tous les
-  bras. Deux lots ont été touchés et écartés : le premier lot de l'arm D, où le contrôle a perdu `ls` et
-  `find`, et l'arm D le `grep` qu'il était censé tester ; et le premier test sur Sonnet, où le contrôle a
-  perdu `find`, `ls` et même `grep`, et l'oracle `sed`, `awk` et `wc` (son contrôle montait ainsi à 28–41
-  appels, contre 17 à 23 dans le test propre de §6.3). Le benchmark ajoute désormais le dépôt
-  aux répertoires autorisés pour tous les bras. La règle générale : **le refus d'une commande autorisée est
-  une panne du dispositif, pas un comportement du modèle.**
-- **Le commit du dépôt n'avait pas été enregistré pour les rounds publiés.** Il a été retrouvé à partir des
-  sorties de l'oracle elles-mêmes : leurs références fichier:ligne correspondent au code de Keycloak entre le
-  1er et le 27 juillet 2026, et plus après. Le second test sur Sonnet (§6.3) a tourné sur le dernier commit
-  de cette période, et le benchmark enregistre désormais le commit de chaque round.
 - **La façon de classer une commande peut changer un résultat.** Une commande comme `sed … && grep …` lit
   et cherche à la fois. Classée selon sa première commande, c'est une lecture ; selon n'importe laquelle,
   c'est une recherche. Ce choix a fait passer la répartition de l'arm D de 4,8 recherches et 10,8 lectures à
@@ -553,8 +540,8 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
   puis **9, 4 et 8 vérifications exécutées** après la réponse complète, contre 6 à 14 sur Opus (moyenne 7,0
   contre 10,2). Un round passe sous la fourchette d'Opus : la taille du plancher dépend donc du modèle, son
   existence non. Les limites : 3 rounds, pas de bras Seam, une autre machine, un CLI plus récent (2.1.303),
-  et Keycloak fixé au commit retrouvé en §6.1. Aucune commande autorisée n'a été refusée
-  (`bench/replay-ceiling/results-sonnet-clean/WHY.md`). L'étude passe ainsi d'un modèle à deux pour
+  et Keycloak dans le même état de juillet 2026 que les rounds publiés. Aucune commande autorisée n'a été
+  refusée (`bench/replay-ceiling/results-sonnet-clean/WHY.md`). L'étude passe ainsi d'un modèle à deux pour
   l'*existence* du plancher, pas pour sa *taille*.
 - **En coût, l'oracle sur Sonnet est au niveau de son contrôle** : 0,97x en moyenne, mais 1,06x, 0,58x et
   1,42x selon les rounds, un écart trop grand pour en dire plus avec 3 rounds. Un plancher plus petit est
