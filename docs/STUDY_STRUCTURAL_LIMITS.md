@@ -131,7 +131,8 @@ the cost mechanism this study started from:
 benchmark for **detecting** redundant agent steps; it classifies rather than costs them, uses pre-existing
 trajectories with synthetic redundancy inserted, and has no oracle arm — verified by reading. Conversely,
 *When the Tool Decides: LLM Agents Defer Blindly to Graph Neural Network Tools* (arXiv 2606.14476) reports
-agents adopting a tool's output wholesale — prediction-level agreement with a frozen GCN of 0.976–0.992 —
+agents adopting a tool's output wholesale. The tool is a graph neural network (a GCN, a model that predicts a
+node's label from its neighbours), frozen, and agents agree with its predictions 0.976–0.992 of the time —
 which reads as the exact opposite of §5. **Read in full, it is not.** It measures a different variable in a
 different regime, and it BOUNDS this study's claim rather than contradicting it. Four reasons, in the order a
 reviewer will want them:
@@ -157,7 +158,7 @@ reviewer will want them:
   effect's direction generalizes across families, its extreme magnitude does not"*. Backbones are Qwen2.5
   0.5B–7B; beyond 7B is left to future work. Cite the scoped claim, not the headline.
 
-Taken together the two results are halves of one rule, stated in §5: an agent defers when the tool's output IS
+Taken together the two results are halves of one rule, which bounds §5's result: an agent defers when the tool's output IS
 the deliverable and no independent check exists, and verifies when it must assemble a claim it will be held to
 against evidence it can reach. `[And their §7 is the same shape as our §8, reached from the other side:
 selective invocation is bounded by AVAILABLE INFORMATION rather than router design — held-out estimators cap
@@ -507,15 +508,8 @@ verification drive than the raw call count is. Report both terms; the behaviour 
 Adjusted, the floor is 10.2 executed calls — still 47% of the ideal arm's turns spent after the answer was
 complete.]`
 
-**The floor has a boundary, and the boundary is not capability.** An agent verifies when verification is
-POSSIBLE and the claim is ITS OWN; it defers when the tool's output IS the deliverable and no independent
-check exists. 2606.14476 measures that second regime — a GNN returning the very label the agent must emit,
-with nothing outside the model to check it against — and finds wholesale adoption. This study is the first
-regime: the oracle returns locations, the agent must assemble an answer it is scored on for precision as well
-as completeness, and the repository is open beside it. Neither result transfers to the other's regime, and the
-pair is a sharper claim than either alone. `[WRITE — say this BEFORE a reviewer reaches for that paper. §6.3
-lists "a model that does not re-verify" among the falsifiers to look for, and this is the closest thing the
-literature currently has to one.]`
+**The floor has a limit:** an agent handed a tool output it cannot check copies it instead of checking it
+(§2). Here the repository is open beside the agent, so every claim the oracle makes can be checked.
 
 **This is not distrust of the tool.** There is nothing left to distrust: the answer is complete, correct, and
 was produced by the tool itself. `[WRITE: the behaviour is invariant to output quality — which is precisely
