@@ -30,9 +30,9 @@ tool calls 36%.
 
 Two results follow. **The verification floor**: post-answer checking is invariant to answer quality, so the
 turn reduction the whole trade depends on does not arrive even at the ceiling. Giving the ideal tool a search
-channel as well removes about 40% of its post-answer calls and leaves the rest. The floor is the urge to
-verify; the channel only sets its price. Used alongside grep, the ideal tool breaks even with grep alone. Used
-instead of it, it loses. **The write premium is the
+channel as well makes each check cheaper but barely changes how many checks it runs (18.4 to 15.8, not
+significant at n=5). The floor is the urge to verify; the channel only sets its price. Used alongside grep,
+the ideal tool breaks even with grep alone. Used instead of it, it loses. **The write premium is the
 whole residual**: an ideal retrieval tool breaks even on turns x context and then loses by precisely the
 premium it paid to put its answer in the context. Because the oracle is optimal by construction, this is a
 definitional argument rather than a statistical one. We report the ceiling method as the transferable result:
@@ -516,60 +516,63 @@ was produced by the tool itself. `[WRITE: the behaviour is invariant to output q
 what makes it un-addressable from the engine, and what the compression literature cannot show because
 compression makes re-reading rational.]`
 
-### 5.1 The falsifiable form of "model, not engine"
+### 5.1 The tool is at its best, and the checking remains
 
-| lever | owner | state in arm C | did it help? |
+The claim of this section: **the post-answer checking comes from the model's behaviour, not from any weakness
+of the tool.** Arm C tests it by putting every tool variable that governs *getting* the answer at its best,
+all at once:
+
+| tool variable | state in arm C | did it remove the checking after `DONE`? |
+|---|---|---|
+| latency | zero — the oracle is a `cat`; Seam's engine adds 20.6s of non-API time per run (§3.2) | no |
+| completeness | total — the five steps cover all 12 ground-truth entries | no |
+| documentation | minimal — a 300-byte manual against Seam's 42 KB | no |
+| a way to check | **absent** — nothing left to ask the oracle after `DONE`, and search is refused | measured in §5.2 |
+
+With all of that, arm C still costs **1.13x the control** (adjusted; 1.26x raw) and makes **10.2 executed calls
+after the answer was complete**. The one variable it leaves at its worst is the last row: once `DONE` is
+printed, every check has to go through whole-file reads. §5.2 gives the agent search and measures the
+difference.
+
+### 5.2 Does the agent check so much because it has no good way to check? — arm D
+
+**Arm D is arm C plus ordinary search**: the same oracle and manual, plus the `grep`/`rg` the control has. If
+the checking after `DONE` were only the cost of having no search, arm D would check much less. Arms A, C and
+D ran together, five paired rounds in randomised order, on one rig (`bench/replay-ceiling/results-oracle-grep/`).
+
+| per run, after `DONE` | REPLAY (no search) | REPLAY + grep (arm D) |
+|---|---|---|
+| refused search attempts | 7.8 | 0 |
+| searches that ran | 0 | 6.2 |
+| file reads that ran | 17.0 | 9.6 |
+| other (`ls`, `find`) | 1.4 | 0 |
+| **checks that actually ran** | **18.4** | **15.8** |
+
+A command that both reads and searches (`sed … && grep …`) counts as a search, because it runs one.
+
+| per run, whole run — this rig | GREP | REPLAY | REPLAY + grep |
 |---|---|---|---|
-| engine latency → 0 | engine | achieved — non-API time indistinguishable from the control (arm B: +20.6s) | no |
-| answer completeness → 100% | engine | achieved by construction — the five steps cover all 12 ground-truth entries | no |
-| documentation cost → 0 | engine | achieved (300 B vs 42 KB) | no |
-| **verification channel** | engine | **not provided** — nothing left to query after `DONE`, and search is denied | — |
-| post-answer verification | **model** | unchanged | — |
-
-Arm C sets **every engine variable that governs GETTING the answer to its optimum simultaneously** — not one
-at a time — and still costs **1.13x the control** (adjusted; 1.26x raw), spending **10.2 executed calls after
-the answer was complete**. It does **not** optimise *checking* the answer. Once the oracle prints `DONE` there
-is nothing left to ask it, and arm C is denied search, so every check goes through whole-file reads. That is
-the one engine variable arm C leaves at its worst rather than its best, and §5.2 measures what it costs. The
-residual is therefore not addressable from the *answering* side of the engine by definition; whether a
-checking channel addresses it is an empirical question. Arm D answers it (§5.2): **about 40% of it does,
-and the rest does not.** `[WRITE — and §4.1 says what that residual IS: not wasted reading (the read term is
-indistinguishable from zero) but the write premium on a payload the agent then declined to treat as final.]`
-
-### 5.2 What the floor's size includes — arm D
-
-Arm C has nothing left to ask after `DONE` and is denied search, so each check costs it a refused `grep` and
-then whole-file reads. That leaves its post-answer count mixing two things: **the urge to verify**, and **the
-price of verifying without a channel**. Arm D separates them. It is arm C unchanged — same oracle, same
-manual — plus the search arm A has. Arms A, C and D ran together, five paired rounds in randomised order, on
-one rig (`bench/replay-ceiling/results-oracle-grep/`).
-
-| per run, mean — this rig | GREP | REPLAY | REPLAY + grep |
-|---|---|---|---|
-| tool calls | 35.2 | 32.2 | **21.8** |
-| refused | 0.0 | 7.8 | 0.0 |
-| calls after `DONE` | — | 26.2 | **15.8** |
-| — of which search | — | 0 (7.8 refused, all `grep`/`rg`) | 4.8 |
-| — of which file reads | — | 17.0 | 10.8 |
+| tool calls | 35.2 | 32.2 | 21.8 |
 | billed cost vs GREP | 1.00 | 1.23 raw · 1.06 adjusted | **0.91** |
 
-Three findings, in order of how firmly the data holds them:
+Three findings:
 
-1. **About 40% of the ideal arm's post-answer calls are the price of the missing channel.** Given search, arm D
-   makes **10.4 fewer calls after `DONE`** than arm C — fewer in all 5 paired rounds (5, 11, 7, 15, 14; paired
-   t = 5.36, df = 4). It stops reaching for a tool it lacks, and replaces whole-file reads with targeted
+1. **Search changes how the agent checks, not how much.** Arm D's call count falls by 10.4 after `DONE`, but
+   7.8 of those are the refused attempts, which simply stop happening once search is allowed. The checks that
+   actually run fall from 18.4 to 15.8 — fewer in 4 rounds of 5, more in 1, which is not significant at n=5
+   (paired t = 1.86, df = 4). What changes is their kind: about half the whole-file reads become targeted
    searches.
 2. **The floor survives the channel.** With search available and nothing refused, arm D still makes **15.8
    calls after a provably complete answer** — 72% of all its calls. It walked the oracle to `DONE` first in
-   every round and searched nothing before it. A better way to check does not stop the agent checking. It
-   makes each check cheaper.
+   every round and searched nothing before it.
 3. **On cost, the ideal tool used alongside grep is at parity with grep alone.** Arm D costs **0.91x** the
-   control, which is not distinguishable from 1.0 at n=5 (sd 0.28; above 1.0 in 1 round, level in 1, below
-   in 3). It is cheaper than arm C in all 5 rounds. Arm C still loses (1.06x adjusted, 1.23x raw), the same
-   direction as the published rounds. So the headline depends on the pitch §6.2.4 separates. Used **instead
-   of** grep, the ideal tool loses. Used **alongside** grep, it breaks even. It never clearly wins.
+   control, which is not distinguishable from 1.0 at n=5 (sd 0.28; above 1.0 in 1 round, level in 1, below in
+   3). Its checks are cheaper, most likely because a search returns less text than a whole file: arm D is cheaper than arm C in
+   all 5 rounds raw and in 4 of 5 adjusted. Arm C still loses (1.06x adjusted, 1.23x raw), the same direction
+   as the published rounds. So the headline depends on the pitch §6.2.4 separates. Used **instead of** grep,
+   the ideal tool loses. Used **alongside** grep, it breaks even. It never clearly wins.
 
-**Read this table against itself, never against §1's.** On this rig every arm makes ~1.55x the published
+**Compare these tables with each other, never with §1's.** On this rig every arm makes ~1.55x the published
 number of calls (GREP 35.2 against 22.4), and arm C's post-answer count is 1.77x (26.2 against 14.8). The CLI
 is 43 versions newer and keycloak six days newer. The floor's *existence* reproduces — it is larger here, not
 smaller — but its *magnitude* depends on the rig, and only comparisons within this batch are paired. A first
@@ -616,9 +619,9 @@ batch was discarded because the harness could not reach the repository from the 
      distinguishable from parity (§5.2).
    - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
      reading. **State the pitch before quoting a number.**
-   - Arm C's verification is forced through whole-file `Read`s rather than targeted search. This was a
-     one-line caveat here; it turned out to explain why the ideal arm makes MORE calls than the shipped
-     tool, so it is measured in §5.2 rather than conceded here.
+   - Arm C's verification is forced through whole-file `Read`s rather than targeted search. §5.2 measures it:
+     with search, about half the reads become searches and the refusals stop, but the number of checks that
+     run barely moves.
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at

@@ -8,22 +8,25 @@ the PRICE of verifying with nothing to query and no search? Arm D is arm C plus 
 comparisons inside this directory are paired; the published rounds ran on another machine
 against an older keycloak checkout and are shown for orientation only.
 """
-import json, glob, os, statistics as st, collections, sys
+import json, glob, os, re, statistics as st, collections, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 P = {"in": 5e-6, "cr": 0.5e-6, "cw": 10e-6, "out": 25e-6}      # opus, fitted exactly in verify_independent.py
 NAME = {"A": "GREP", "C": "REPLAY", "D": "REPLAY+grep"}
 
+SEARCH_VERBS = ("rg", "grep", "egrep")
+READ_VERBS = ("sed", "cat", "head", "tail", "awk", "wc")
+
 def kind(name, inp):
+    """A call is a SEARCH if any command in it searches, so `sed … && grep …` is a search: it runs one.
+    Otherwise it is a READ if any command reads a file, a LIST for ls/find, else OTHER."""
     if name == "Bash":
         c = (inp.get("command") or "").strip()
         if "call-flow" in c: return "oracle"
-        w = c.split()[0] if c.split() else ""
-        if w in ("rg", "grep", "egrep"): return "search"
-        if w in ("sed", "cat", "head", "tail", "awk", "wc"): return "read"
-        if w in ("ls", "find"): return "list"
-        if w == "cd":                       # `cd repo && rg …` — classify by what it runs
-            return "search" if (" rg " in c or " grep " in c) else "read" if any(f" {v} " in c for v in ("sed","cat","head","tail")) else "other"
+        verbs = [seg.split()[0] for seg in re.split(r"&&|\|\||;|\|", c) if seg.split()]
+        if any(v in SEARCH_VERBS for v in verbs): return "search"
+        if any(v in READ_VERBS for v in verbs): return "read"
+        if any(v in ("ls", "find") for v in verbs): return "list"
         return "other"
     if name == "Read": return "read"
     if name in ("Grep", "Glob"): return "search"
@@ -102,5 +105,10 @@ d = [runs['C'][r]['after'] - runs['D'][r]['after'] for r in rounds]
 print(f"\n  calls after DONE, C minus D, per round: {d}   mean {st.mean(d):.1f}")
 if len(d) > 1 and st.stdev(d) > 0:
     print(f"  paired t = {st.mean(d)/(st.stdev(d)/len(d)**.5):.2f}  (df={len(d)-1})")
+print("  (that count includes arm C's refused calls, which stop once search is allowed)")
+e = [runs["C"][r]["after_exec"] - runs["D"][r]["after_exec"] for r in rounds]
+print(f"  checks that RAN after DONE, C minus D, per round: {e}   mean {st.mean(e):.1f}")
+if len(e) > 1 and st.stdev(e) > 0:
+    print(f"  paired t = {st.mean(e)/(st.stdev(e)/len(e)**.5):.2f}  (df={len(e)-1})")
 
 print("\n## orientation only — the published rounds, another rig:  REPLAY 20.8 calls, DONE #6, 14.8 after, 4.6 refused; GREP 22.4")
