@@ -511,6 +511,85 @@ if PAPER_SET and all(kcc.values()):
 elif not all(kcc.values()):
     unchecked.append(f"[kcC] figures — no kcC-ab*.[AB].jsonl under {os.path.normpath(KCC)}")
 
+print("\n## §5.2 arm D — results-oracle-grep/, a separate rig: REPLAY with and without search, beside GREP")
+ORG = os.path.join(_HERE, "results-oracle-grep")
+SEARCH, READ = {"rg", "grep", "egrep"}, {"sed", "cat", "head", "tail", "awk", "wc"}
+def call_kind(name, inp):
+    """What a tool call does: oracle, search, read or other. A shell line that runs any search verb is a
+    search (`sed … && grep …` searches); failing that, any read verb makes it a read."""
+    if name in ("Grep", "Glob"): return "search"
+    if name == "Read": return "read"
+    if name != "Bash": return "other"
+    cmd = (inp.get("command") or "")
+    if "call-flow" in cmd: return "oracle"
+    verbs = set()
+    for part in cmd.replace("&&", "\n").replace("||", "\n").replace(";", "\n").replace("|", "\n").split("\n"):
+        if part.split(): verbs.add(part.split()[0])
+    return "search" if verbs & SEARCH else "read" if verbs & READ else "other"
+def org_run(path):
+    calls, done_at, res = [], None, None
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if isinstance(m, dict) and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if not isinstance(b, dict): continue
+                if m.get("role") == "assistant" and b.get("type") == "tool_use":
+                    calls.append((b["id"], call_kind(b.get("name", ""), b.get("input") or {})))
+                elif m.get("role") == "user" and b.get("type") == "tool_result" and done_at is None:
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: done_at = len(calls)
+        if d.get("type") == "result": res = d
+    refused = {x.get("tool_use_id") for x in res.get("permission_denials") or []}
+    after = calls[done_at:] if done_at is not None else []
+    ran = [k for i, k in after if i not in refused]
+    u = res.get("usage") or {}
+    ctx = u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+    turns = res.get("num_turns", 0)
+    return dict(calls=len(calls), done=done_at, refused=len(refused), after=len(after),
+                after_refused=sum(1 for i, _ in after if i in refused), after_ran=len(ran),
+                search=ran.count("search"), read=ran.count("read"), other=ran.count("other"),
+                search_before=sum(1 for _, k in calls[:done_at or 0] if k == "search"),
+                cost=res.get("total_cost_usd", 0.0),
+                cost_adj=res.get("total_cost_usd", 0.0) - len(refused) * (ctx / turns) * PRICE["cr"] if turns else 0.0)
+org = {a: [org_run(f) for f in sorted(glob.glob(os.path.join(ORG, f"h?.{a}.jsonl")))] for a in "ACD"}
+if PAPER_SET and all(org.values()):
+    n_org = min(len(v) for v in org.values())
+    Q = lambda a, k: sum(r[k] for r in org[a]) / len(org[a])
+    check("arm D: paired rounds", n_org, 5, 0, "{:.0f}")
+    for a, paper in (("A", 35.2), ("C", 32.2), ("D", 21.8)):
+        check(f"arm D rig: tool calls [{ {'A': 'GREP', 'C': 'REPLAY', 'D': 'REPLAY+grep'}[a]}]", Q(a, "calls"), paper, 0.05)
+    check("arm D rig: DONE at call 6 in every C and D round",
+          float(all(r["done"] == ORACLE_DONE_STEP for a in "CD" for r in org[a])), 1.0, 0, "{:.0f}")
+    check("arm D rig: D searches before DONE (all rounds)", sum(r["search_before"] for r in org["D"]), 0, 0, "{:.0f}")
+    for a, row in (("C", (26.2, 7.8, 18.4, 0.0, 17.0, 1.4)), ("D", (15.8, 0.0, 15.8, 6.2, 9.6, 0.0))):
+        nm = {"C": "REPLAY", "D": "REPLAY+grep"}[a]
+        for k, paper in zip(("after", "after_refused", "after_ran", "search", "read", "other"), row):
+            check(f"after DONE, {k} [{nm}]", Q(a, k), paper, 0.05)
+    ran_diff = [c["after_ran"] - d["after_ran"] for c, d in zip(org["C"], org["D"])]
+    mu = sum(ran_diff) / len(ran_diff)
+    sd = (sum((x - mu) ** 2 for x in ran_diff) / (len(ran_diff) - 1)) ** 0.5
+    print(f"        checks that ran after DONE, C minus D, per round: {ran_diff}")
+    check("checks that ran: C minus D", mu, 2.6, 0.05)
+    check("checks that ran: rounds where D ran fewer", sum(1 for x in ran_diff if x > 0), 4, 0, "{:.0f}")
+    check("checks that ran: paired t (df=4)", mu / (sd / len(ran_diff) ** 0.5), 1.86, 0.01, "{:.2f}")
+    check("D: checks after DONE / all its calls (%)", Q("D", "after") / Q("D", "calls") * 100, 72, 0.5, "{:.1f}")
+    ratio = lambda a, k: [r[k] / g["cost"] for r, g in zip(org[a], org["A"])]
+    rc_raw, rc_adj, rd = ratio("C", "cost"), ratio("C", "cost_adj"), ratio("D", "cost")
+    check("cost vs GREP, raw [REPLAY]", sum(rc_raw) / 5, 1.23, 0.005, "{:.3f}")
+    check("cost vs GREP, adjusted [REPLAY]", sum(rc_adj) / 5, 1.06, 0.005, "{:.3f}")
+    check("cost vs GREP [REPLAY+grep]", sum(rd) / 5, 0.91, 0.005, "{:.3f}")
+    md = sum(rd) / 5
+    check("cost vs GREP, sd [REPLAY+grep]", (sum((x - md) ** 2 for x in rd) / 4) ** 0.5, 0.28, 0.005, "{:.3f}")
+    check("D rounds above / level with / below GREP",
+          float((sum(x > 1.005 for x in rd), sum(abs(x - 1) <= 0.005 for x in rd), sum(x < 0.995 for x in rd)) == (1, 1, 3)),
+          1.0, 0, "{:.0f}")
+    check("D cheaper than C, raw (rounds)", sum(d < c for d, c in zip(rd, rc_raw)), 5, 0, "{:.0f}")
+    check("D cheaper than C, adjusted (rounds)", sum(d < c for d, c in zip(rd, rc_adj)), 4, 0, "{:.0f}")
+elif not all(org.values()):
+    unchecked.append(f"§5.2 arm D figures — no h?.[ACD].jsonl under {ORG}")
+
 print("\n## §3.2 non-API ('engine') time")
 for a in ARMS:
     print(f"        {NAME[a]:7} wall {M(a,'wall_ms'):6.1f}s   api {M(a,'api'):6.1f}s   non-API {M(a,'wall_ms')-M(a,'api'):+6.1f}s")

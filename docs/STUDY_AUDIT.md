@@ -156,7 +156,7 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (89 checks, exit 0, no open notes), including
+markers. `verify_independent.py` reports every checked figure reproducing (118 checks, exit 0, no open notes), including
 the `[kcC]` figures from `bench/grep-vs-seam/results/`.
 
 | finding | status | where |
@@ -184,6 +184,14 @@ Rewriting §4.3 found two more. "Context is three orders of magnitude larger tha
 surviving explanation") did not survive measurement: split at `DONE` with the provider's per-message counts,
 99% of the ideal arm's thinking happens while it checks, not while the answer arrives. The doubling now belongs
 to the verification floor.
+
+Checking §5.2 found the largest correction so far. "Search removes about 40% of the post-answer calls" counted
+the refused calls: 7.8 of the 10.4 fewer calls are refusals that stop once search is allowed. The checks that
+run fall from 18.4 to 15.8, not significant at n=5 (paired t = 1.86). The abstract, §5.1 and §5.2 now say that
+search changes how the agent checks, not how much. Two smaller errors from the same pass: arm D is cheaper than
+arm C in all 5 rounds only on raw cost (4 of 5 adjusted), and the search/read split depended on how a command
+like `sed … && grep …` was classed. Both scripts now count it as a search (6.2 searches and 9.6 reads, not 4.8
+and 10.8). The arm D figures are now in `verify_independent.py`.
 
 ## Not checked — unexamined, not passing
 
