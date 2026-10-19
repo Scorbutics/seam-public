@@ -3,7 +3,8 @@
 > Version française, rédigée par l'auteur avec ses propres mots puis corrigée. Elle sert de base à la
 > traduction anglaise destinée à arXiv. La version de référence des chiffres reste
 > [`STUDY_STRUCTURAL_LIMITS.md`](STUDY_STRUCTURAL_LIMITS.md), dont chaque figure est recalculée par
-> `bench/replay-ceiling/verify_independent.py`. La section 6 reste à reprendre.
+> `bench/replay-ceiling/verify_independent.py`. Sa traduction anglaise finale est
+> [`STUDY_STRUCTURAL_LIMITS_FINAL.md`](STUDY_STRUCTURAL_LIMITS_FINAL.md).
 
 Une étude récente (arXiv 2607.12161) a montré qu'une réduction du nombre de tokens n'implique pas
 forcément une réduction des coûts.
@@ -80,8 +81,8 @@ Round par round (coût brut), pour montrer que ce n'est pas un effet de moyenne 
 
 « À égalité » signifie à moins de 1 % du contrôle. Aucun round n'est moins cher que grep.
 
-La qualité des réponses est comparable entre les bras. Elle est rapportée en §7 comme une tendance (n=5,
-intervalles qui se recouvrent), et rien dans l'argument ne repose dessus.
+La qualité des réponses a été notée mais ne joue aucun rôle dans l'argument : à n=5, ses intervalles se
+recouvrent entre les bras, et c'est le seul chiffre que le vérificateur indépendant ne recalcule pas.
 
 **Le chiffre qui résume la section 4.** Sans les appels refusés, l'arm idéal lit au total **983k tokens de
 contexte, contre 980k pour grep**. Mais il avait la réponse complète à **346k**, soit environ un tiers de ce
