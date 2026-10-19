@@ -156,7 +156,7 @@ Separately: §3.2 says the oracle's steps cover **"all ten ground-truth location
 
 Findings are resolved in the text rather than left as inline markers once the author accepts them; this table
 is where the trail lives after a marker is removed. All nine are now applied, and the paper carries no audit
-markers. `verify_independent.py` reports every checked figure reproducing (118 checks, exit 0, no open notes), including
+markers. `verify_independent.py` reports every checked figure reproducing (125 checks, exit 0, no open notes), including
 the `[kcC]` figures from `bench/grep-vs-seam/results/`.
 
 | finding | status | where |
@@ -192,6 +192,10 @@ search changes how the agent checks, not how much. Two smaller errors from the s
 arm C in all 5 rounds only on raw cost (4 of 5 adjusted), and the search/read split depended on how a command
 like `sed … && grep …` was classed. Both scripts now count it as a search (6.2 searches and 9.6 reads, not 4.8
 and 10.8). The arm D figures are now in `verify_independent.py`.
+
+Reviewing the French rewrite found one more in §1: the per-round table said both tools were more expensive
+than grep in "5 of 5" rounds, but Seam's round 1 (1.007x) and the oracle's round 3 (1.003x) are level. It now
+reads "4 of 5, 1 level", and the verifier checks the counts.
 
 ## Not checked — unexamined, not passing
 

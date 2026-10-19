@@ -81,8 +81,10 @@ Paired, per round (raw) — not a mean artefact:
 
 | | r1 | r2 | r3 | r4 | r5 | more expensive |
 |---|---|---|---|---|---|---|
-| SEAM vs GREP | 1.01x | 1.37x | 1.51x | 1.68x | 1.53x | **5 of 5** |
-| REPLAY vs GREP | 1.26x | 1.18x | 1.00x | 1.41x | 1.48x | **5 of 5** |
+| SEAM vs GREP | 1.01x | 1.37x | 1.51x | 1.68x | 1.53x | **4 of 5**, 1 level |
+| REPLAY vs GREP | 1.26x | 1.18x | 1.00x | 1.41x | 1.48x | **4 of 5**, 1 level |
+
+"Level" is a round within 1% of the control (1.007x and 1.003x). No round is cheaper than the control.
 
 Every axis the tool was built to move, moved. The bill moved the other way — and **so did the ideal tool's**.
 
