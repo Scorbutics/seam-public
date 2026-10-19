@@ -23,7 +23,7 @@ const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(dir
 const addon = (): any => { try { return loadAddon(); } catch { return null; } };
 
 beforeAll(() => {
-  w("package.json", `{"name":"acme","version":"1.0.0"}\n`);
+  w("package.json", `{"name": "acme","version":"1.0.0"}\n`);
   w("src/db.ts", `export const db = { booking: { findMany: (_a: unknown) => [], update: (_a: unknown) => null, create: (_a: unknown) => null } };\n`);
 
   // THE READER — filters `booking` on `status`. Nothing here imports or calls any writer below.
