@@ -174,9 +174,12 @@ toutes les façons dont un outil de récupération peut perdre :
 | coût de la documentation | ~300 octets | 42 Ko, présents à chaque tour |
 | rappel | 100 % de la vérité terrain par construction | mesuré |
 
-Le *choix* des étapes est idéalisé ; leur *contenu* ne l'est pas. Aucune ligne n'a été écrite pour le
-benchmark : les cinq sorties enregistrées ont été choisies parce qu'ensemble elles couvrent les 12 entrées
-de la vérité terrain (`bench/replay-ceiling/truth.txt`).
+Le *choix* des étapes est idéalisé ; leur *contenu* ne l'est pas. Les cinq sorties enregistrées ont été
+choisies parce qu'ensemble elles couvrent les 12 entrées de la vérité terrain
+(`bench/replay-ceiling/truth.txt`), et aucune information n'a été ajoutée. Une seule retouche : le nom de
+l'outil a été effacé de l'étape 2 (quelques mots comme `seam` ou `SEAM_` remplacés par des termes neutres, et
+une ligne retirée, qui suggérait une commande `seam` que l'arm C n'a pas), pour que l'agent ne sache pas quel
+outil il remplace. L'original est conservé à côté (`steps/step2.txt.orig`).
 
 **Ce qu'est le payload.** Le payload, c'est le texte que l'outil injecte dans le contexte de l'agent. Ici,
 les cinq étapes livrent **43 Ko de texte, environ 13k tokens** :
@@ -524,7 +527,8 @@ planter le benchmark, elle change silencieusement ce qu'il mesure. Voici les pi�
    l'autre sens.
 2. **Seam a un cache à préchauffer** ; grep et l'oracle n'en ont pas. Cela **favorise Seam**.
 3. **L'oracle est construit à partir des sorties de Seam**, en choisissant les cinq résultats qui couvrent
-   ensemble toute la vérité terrain. Le choix est idéalisé ; le contenu est exact.
+   ensemble toute la vérité terrain. Le choix est idéalisé ; le contenu est exact, au nom de l'outil près
+   (§3.2).
 4. **Seam et l'oracle n'ont pas accès à la recherche : il faut dire sur quel coût repose chaque
    affirmation.**
    - Si l'outil est présenté comme un **remplaçant** de grep, les refus sont une vraie gêne qu'un

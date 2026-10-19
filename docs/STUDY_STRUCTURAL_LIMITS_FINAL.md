@@ -192,9 +192,11 @@ retrieval tool can lose:
 | documentation cost | ~300 bytes | 42 KB, present on every turn |
 | recall | 100% of ground truth by construction | measured |
 
-The *choice* of steps is idealised; their *content* is not. No line was written for the benchmark: the five
-recorded outputs were chosen because together they cover the 12 ground-truth entries
-(`bench/replay-ceiling/truth.txt`).
+The *choice* of steps is idealised; their *content* is not. The five recorded outputs were chosen because
+together they cover the 12 ground-truth entries (`bench/replay-ceiling/truth.txt`), and no information was
+added. There is one edit: the tool's name was scrubbed from step 2 (a few words such as `seam` or `SEAM_`
+replaced with neutral terms, and one line removed that suggested a `seam` command arm C does not have), so that
+the agent is not told which tool it stands in for. The original is kept beside it (`steps/step2.txt.orig`).
 
 **What the payload is.** The payload is the text the tool injects into the agent's context. Here, the five
 steps deliver **43 KB of text, about 13k tokens**:
@@ -524,7 +526,7 @@ changes what it measures. Here are the traps encountered, and what was done each
    direction.
 2. **Seam has a cache to pre-warm**; grep and the oracle do not. This **favours Seam**.
 3. **The oracle is built from Seam's outputs**, choosing the five results that together cover all of the
-   ground truth. The choice is idealised; the content is exact.
+   ground truth. The choice is idealised; the content is exact, apart from the tool's name (§3.2).
 4. **Seam and the oracle have no search: every claim has to say which cost it rests on.**
    - If the tool is presented as a **replacement** for grep, the refusals are a real obstacle a user would
      meet, and the raw row is what counts (Seam 1.42x, the oracle 1.26x).
