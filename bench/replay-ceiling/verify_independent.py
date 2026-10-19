@@ -299,6 +299,14 @@ print(f"  {'ok ' if exact else 'FAIL'}   fit vs the {MODEL} modelUsage entry   "
 print(f"  NOTE  fit vs total_cost_usd                 max residual ${worst_tot:.5f}  (the auxiliary model)")
 if not exact:
     fails.append("four-price model fits the primary modelUsage entry")
+print("\n## §1 paired, per round (raw cost vs GREP)")
+for a in "BC":
+    rr = [runs[a][rd]["cost"] / runs["A"][rd]["cost"] for rd in sorted(runs[a])]
+    print(f"        {NAME[a]:7} " + " ".join(f"{x:.3f}" for x in rr))
+    check(f"rounds more expensive than GREP by over 1% [{NAME[a]}]", sum(x > 1.01 for x in rr), 4, 0, "{:.0f}")
+    check(f"rounds level with GREP, within 1% [{NAME[a]}]", sum(abs(x - 1) <= 0.01 for x in rr), 1, 0, "{:.0f}")
+    check(f"rounds cheaper than GREP [{NAME[a]}]", sum(x < 0.99 for x in rr), 0, 0, "{:.0f}")
+
 print("\n## §4.1 the identity, and the product that cancels")
 for a in ARMS:
     gap = M(a, "turns") * ctx[a] - M(a, "cr")
@@ -500,6 +508,7 @@ if PAPER_SET and all(kcc.values()):
     check("[kcC] API time (x)", kb["api"] / ka["api"], 0.81, 0.005, "{:.3f}")
     check("[kcC] cache write (x)", kb["cw"] / ka["cw"], 1.79, 0.005, "{:.3f}")
     check("[kcC] wall clock, shell-timed (x)", kb["wall"] / ka["wall"], 1.09, 0.005, "{:.3f}")
+    check("[kcC] total tokens, SEAM / GREP (fewer)", (kb["cw"] + kb["cr"] + kb["out"]) / (ka["cw"] + ka["cr"] + ka["out"]), 0.85, 0.005, "{:.3f}")
     check("[kcC] fewer turns (x)", ka["turns"] / kb["turns"], 2.6, 0.05, "{:.2f}")
     dw, dr = kb["cw"] - ka["cw"], ka["cr"] - kb["cr"]
     bar = PRICE["cr"] / PRICE["cw"]
