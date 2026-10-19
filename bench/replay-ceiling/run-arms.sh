@@ -79,7 +79,7 @@ run_arm () {  # run_arm <letter> <prompt-var> <deny-array-name> <allowed-tools..
   local scratch="$OUT/.scratch-$letter"; rm -rf "$scratch"; mkdir -p "$scratch"
   local started ended
   started=$(date +%s)
-  # --add-dir "$REPO": since Claude Code ~2.1.28x, Bash is confined to the working directory plus --add-dir
+  # --add-dir "$REPO": since a Claude Code version between 2.1.239 and 2.1.270, Bash is confined to the working directory plus --add-dir
   # directories, so a repository outside the harness had its shell verbs REFUSED even when granted — silently,
   # and hardest on the grep control (results-oracle-grep/discarded-outside-workdir/WHY.md). 2.1.239, which ran
   # the published rounds, did not enforce this. Identical for every arm.
@@ -135,8 +135,8 @@ ARM_B () { run_arm B PROMPT_B DENY_B "Bash(bun:*)" "Bash(cat:*)" "Bash(sed:*)" "
         "Bash(find:*)" "Bash(sort:*)" "Bash(uniq:*)" "Bash(cut:*)" "Bash(awk:*)" "Bash(comm:*)" Read; }
 
 # ── ARM C: the replay ceiling ────────────────────────────────────────────────────────────────────────────
-# The doc is deliberately TINY. Arm B carries a 37 KB SKILL.md resident on every turn (~9.3k tokens x ~10
-# turns); if density is what costs, C is the arm where density is absent and the answers are still perfect.
+# The doc is deliberately TINY. Arm B carries a 42 KB SKILL.md resident on every turn (+16.8k tokens of
+# turn-one cache write, measured); if density is what costs, C is the arm where density is absent and the answers are still perfect.
 PROMPT_C="You are working in the repository at $REPO.
 
 TASK: $TASK
@@ -182,6 +182,9 @@ ARM_D () { run_arm D PROMPT_D DENY_D "Bash($HERE/call-flow:*)" "Bash(rg:*)" "Bas
 # and they drift in the SAME direction relative to the arms every time. Shuffling costs nothing and closes
 # the question. The realised order is recorded per round so a reader can check it, and re-check for an
 # order effect after the fact.
+# The repository commit is recorded per round: the published rounds did not record it, and it had to be
+# reconstructed from the oracle's own line references (paper §6.1).
+git -C "$REPO" rev-parse HEAD > "$OUT/$ROUND.repo" 2>/dev/null || echo "unknown" > "$OUT/$ROUND.repo"
 ORDER=$(printf '%s\n' $(echo "$ARMS" | grep -o .) | shuf | tr -d '\n')
 echo "$ORDER" > "$OUT/$ROUND.order"
 echo "  arm order: $ORDER"

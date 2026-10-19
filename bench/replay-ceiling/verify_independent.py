@@ -605,6 +605,8 @@ for a in ARMS:
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
 unchecked.insert(0, "answer F1 / precision / recall (needs re-scoring answers against truth.txt)")
+unchecked.append("§6.3 price fits over every recorded run (Opus n=118, Sonnet n=110) — not re-derived "
+                 "by this script, which fits Opus prices from the published rounds only")
 if tabled:
     unchecked.append(f"{len(tabled)} figure(s) printed above as a table — {MODEL} is not the set "
                      f"docs/STUDY_STRUCTURAL_LIMITS.md documents, which publishes no figure they "

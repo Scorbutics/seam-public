@@ -587,27 +587,38 @@ batch was discarded because the harness could not reach the repository from the 
 
 ### 6.1 Apparatus `[WRITE — report as a general hazard of agent A/B design]`
 - `--allowedTools`/`--disallowedTools` are **advisory for the shell**: granting one Bash pattern permits Bash
-  generally. Verbs must be named *and* audited in the transcript. This project's control broke this way four
-  times.
+  generally. Verbs must be named *and* audited in the transcript. The control broke this way four times:
+  three times in `bench/grep-vs-seam`, and once in this harness's pilot (`results/discarded-pilot/WHY.md`).
 - **A five-round batch was discarded for an asymmetric grant that biased toward this study's conclusion**
   (treatment arms denied `sed`/`cat`/`ls`, control keeping them) — `results/discarded-strict-read/WHY.md`.
   Direction is what made it disqualifying: a bias *against* a conclusion is a conservative bound; one that
   manufactures it is not.
 - Denied attempts still cost a turn; reported separately from real contamination. Arm C pays 4.6/round.
-- **A grant's meaning depends on the CLI version, not only on its flags.** From about Claude Code 2.1.28x,
-  Bash is confined to the working directory plus `--add-dir` directories. The harness runs outside the
-  repository, so on 2.1.282 every arm was refused shell verbs it had been explicitly granted. On 2.1.239,
-  which ran the published rounds, it was not. It surfaced as refusals of `ls` and `find` in the grep control,
-  and it disabled the shell `grep` arm D exists to test. The batch was discarded
-  (`results-oracle-grep/discarded-outside-workdir/WHY.md`), and `run_arm` now passes `--add-dir "$REPO"` to
-  every arm.
+- **A grant's meaning depends on the CLI version, not only on its flags.** Somewhere between Claude Code
+  2.1.239, which ran the published rounds, and 2.1.270, Bash became confined to the working directory plus
+  `--add-dir` directories. The harness runs outside the repository, so every arm was refused shell verbs it
+  had been explicitly granted. It hit two batches. The first arm D batch (2.1.282) lost `ls` and `find` in the
+  grep control and the shell `grep` arm D exists to test
+  (`results-oracle-grep/discarded-outside-workdir/WHY.md`). The first Sonnet probe (2.1.270) lost `find`, `ls`
+  and even `grep` in the control, and `sed`, `awk` and `wc` in the oracle arm
+  (`results-sonnet-probe/WHY.md`). Both are discarded, and `run_arm` now passes `--add-dir "$REPO"` to every
+  arm. The general test: **a refusal of a verb the arm was granted is an apparatus failure, not behaviour.**
+- **The repository commit was not recorded for the published rounds.** It has been reconstructed from the
+  oracle's own output: the file and line references in its five steps match the keycloak tree from 1 to 27
+  July 2026 and stop matching after that. The clean Sonnet batch (§6.3) ran on `cd0b33e528`, the last commit
+  of that window, and `run-arms.sh` now records the commit of every round.
+- **How a command is classified can change a result.** A shell line such as `sed … && grep …` both reads and
+  searches. Classed by its first verb it is a read, by any verb a search, and the choice moved arm D's split
+  from 4.8 searches and 10.8 reads to 6.2 and 9.6 (§5.2). The rule must be stated, and checked by a second
+  implementation.
 - Thinking text is redacted even with `--include-partial-messages`. The measurement is the provider's own
   count, `usage.output_tokens_details.thinking_tokens`. Per message it is in each `message_delta` event, and
   those add up to the run total exactly. The streamed `estimated_tokens` runs ~240 tokens lower per run and is
   not used.
 
 ### 6.2 Design asymmetries, stated
-1. Arm B carries `SKILL.md` inline (+15.3k tokens on turn one, resident). That is the real product surface.
+1. Arm B carries `SKILL.md` inline: its turn-one cache write is 30.9k tokens against the control's 14.0k
+   (+16.8k, the same in every round), resident for the whole run. That is the real product surface.
 2. Arm B has a cache to pre-warm; A and C have nothing. **Favours B.**
 3. Arm C's oracle was assembled from arm B's own recorded output, choosing the five results whose union covers
    all ground truth. Idealised *selection*, verbatim *content*.
@@ -619,11 +630,13 @@ batch was discarded because the harness could not reach the repository from the 
      apparatus**, and the adjusted row (1.36x / 1.13x) is the honest figure. Arm D now measures this pitch
      directly instead of by adjustment. The ideal tool plus grep costs **0.91x** grep alone, which is not
      distinguishable from parity (§5.2).
-   - The verification floor (§5) holds under both, and §4.1's break-even result depends on the adjusted
+   - The verification floor (§5) holds under both, and §4.1's parity result depends on the adjusted
      reading. **State the pitch before quoting a number.**
    - Arm C's verification is forced through whole-file `Read`s rather than targeted search. §5.2 measures it:
      with search, about half the reads become searches and the refusals stop, but the number of checks that
      run barely moves.
+5. Arm D ran on a different machine, a newer CLI (2.1.282) and a newer keycloak checkout than the published
+   rounds. Its batch is paired internally (§5.2), and its figures are never compared with §1's.
 
 ### 6.3 Generality `[WRITE]`
 - One task, one repo, n=5 per arm. §4's identity is arithmetic and generalises (and is corroborated at
@@ -702,8 +715,10 @@ every figure in this paper; where they first disagreed, and what changed, is in
 ## Appendix B — discarded batches, and what they bought
 `results/discarded-pilot/WHY.md` · `results/discarded-strict-read/WHY.md` ·
 `results-oracle-grep/discarded-outside-workdir/WHY.md` — a newer CLI confined Bash to the working directory,
-disabling granted shell verbs on every arm (§6.1). Its hint pointed the wrong way — that search barely cut
-post-answer calls — because arm D's own shell `grep` was among the verbs refused.
+disabling granted shell verbs on every arm (§6.1). Its hint, that search barely changes the number of checks,
+turned out to agree with the clean batch, but it was reached through a broken apparatus, so it is not
+evidence. · `results-sonnet-probe/WHY.md` — the first Sonnet probe, discarded for the same confinement
+(§6.1, §6.3).
 ## Appendix C — external review
 The denial adjustment (§1, §4.1) came from external review, which caught refused turns being counted as
 behaviour. The lesson generalises: a contamination audit checks that the control held; it does not check
