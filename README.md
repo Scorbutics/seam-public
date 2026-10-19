@@ -10,29 +10,33 @@ Offline and deterministic by default. No API key, no index server, no model requ
 > cutting an agent's tool calls did not lower its bill, using an ideal replay of this tool as the ceiling.
 > Raw transcripts, the harness and an independent verifier are in [`bench/replay-ceiling/`](bench/replay-ceiling/).
 
+On [Keycloak](https://github.com/keycloak/keycloak), from the TypeScript admin UI:
+
 ```bash
-seam --repo . --scan --query coupling --anchor-file app/api/admin/report-snapshots/route.ts
+seam --repo . --scan --query coupling --anchor-file js/apps/admin-ui/src/sessions/SessionsSection.tsx
 ```
 
 ```
-# Coupling of route (cross-stack data boundary)
-anchor: route | shape: coupling | shared keys: 2 | counterpart sites: 2
+# Coupling of SessionsSection (cross-stack data boundary)
+anchor: SessionsSection | shape: coupling | shared keys: 1 | counterpart sites: 1
 
-## db-table "report_snapshots"  — anchor reads
-  ← upsertReportSnapshots (backend/supabase/functions/_shared/partner/snapshots.ts:61)  [function, writes report_snapshots]
-        60│ const { data, error } = await serviceClient
-        61>   .from('report_snapshots')
-        62│   .upsert(rows, {
-
-## http-route "/api/admin/report-snapshots"  — anchor writes
-  → fetchAdminReportSnapshots (lib/services/admin-referrals.ts:315)  [function, reads /api/admin/report-snapshots]
-        314│   const headers = await authHeader()
-        315>   const res = await fetch("/api/admin/report-snapshots", { headers })
+## http-route "ui-ext/sessions"  — anchor reads
+  ● loader (js/apps/admin-ui/src/sessions/SessionsSection.tsx:83)  [function, reads ui-ext/sessions]  — THE ANCHOR'S OWN ACCESS
+        81│ const data = await fetchAdminUI<UserSessionRepresentation[]>(
+        82│   adminClient,
+        83>   "ui-ext/sessions",
+        84│   {
+        85│     first: `${first}`,
+  ← sessions (rest/admin-ui-ext/src/main/java/org/keycloak/admin/ui/rest/AdminExtResource.java:63)  [method, writes ui-ext/sessions]
+        61│ }
+        62│ 
+        63> @Path("/sessions")
+        64│ public SessionsResource sessions() {
+        65│     return new SessionsResource(session, realm, auth);
 ```
 
-Two real edges from one command, and neither is reachable by "go to references": the writer is a **Deno edge
-function under a directory `tsconfig.json` excludes** — the language server cannot even load that file — and the
-reader reaches this route over HTTP with no symbol in common.
+One real edge, and "go to references" cannot reach it: the TypeScript page and the Java JAX-RS resource share
+no symbol, no import and no language. They meet only on the route `ui-ext/sessions`.
 
 ---
 
