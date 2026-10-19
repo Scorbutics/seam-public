@@ -655,6 +655,47 @@ if son["A"] and son["C"]:
 else:
     unchecked.append(f"§6.3 Sonnet figures — no c?.[AC].jsonl under {SON}")
 
+print("\n## arm E — results-min-payload/ (the minimal-payload oracle, beside A and C on one rig)")
+MIN = os.path.join(_HERE, "results-min-payload")
+def min_run(path):
+    calls, done_at, res = [], None, None
+    for line in open(path, errors="replace"):
+        try: d = json.loads(line)
+        except Exception: continue
+        m = d.get("message")
+        if isinstance(m, dict) and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if not isinstance(b, dict): continue
+                if m.get("role") == "assistant" and b.get("type") == "tool_use": calls.append(b["id"])
+                elif m.get("role") == "user" and b.get("type") == "tool_result" and done_at is None:
+                    c = b.get("content"); t = c if isinstance(c, str) else json.dumps(c)
+                    if "DONE" in t: done_at = len(calls)
+        if d.get("type") == "result": res = d
+    refused = {x.get("tool_use_id") for x in res.get("permission_denials") or []}
+    u = res.get("usage") or {}
+    return dict(calls=len(calls), done=done_at, cost=res.get("total_cost_usd", 0.0),
+                cw=u.get("cache_creation_input_tokens", 0),
+                ctx=u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
+                ran_after=sum(1 for i in calls[done_at:] if i not in refused) if done_at is not None else None)
+mn = {a: [min_run(f) for f in sorted(glob.glob(os.path.join(MIN, f"e?.{a}.jsonl")))] for a in "ACE"}
+if PAPER_SET and all(len(v) == 5 for v in mn.values()):
+    ea = [e["cost"] / a["cost"] for a, e in zip(mn["A"], mn["E"])]
+    ca = [c["cost"] / a["cost"] for a, c in zip(mn["A"], mn["C"])]
+    print(f"        E/A per round {[round(x, 2) for x in ea]}   C/A per round {[round(x, 2) for x in ca]}")
+    check("arm E: DONE at call 1 in every round", float(all(r["done"] == 1 for r in mn["E"])), 1.0, 0, "{:.0f}")
+    check("arm E: cost vs GREP, mean of per-round ratios", sum(ea) / 5, 0.45, 0.005, "{:.3f}")
+    check("arm E: rounds cheaper than GREP", sum(x < 0.99 for x in ea), 5, 0, "{:.0f}")
+    check("arm E: highest round vs GREP", max(ea), 0.99, 0.005, "{:.3f}")
+    check("arm E rig: arm C cost vs GREP, mean", sum(ca) / 5, 1.245, 0.005, "{:.3f}")
+    check("arm E: cache write vs GREP", sum(r["cw"] for r in mn["E"]) / sum(r["cw"] for r in mn["A"]), 0.49, 0.005, "{:.3f}")
+    check("arm E: total context vs GREP", sum(r["ctx"] for r in mn["E"]) / sum(r["ctx"] for r in mn["A"]), 0.38, 0.005, "{:.3f}")
+    ran = [r["ran_after"] for r in mn["E"]]
+    print(f"        arm E checks that ran after DONE: {ran}")
+    check("arm E: checks that ran after DONE, mean", sum(ran) / 5, 10.2, 0.05)
+    check("arm E: checks that ran after DONE, max", max(ran), 25, 0, "{:.0f}")
+else:
+    unchecked.append(f"arm E figures — five e?.[ACE].jsonl rounds not found under {MIN}")
+
 print("\n## §3.2 non-API ('engine') time")
 for a in ARMS:
     print(f"        {NAME[a]:7} wall {M(a,'wall_ms'):6.1f}s   api {M(a,'api'):6.1f}s   non-API {M(a,'wall_ms')-M(a,'api'):+6.1f}s")

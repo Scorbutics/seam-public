@@ -1,0 +1,30 @@
+=== round e1 start 18:05:01 ===
+  arm order: EAC
+  arm E: 60s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e1.E.jsonl
+  arm A: 114s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e1.A.jsonl
+  arm C: 126s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e1.C.jsonl
+round done: e1
+=== round e2 start 18:10:01 ===
+  arm order: AEC
+  arm A: 125s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e2.A.jsonl
+  arm E: 59s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e2.E.jsonl
+  arm C: 155s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e2.C.jsonl
+round done: e2
+=== round e3 start 18:15:40 ===
+  arm order: ACE
+  arm A: 145s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e3.A.jsonl
+  arm C: 139s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e3.C.jsonl
+  arm E: 59s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e3.E.jsonl
+round done: e3
+=== round e4 start 18:21:23 ===
+  arm order: EAC
+  arm E: 162s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e4.E.jsonl
+  arm A: 135s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e4.A.jsonl
+  arm C: 175s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e4.C.jsonl
+round done: e4
+=== round e5 start 18:29:15 ===
+  arm order: AEC
+  arm A: 152s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e5.A.jsonl
+  arm E: 58s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e5.E.jsonl
+  arm C: 171s -> /home/user/seam/bench/replay-ceiling/results-min-payload/e5.C.jsonl
+round done: e5
