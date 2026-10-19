@@ -9,10 +9,10 @@ a number is a copy that drifts. `verify_independent.py` re-derives the figures �
 
 ## Why it exists
 
-The first Sonnet probe (`../results-sonnet-probe/`) ran on Claude Code 2.1.270 without `--add-dir`. That CLI
-confines Bash to the working directory, and the harness runs outside the repository, so verbs both arms had
-been granted were refused — in the control, `find`, `ls` and even `grep`. It is discarded for the same
-reason the first arm D batch was. This batch asks the same question with the apparatus working.
+An earlier Sonnet probe ran on Claude Code 2.1.270 without `--add-dir`. That CLI confines Bash to the working
+directory, and the harness runs outside the repository, so verbs both arms had been granted were refused —
+in the control, `find`, `ls` and even `grep`. It was discarded and removed from the repository. This batch
+asks the same question with the apparatus working.
 
 ## What is the same, and what is not
 
@@ -33,7 +33,7 @@ It differs from the published rounds in ways that matter:
 
 `compare.py` splits every refusal into the ones the design intends (search, denied to the oracle arm) and
 the ones it does not (any verb the arm was granted). A granted verb refused is an apparatus failure. This
-batch has none; the discarded probe has 18.
+batch has none; the discarded probe had 18.
 
 ## What it found
 

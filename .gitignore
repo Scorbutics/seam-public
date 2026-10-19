@@ -42,3 +42,6 @@ mcp/dist/
 mcp/node_modules/
 ts/node_modules
 mcp/node_modules
+
+# bench/ranking regenerates its grow cache locally
+bench/ranking/cache/

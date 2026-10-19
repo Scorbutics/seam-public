@@ -81,7 +81,7 @@ run_arm () {  # run_arm <letter> <prompt-var> <deny-array-name> <allowed-tools..
   started=$(date +%s)
   # --add-dir "$REPO": since a Claude Code version between 2.1.239 and 2.1.270, Bash is confined to the working directory plus --add-dir
   # directories, so a repository outside the harness had its shell verbs REFUSED even when granted — silently,
-  # and hardest on the grep control (results-oracle-grep/discarded-outside-workdir/WHY.md). 2.1.239, which ran
+  # and hardest on the grep control (two early batches were discarded for it). 2.1.239, which ran
   # the published rounds, did not enforce this. Identical for every arm.
   # --include-partial-messages is what makes THINKING measurable: stream-json alone stores thinking blocks
   # with EMPTY content, which is why the earlier benchmark could only ever report total output tokens and

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Does the verification floor survive a change of model? Three batches, one question.
+"""Does the verification floor survive a change of model? Two batches, one question.
 
     python3 bench/replay-ceiling/results-sonnet-clean/compare.py
 
     OPUS       ../results/              the paper's data (CLI 2.1.239)
-    DISCARDED  ../results-sonnet-probe/ the first Sonnet probe (CLI 2.1.270, no --add-dir)
     CLEAN      this directory           Sonnet again, with --add-dir, keycloak pinned (see WHY.md)
 
 For every round it separates what the agent DID from what the harness REFUSED, and splits refusals
@@ -16,7 +15,6 @@ import json, glob, os, re, statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BATCHES = [("OPUS (published)", os.path.join(HERE, "..", "results")),
-           ("SONNET, discarded probe", os.path.join(HERE, "..", "results-sonnet-probe")),
            ("SONNET, clean", HERE)]
 SEARCH = {"rg", "grep", "egrep", "fgrep", "ag", "ack", "fd"}
 
