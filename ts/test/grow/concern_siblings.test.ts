@@ -24,7 +24,7 @@ beforeAll(() => {
   w("manage/BookingsService.java",
     `package com.acme.manage;\nimport com.acme.bookings.BookingsBean;\npublic class BookingsService {\n  private BookingsBean bean = new BookingsBean();\n  public void createBooking(String id) { bean.createBooking(id); }\n  public void cancelBooking(String id) { bean.cancelBooking(id); }\n}\n`);
   w("acmecheck/AcmeCheckBookingsService.java",
-    `package com.acme.acmecheck;\nimport com.acme.bookings.BookingsBean;\npublic class AcmeCheckBookingsService {\n  private BookingsBean bean = new BookingsBean();\n  public void createBooking(String id) { bean.createBooking(id); }\n  public void cancelBooking(String id) { bean.cancelBooking(id); }\n}\n`);
+    `package com.acme.check;\nimport com.acme.bookings.BookingsBean;\npublic class AcmeCheckBookingsService {\n  private BookingsBean bean = new BookingsBean();\n  public void createBooking(String id) { bean.createBooking(id); }\n  public void cancelBooking(String id) { bean.cancelBooking(id); }\n}\n`);
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
