@@ -6,8 +6,7 @@
 ## Résumé
 
 Compresser la sortie des outils agentiques n'est pas la solution à la réduction de coûts.
-Cette étude pose la question inverse : est-ce qu'injecter un payload structurel de bonne qualité permettrait de faciliter le traitement par le LLM, à la fois en termes de rapidité mais également de coût ?
-La réponse est non, pour une raison que la littérature sur la compression identifie comme un mécanisme, sans l'isoler.
+Cette étude pose la question inverse : est-ce qu'injecter un payload structurel de bonne qualité permettrait de faciliter le traitement par le LLM, à la fois en termes de rapidité mais également de coût ? Cette étude montre que non.
 
 À l'aide d'un oracle de replay (outil "parfait" permettant de rejouer la sortie d'un outil structurel sans latence ni mauvais chemin),
 j'ai pu volontairement nourrir les agents du chemin "idéal" à prendre pour retrouver les liens entre les parties de code, le tout en 6 "tours" d'appel à l'outil (le dernier affichant `DONE`).
@@ -73,10 +72,6 @@ On déduit également que la prime d'écriture est la totalité du surcoût rest
 À l'inverse, et en tant qu'ouverture : un oracle réduit à sa réponse seule exacte (et non un simple "rejeu" des possibilités d'un outil comme Seam) coûte 0,45x grep et est moins cher dans les 5 rounds, mais l'agent vérifie encore une dizaine de fois après une réponse complète obtenue en un seul appel.
 De là à savoir si cet outil idéal, nécessitant un jugement sémantique, est réalisable, c'est là où je m'arrêterai...
 
-Le résultat que je retiens comme transposable, c'est la
-méthode de la borne : n'importe quel concepteur d'outil peut figer les sorties de son outil et mesurer cette
-borne avant d'investir dans un moteur.
-
 ---
 
 ## Introduction
@@ -119,7 +114,7 @@ En chiffres, sur 5 rounds appariés :
 
 ## 1. Motivation
 
-Seam trace un flow de code à travers un dépôt : quels fichiers y participent, où il traverse plusieurs langages, couches et services puis ou il se termine. L'hypothèse / motivation de départ était évidente : un outil qui répond en moins d'étapes qu'un agent qui avance à coups de grep devrait coûter moins cher que cet agent.
+Seam trace un flow de code à travers un dépôt : quels fichiers y participent, où il traverse plusieurs langages, couches et services puis où il se termine. L'hypothèse / motivation de départ était évidente : un outil qui répond en moins d'étapes qu'un agent qui avance à coups de grep devrait coûter moins cher que cet agent.
 
 La première mesure, six rounds de grep contre Seam (`bench/grep-vs-seam/results/kcC-*`), a confirmé la première moitié et réfuté la seconde : **2,7x moins d'appels
 d'outils, et une facture 18 % plus élevée.** Chaque catégorie de tokens que l'outil devait faire baisser a
@@ -127,8 +122,8 @@ baissé - tokens de sortie -19 %, lectures du cache -19 %, temps d'API -19 % - e
 même, parce que la seule catégorie qui a augmenté est **l'écriture dans le cache** (x1,79). De plus, le temps total
 a augmenté de 9 %.
 
-**Le contexte / perimetre.** 
-Le dépôt utilise comme etude est Keycloak, un monolithe contenant a la fois un client Typescript et un serveur Java, l'ideal donc dans le sens ou on materialise directement les plusieurs couches.
+**Le contexte / périmètre.** 
+Le dépôt utilisé comme étude est Keycloak, un monolithe contenant à la fois un client Typescript et un serveur Java, l'idéal donc dans le sens où on matérialise directement les plusieurs couches.
 
 Les chiffres viennent de cinq séries de runs, toutes sur ce dépôt et cette tâche :
 
@@ -137,7 +132,7 @@ Les chiffres viennent de cinq séries de runs, toutes sur ce dépôt et cette t�
 | première mesure | 6 | grep, Seam | Introduction, §1, §4.2 | `bench/grep-vs-seam/results/` (`kcC-*`) |
 | benchmark principal | 5 | grep, Seam, oracle | partout ailleurs, dont le tableau ci-dessous | `bench/replay-ceiling/results/` |
 | oracle + recherche | 5 | grep, oracle, oracle + grep | §5.2 | `bench/replay-ceiling/results-oracle-grep/` |
-| second modèle (Sonnet) | 3 | grep, oracle | §6.3, §8.3 | `bench/replay-ceiling/results-sonnet-clean/` |
+| second modèle (Sonnet) | 3 | grep, oracle | §6.2, §8.2 | `bench/replay-ceiling/results-sonnet-clean/` |
 | oracle réduit à la réponse | 5 | grep, oracle, oracle réduit | §8.1 | `bench/replay-ceiling/results-min-payload/` |
 
 Sauf mention contraire, un chiffre est une moyenne du benchmark principal.
@@ -169,7 +164,7 @@ Aucun round n'est moins cher que grep.
 
 ## 2. Travaux associés
 
-**L'etude de la reduction des coûts par la reduction de tokens a deja ete menee.** *Token Reduction Is Not Cost Reduction* (arXiv 2607.12161).
+**L'étude de la réduction des coûts par la réduction de tokens a déjà été menée.** *Token Reduction Is Not Cost Reduction* (arXiv 2607.12161).
 Elle mesure 2 908 lancements de Claude Code, sur 103 tâches, 7 dépôts et 3 modèles. Elle traite un sujet
 corollaire, sans couvrir celui-ci. Elle montre en particulier :
 
@@ -182,7 +177,7 @@ Dans cette étude, je me concentre sur trois points qu'elle laisse ouverts :
 
 1. **L'intervention opposée.** Elle compresse : elle retire de la sortie d'outil pour économiser des tokens.
    Ici on injecte : un payload plus large en contrepartie de beaucoup moins d'appels. La direction est
-   opposée et la conclusion reste la même : les coûts augmentent. C'est donc une etude complementaire.
+   opposée et la conclusion reste la même : les coûts augmentent. C'est donc une étude complémentaire.
 2. **L'isolation de la vérification.** Avec une compression, l'agent peut légitimement relire ce qui a été
    coupé : relecture et manque d'information sont confondus. Ici rien n'est retiré et rien n'est faux : la
    réponse est complète. Toute vérification après `DONE` ne s'explique donc par aucun manque d'information.
@@ -205,7 +200,7 @@ Cet article mesure aussi autre chose que nous (ce que l'agent fait de la répons
 
 ### 3.1 Les bras et les contrôles
 
-J'ai choisi une tache precise, sur un commit fixe du depot Keycloak, sur laquelle trois bras ont ete executes a la suite, puis les resultats compiles et compares.
+J'ai choisi une tâche précise, sur un commit fixe du dépôt Keycloak, sur laquelle trois bras ont été exécutés à la suite, puis les résultats compilés et comparés.
 
 Le modèle est fixé: (`claude-opus-5[1m]`).
 Le CLI facture aussi un petit modèle dans chaque run, environ 0,5 % du
@@ -223,7 +218,7 @@ lecture et de listing, et l'outil `Read`. Seul le bras A a `rg`, `grep`, `Grep` 
 ### 3.2 L'instrument : l'oracle de replay est une borne supérieure
 
 `call-flow --step N` constitue l'oracle en retournant successivement cinq fichiers enregistrés, dans un ordre particulier imposé, puis affiche `DONE`.
-Chaque étape est **la sortie exacte qu'un vrai run de Seam a produite** sur cette question et ce commit, que j'ai "sauvegarde" a un instant T (stockee ici : `bench/replay-ceiling/truth.txt`), et aucune information n'a été ajoutée. 
+Chaque étape est **la sortie exacte qu'un vrai run de Seam a produite** sur cette question et ce commit, que j'ai "sauvegardée" à un instant T (stockée ici : `bench/replay-ceiling/steps/`), et aucune information n'a été ajoutée. 
 Une seule retouche : le nom de
 l'outil a été effacé de l'étape 2 (quelques mots comme `seam` ou `SEAM_` remplacés par des termes neutres, et
 une ligne retirée, qui suggérait une commande `seam` que le bras C n'a pas), pour que l'agent ne sache pas quel
@@ -231,7 +226,7 @@ outil il remplace. L'original est conservé à côté (`steps/step2.txt.orig`).
 
 Cette mise en place d'oracle supprime toutes les façons dont un outil de récupération pourrait perdre :
 
-| supprimé |e bras C (REPLAY) |e bras B (SEAM) |
+| supprimé | bras C (REPLAY) | bras B (SEAM) |
 |---|---|---|
 | latence du moteur | ~1 ms (un `cat`) - indiscernable du contrôle | **+20,6 s** hors API par run |
 | mauvais chemins, mauvais point de départ | aucun : ordre fixé à l'avance | l'agent choisit |
@@ -249,12 +244,12 @@ les cinq étapes livrent **43 Ko de texte, environ 13k tokens** :
    des grep, avec les lignes de code source
 3. **le couplage entre les deux langages** de la ressource Java, indexé par route plutôt que par
    symbole
-4. **huit symboles nommés**, chacun résolu en un fichier et une ligne
+4. et 5. **huit symboles nommés**, chacun résolu en un fichier et une ligne
 
 (Un détail explique la taille du payload : `getRealm` a 207 définitions dans le dépôt, et l'outil en renvoie
 25 en laissant l'agent choisir) 
 
-**Un outil structurel est gros car il ne porte pas de decision / jugement semantique et ne peut donc trancher** : il explique honnetement qu'il ne peut pas réduire, et cette honnêteté coûte des tokens.
+**Un outil structurel est gros en partie car il ne porte pas de décision / jugement sémantique et ne peut donc trancher** : il explique honnêtement qu'il ne peut pas réduire, et cette honnêteté coûte des tokens.
 
 **Coût pour le reproduire sur n'importe quel outil :** figer les sorties de l'outil sur une tâche, les
 servir avec `cat`, écrire un manuel de 300 octets.
@@ -279,9 +274,9 @@ sortie         25,00 $ /Mtok
 
 ## 4. Le mécanisme de coût
 
-Cette section reprend un mécanisme déjà établi par l'etude 2607.12161, ce n'est pas un résultat de cette étude.
+Cette section reprend un mécanisme déjà établi par l'étude 2607.12161, ce n'est pas un résultat de cette étude.
 
-=> L'idee : le surcoût d'un outil de récupération de code vient de la façon dont le cache est écrit et lu.
+=> L'idée : le surcoût d'un outil de récupération de code vient de la façon dont le cache est écrit et lu.
 À chaque tour, toute la conversation est renvoyée au modèle : le prompt initial, les payloads des outils et toutes
 les réponses précédentes. Elle grossit donc à chaque tour. Un payload agit alors de deux façons :
 
@@ -310,7 +305,7 @@ Le contexte total utilisé est défini par :
 Ce qui signifie que les coûts sont liés à la somme des contextes sur tous les tours, pas à la taille finale
 du contexte. Effectuer deux fois moins de tours avec un contexte deux fois plus gros n'apporte donc rien. Un
 payload ne fait baisser la lecture que s'il supprime plus de tours qu'il n'alourdit chacun d'eux, donc si le
-contexte total de le bras finit sous celui du contrôle :
+contexte total du bras finit sous celui du contrôle :
 
 | par run, moyenne | tours | dont refusés | contexte / tour | contexte total | vs GREP |
 |---|---|---|---|---|---|
@@ -332,10 +327,10 @@ passe ensuite à vérifier une réponse déjà complète. Seam, lui, perd l'éch
 
 ![Contexte total par run, appels refusés séparés](figures/02-area-not-endpoint.svg)
 
-***Figure 2.** Chaque barre est le contexte total d'une bras (tours × contexte par tour), sur une même
+***Figure 2.** Chaque barre est le contexte total d'un bras (tours × contexte par tour), sur une même
 échelle. L'extrémité hachurée correspond aux appels refusés, seule partie que l'ajustement retire. La ligne
-verticale marque le contrôle. La barre de le bras idéal est coupée là où sa réponse est devenue complète
-(`DONE`, au 6e appel dans chaque round) : 346k pour y arriver, puis 637k de vérification. Seul cete bras peut
+verticale marque le contrôle. La barre du bras idéal est coupée là où sa réponse est devenue complète
+(`DONE`, au 6e appel dans chaque round) : 346k pour y arriver, puis 637k de vérification. Seul ce bras peut
 être coupé ainsi, parce que lui seul a un marqueur de fin. Sans les refus, il s'arrête sur la ligne, et près
 des deux tiers de ce qui l'y amène est de la vérification.*
 
@@ -350,7 +345,7 @@ Avec la ligne ajustée de §4.1, la lecture est neutre. Tout ce que l'outil idé
 contrôle vient donc de l'écriture :
 
 ```
-écart de coût ajusté de le bras C par rapport à GREP :
+écart de coût ajusté du bras C par rapport à GREP :
     écriture cache   +0,1321 $      <- la totalité
     lecture cache    -0,0051 $      <- indiscernable de zéro
     sortie           +0,0047 $
@@ -359,11 +354,11 @@ contrôle vient donc de l'écriture :
 
 ![Où va l'argent de l'outil idéal](figures/05-where-the-money-goes.svg)
 
-***Figure 5.** L'outil ideal lit autant que grep: tout son surcout vient de l'ecriture dans le cache*
+***Figure 5.** L'outil idéal lit autant que grep: tout son surcoût vient de l'écriture dans le cache*
 
-L'essentiel du surcout de l'oracle et d'un outil ideal est dans la mise en place de ce dernier.
-Par mise en place, on entend l'ecriture dans le cache elle-meme, qui est paye une fois par octet lors du tour ou l'octet entre dans le contexte de l'agent.
-Ceci implique une notion d'amortissement au fil des appels: plus il reste d'appels apres la mise en place, plus le cout de cette derniere peut "s'etaler" dans les tours.
+L'essentiel du surcoût de l'oracle et d'un outil idéal est dans la mise en place de ce dernier.
+Par mise en place, on entend l'écriture dans le cache elle-même, qui est payée une fois par octet lors du tour où l'octet entre dans le contexte de l'agent.
+Ceci implique une notion d'amortissement au fil des appels: plus il reste d'appels après la mise en place, plus le coût de cette dernière peut "s'étaler" dans les tours.
 
 En tant qu'exemple, un octet écrit une fois puis lu *T* fois coûte `(10 + 0,5T)/T` dollars par
 million de tokens et par tour d'utilisation :
@@ -372,11 +367,11 @@ million de tokens et par tour d'utilisation :
 |---|---|---|---|---|---|
 | prix effectif ($/Mtok-tour) | 1,00 $ | 1,50 $ | 3,00 $ | 5,50 $ | 10,50 $ |
 
-Chaque tour possede une partie d'ecriture, et ce qui est nouveau depuis le tour precedent passe par le meme calcul de couts.
-Le prompt coute au tour 1 (14,1k, à peu près identique dans tous les bras), puis chaque résultat d'outil au tour qui suit son retour.
+Chaque tour possède une partie d'écriture, et ce qui est nouveau depuis le tour précédent passe par le même calcul de coûts.
+Le prompt coûte au tour 1 (14,1k, à peu près identique dans tous les bras), puis chaque résultat d'outil au tour qui suit son retour.
 
 Les cinq étapes de l'oracle arrivent aux tours 2 à 6, et l'une domine :
-dans l'étape 2, la carte qui pese en tout 11,7k, écrite au tour 3.
+dans l'étape 2, la carte qui pèse en tout 11,7k, écrite au tour 3.
 
 Les résultats de grep sont écrits de la même façon, par morceaux d'environ 1k à 3k répartis sur tout le run.
 
@@ -422,13 +417,13 @@ Où ce thinking a lieu est un résultat de la section 5 : 99 % se trouve après 
 
 ## 5. Résultat : le plancher de vérification
 
-En résumé : le plancher de vérification, ce sont des tours entièrement consacrés à vérifier la réponse alors qu'elle est deja construite et connue. 
-Je parle de "plancher", car améliorer la réponse de l'outil ne parvient pas a le faire baisser : même avec une réponse parfaite et complète, l'agent continue de vérifier.
+En résumé : le plancher de vérification, ce sont des tours entièrement consacrés à vérifier la réponse alors qu'elle est déjà construite et connue. 
+Je parle de "plancher", car améliorer la réponse de l'outil ne parvient pas à le faire baisser : même avec une réponse parfaite et complète, l'agent continue de vérifier.
 
 ![Le plancher de vérification](figures/04-verification-floor.svg)
 
 ***Figure 4.** Le bras idéal, seul : les autres bras n'ont pas de marqueur `DONE`, donc la quantité n'est pas
-mesurable pour eux. 6 appels mènent a la réponse prouvée complète, 14,8 suivent, et les 23 refus des cinq
+mesurable pour eux. 6 appels mènent à la réponse prouvée complète, 14,8 suivent, et les 23 refus des cinq
 rounds tombent tous dans cette seconde partie.*
 
 | REPLAY (idéal), par run | appels d'outils | dont exécutés | dont refusés | part du coût du run |
@@ -449,9 +444,9 @@ sont consacrés à la vérification (plus 263k d'appels refusés).
 **Le modèle ne réfléchit presque pas pendant que la réponse arrive : il réfléchit pendant qu'il vérifie une réponse déjà complète.**
 
 Les 14,8 appels représentent 71 % des appels du bras, mais seulement 52 % de son coût. C'est le mécanisme
-de taille du payload (section §4.2) à l'intérieur d'un seul run : les sept premiers appels portent 67 % de l'écriture dans le cache, parce que le payload y arrive, et la longue suite après `DONE` relit à un vingtième de ce prix.
+d'amortissement (section §4.2) à l'intérieur d'un seul run : les sept premiers appels portent 67 % de l'écriture dans le cache, parce que le payload y arrive, et la longue suite après `DONE` relit à un vingtième de ce prix.
 
-**Il faut quand meme noter que le plancher a une limite** et un agent qui reçoit une réponse d'outil qu'il ne peut pas vérifier la recopie au lieu de la vérifier (§2). Dans notre cas, le dépôt est ouvert à côté de l'agent, donc chaque affirmation de l'oracle peut être vérifiée.
+**Il faut quand même noter que le plancher a une limite** et un agent qui reçoit une réponse d'outil qu'il ne peut pas vérifier la recopie au lieu de la vérifier (§2). Dans notre cas, le dépôt est ouvert à côté de l'agent, donc chaque affirmation de l'oracle peut être vérifiée.
 
 ### 5.1 La vérification survit à un outil "parfait"
 
@@ -463,14 +458,14 @@ Une seule chose lui manque : un moyen simple de vérifier. Après `DONE`, l'orac
 la recherche est refusée, donc chaque vérification passe par la lecture de fichiers entiers. La section 5.2
 lui donne la recherche et mesure la différence.
 
-### 5.2 L'agent vérifie-t-il autant parce qu'il n'a pas de bon moyen de vérifier ? Une piste a verifier : le bras D
+### 5.2 L'agent vérifie-t-il autant parce qu'il n'a pas de bon moyen de vérifier ? Une piste à vérifier : le bras D
 
 **Le bras D est le bras idéal munit de la recherche ordinaire**.
 Si la vérification après `DONE` n'était que le prix de l'absence de recherche, le bras D vérifierait
 beaucoup moins. Les bras A, C et D ont tourné ensemble, cinq rounds appariés dans un ordre tiré au hasard, sur
 une même machine (`bench/replay-ceiling/results-oracle-grep/`).
 
-| par run, après `DONE` | REPLAY (sans recherche) | REPLAY + grep e bras D) |
+| par run, après `DONE` | REPLAY (sans recherche) | REPLAY + grep (bras D) |
 |---|---|---|
 | tentatives de recherche refusées | 7,8 | 0 |
 | recherches exécutées | 0 | 6,2 |
@@ -488,12 +483,12 @@ exécute une.
 
 Trois résultats :
 
-1. **La quantite de verifications ne bouge pas** Le nombre d'appels de le bras D
+1. **La quantité de vérifications ne baisse presque pas** Le nombre d'appels du bras D
    après `DONE` baisse de 10,4, mais 7,8 d'entre eux sont les tentatives refusées, qui cessent simplement
    dès que la recherche est permise. Ce qui change, c'est la nature de ces appels : environ la moitié des lectures de fichiers entiers deviennent des recherches ciblées.
 2. **Le plancher résiste au moyen de vérifier.** Il a suivi l'oracle jusqu'à `DONE` dans chaque round, sans rien chercher avant.
 3. **En coût, l'outil idéal utilisé à côté de grep est au niveau de grep seul.** Ses vérifications coûtent moins cher, très probablement parce qu'une recherche renvoie moins de texte qu'un fichier entier : le bras D est moins cher que le bras idéal sans recherche dans les 5 rounds en brut, et dans 4 sur 5 en ajusté. Le bras idéal sans recherche perd toujours, dans le même sens que les rounds publiés. 
-   => La conclusion dépend donc de l'usage que distingue §6.2 (point 4) : utilisé **à la place** de grep, l'outil idéal perd ; utilisé **à côté** de grep, il arrive a l'egalite, sans jamais reussir a gagner.
+   => La conclusion dépend donc de l'usage que distingue §6.1 (point 4) : utilisé **à la place** de grep, l'outil idéal perd ; utilisé **à côté** de grep, il arrive à l'égalité, sans jamais réussir à gagner.
 
 ---
 
@@ -541,7 +536,7 @@ Trois résultats :
   le niveau de prix s'annule. Sonnet est simplement 3 fois moins cher partout, et l'échange est identique.
   Avec un cache de 5 minutes, le seuil passe à 0,080 (12,5:1) : l'échange y est plus facile à gagner.
 - **Ce qui pourrait encore contredire l'étude :**
-  - une tarification sans un cout d'écriture du cache si eleve
+  - une tarification sans un coût d'écriture du cache si élevé
   - une conversation assez longue pour que l'amortissement l'emporte
   - une tâche où le contexte du contrôle grossit plus vite que le payload.
 
@@ -596,13 +591,13 @@ machine (`bench/replay-ceiling/results-min-payload/`).
   réponse concevable, pas la sortie d'un outil. (Deux appels autorisés ont été refusés au premier round,
   sans ce round, le résultat est le même, 0,43x.)
 
-**La question reste entiere : un tel outil est-il constructible ?** Pour réduire le payload à la réponse, il faut
+**La question reste entière : un tel outil est-il constructible ?** Pour réduire le payload à la réponse, il faut
 trier les données utiles des superflues. Or ce tri dépend de la question de l'utilisateur, en langage
 naturel : c'est un jugement sémantique, pas un fait structurel. Construire exactement E revient à résoudre
-la tâche. En pratique, il n'est donc pas constructible. Mais on peut s'en approcher :
+la tâche. Au sens strict, il n'est donc pas constructible. Mais on peut s'en approcher :
 
 - **la cible n'est pas la réponse parfaite**, c'est un payload sous ~7k tokens avec un rappel complet. La
-  carte de l'étape 2 pèse à elle seule près des deux tiers du payload de C. Un élagage purement structurel pourrait donc suffire, cela reste a prouver.
+  carte de l'étape 2 pèse à elle seule près des deux tiers du payload de C. Un élagage purement structurel pourrait donc suffire, cela reste à prouver.
 - **le tri peut être payé ailleurs que dans le contexte de l'agent** : par un petit modèle, dans un contexte
   séparé, une seule fois, au lieu d'être fait par l'agent principal, qui relit tout le payload à chaque tour...
 
@@ -611,18 +606,18 @@ Et même un tri parfait reste plafonné par le plancher de vérification.
 ### 8.2 La taille du plancher dépend-elle du modèle ?
 
 Sur Sonnet 5, l'oracle a fait moins de vérifications après `DONE` (7,0 en moyenne contre 10,2, sur 3 rounds)
-et a coûté à peu près autant que son contrôle, au lieu de 1,26x (§6.3). Si cela se confirme à 5 rounds, une
+et a coûté à peu près autant que son contrôle, au lieu de 1,26x (§6.2). Si cela se confirme à 5 rounds, une
 partie de la valeur mesurée d'un outil de récupération dépend de la quantité de vérification du modèle, pas
 de l'outil. Il faudrait les bras A et C sur 5 rounds ou plus, sur les deux modèles, sur une même machine.
 
 ---
 
-** Section generee par IA **
+** Section générée par IA **
 
 ## Annexe A - Reproduction
 
 ```
-bench/replay-ceiling/rune brass.sh <round-id>          # un round = trois bras, dans un ordre tiré au hasard
+bench/replay-ceiling/run-arms.sh <round-id>          # un round = trois bras, dans un ordre tiré au hasard
 python3 bench/replay-ceiling/measure.py              # décomposition du coût, seuil de rentabilité, plancher de vérification
 python3 bench/replay-ceiling/verify_independent.py   # une seconde implémentation, sans aucun code en commun
 ```
