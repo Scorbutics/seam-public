@@ -599,7 +599,7 @@ if PAPER_SET and all(org.values()):
 elif not all(org.values()):
     unchecked.append(f"§5.2 arm D figures — no h?.[ACD].jsonl under {ORG}")
 
-print("\n## §6.3 the clean Sonnet batch — results-sonnet-clean/ (a second model; never averaged with the paper)")
+print("\n## §6.2 the clean Sonnet batch — results-sonnet-clean/ (a second model; never averaged with the paper)")
 SON = os.path.join(_HERE, "results-sonnet-clean")
 def son_run(path, arm):
     calls, done_at, res, ver = [], None, None, None
@@ -653,7 +653,7 @@ if son["A"] and son["C"]:
     check("Sonnet: cost C/A per round, min", min(per), 0.58, 0.005, "{:.3f}")
     check("Sonnet: cost C/A per round, max", max(per), 1.42, 0.005, "{:.3f}")
 else:
-    unchecked.append(f"§6.3 Sonnet figures — no c?.[AC].jsonl under {SON}")
+    unchecked.append(f"§6.2 Sonnet figures — no c?.[AC].jsonl under {SON}")
 
 print("\n## arm E — results-min-payload/ (the minimal-payload oracle, beside A and C on one rig)")
 MIN = os.path.join(_HERE, "results-min-payload")
@@ -702,7 +702,7 @@ for a in ARMS:
 
 print("\n## UNCHECKED — this script cannot verify these; they are not passing, they are unexamined")
 unchecked.insert(0, "answer F1 / precision / recall (needs re-scoring answers against truth.txt)")
-unchecked.append("§6.3 price fits over every recorded run (Opus n=118, Sonnet n=110) — not re-derived "
+unchecked.append("§6.2 price fits over every recorded run (Opus n=118, Sonnet n=110) — not re-derived "
                  "by this script, which fits Opus prices from the published rounds only")
 if tabled:
     unchecked.append(f"{len(tabled)} figure(s) printed above as a table — {MODEL} is not the set "

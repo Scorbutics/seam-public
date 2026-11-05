@@ -67,7 +67,7 @@ La réponse des 6 appels de l'oracle a été poussée à la vérification par l'
 
 On en déduit avant tout que la vérification après la réponse ne dépend pas de la qualité de la réponse, donc la réduction de tours sur laquelle repose tout l'échange n'arrive pas, même avec un outil idéal. Et cela est également valide sur un second modèle, Sonnet (sur 3 rounds, avec un plancher plus petit).
 C'est donc qu'il y a une notion de "plancher de vérification" : le plancher est ce besoin de vérifier par le modèle.
-On déduit également que la prime d'écriture est la totalité du surcoût restant : le volume d'informations à ingurgiter provenant de l'oracle pèse dans les calculs de coût, car le payload est écrit dans le cache d'un bloc, tôt, à 20 fois le prix d'une lecture ; et comme l'outil réduit justement le nombre de tours, il en reste peu pour amortir cette écriture, là où grep écrit de petits morceaux au fil du run.
+On déduit également que la prime d'écriture est la totalité du surcoût restant : le volume d'informations à ingurgiter provenant de l'oracle pèse dans les calculs de coût, car le payload est écrit dans le cache d'un bloc, tôt, à 20 fois le prix d'une lecture, et comme l'outil réduit justement le nombre de tours, il en reste peu pour amortir cette écriture, là où grep écrit de petits morceaux au fil du run.
 
 À l'inverse, et en tant qu'ouverture : un oracle réduit à sa réponse seule exacte (et non un simple "rejeu" des possibilités d'un outil comme Seam) coûte 0,45x grep et est moins cher dans les 5 rounds, mais l'agent vérifie encore une dizaine de fois après une réponse complète obtenue en un seul appel.
 De là à savoir si cet outil idéal, nécessitant un jugement sémantique, est réalisable, c'est là où je m'arrêterai...
@@ -97,18 +97,18 @@ Encore plus étonnant : avec ce scénario d'outil parfait, l'agent obtient la r�
 une fois la réponse récupérée, il a tendance à la revérifier et à s'étendre, en continuant à consommer des
 tokens.
 
-En chiffres, sur 5 rounds appariés :
+En chiffres, sur 5 rounds :
 
 - l'outil parfait, avec le payload de Seam, coûte **1,13x** le contrôle grep (1,26x en brut, appels refusés
-  compris) ;
+  compris)
 - la totalité du surcoût restant, **+13 %**, vient de l'écriture dans le cache ;
 - après une réponse complète, l'agent fait encore **14,8 appels** (10,2 exécutés, 4,6 refusés), qui
-  représentent **52 %** du coût du run ;
+  représentent **52 %** du coût du run
 - lui donner en plus un moyen de recherche rend chaque vérification moins chère, mais ne change presque
-  pas le nombre de vérifications ;
-- ce plancher se retrouve sur un second modèle (Sonnet, 3 rounds), dans chaque round, mais plus petit ;
+  pas le nombre de vérifications
+- ce plancher se retrouve sur un second modèle (Sonnet, 3 rounds), dans chaque round, mais plus petit
 - en revanche, réduit à la réponse seule, le même oracle coûte **0,45x** grep (§8) : c'est la taille du
-  payload de Seam qui fait perdre l'outil idéal. Le plancher, lui, est toujours là.
+  payload de Seam qui fait perdre l'outil idéal. Le "plancher irreductible", lui, est toujours là.
 
 ---
 
@@ -215,6 +215,12 @@ coût, inclus dans tous les totaux.
 La **seule** capacité qui diffère est la recherche de contenu : tous les bras ont les mêmes commandes de
 lecture et de listing, et l'outil `Read`. Seul le bras A a `rg`, `grep`, `Grep` et `Glob`.
 
+Avant de publier l'ensemble de ces rounds, deux series de runs ont ete ecartees car le dispositif de test etait defaillant, pour les causes suivantes:
+1. Le premier round (pilote), l'oracle a pu lancer des commandes qui lui etaient interdites
+2. Durant la seconde serie (de trois rounds), grep pouvait lire des fichiers morceaux par morceaux alors que les deux autres bras n'avaient pas le "droit", gonflant leur cout. 
+
+Ces runs n'ont donc pas ete utilises ici, mais sont conserves dans le repository (bench/replay-ceiling/results/discarded-*/WHY.md).
+
 ### 3.2 L'instrument : l'oracle de replay est une borne supérieure
 
 `call-flow --step N` constitue l'oracle en retournant successivement cinq fichiers enregistrés, dans un ordre particulier imposé, puis affiche `DONE`.
@@ -266,7 +272,7 @@ Quatre catégories de tokens facturés dans chaque run enregistré :
 entrée          5,00 $ /Mtok
 lecture cache   0,50 $ /Mtok    payée À CHAQUE tour, sur tout le prompt
 écriture cache 10,00 $ /Mtok    payée UNE FOIS par octet, au tour où il entre dans le contexte
-                                (TTL 1 h ; TTL 5 min = 6,25 $)
+                                (TTL 1 h. TTL 5 min = 6,25 $)
 sortie         25,00 $ /Mtok
 ```
 
@@ -313,7 +319,7 @@ contexte total du bras finit sous celui du contrôle :
 | SEAM | 15,4 | 1,6 | 84,0k | 1 293k brut · **1 159k ajusté** | 1,32 brut · **1,18 ajusté** |
 | REPLAY (idéal) | 21,8 | 4,6 | 57,2k | 1 246k brut · **983k ajusté** | 1,27 brut · **1,003 ajusté** |
 
-La ligne ajustée compte tous les appels sauf les refusés ; elle compare un outil utilisé à côté de grep. La
+La ligne ajustée compte tous les appels sauf les refusés. Elle compare un outil utilisé à côté de grep. La
 ligne brute sert à une comparaison directe avec grep lorsque l'outil le remplace.
 
 La ligne ajustée de REPLAY n'est pas l'idéal : elle contient deux limites. La première est `DONE`, qui
@@ -322,7 +328,7 @@ lorsque l'agent juge qu'il possède suffisamment d'informations et s'arrête. L'
 L'écart entre les deux est lourd de conséquences, et aboutit à la conclusion finale de ce papier.
 
 Concrètement, le bras idéal avait la réponse complète à **346k**, environ un tiers de ce que lit grep. Côté
-lecture, il gagne donc largement ; ce qui le ramène sur la ligne de grep, ce sont les **637k** que l'agent
+lecture, il gagne donc largement. Ce qui le ramène sur la ligne de grep, ce sont les **637k** que l'agent
 passe ensuite à vérifier une réponse déjà complète. Seam, lui, perd l'échange dans les deux cas (1,18).
 
 ![Contexte total par run, appels refusés séparés](figures/02-area-not-endpoint.svg)
@@ -488,7 +494,7 @@ Trois résultats :
    dès que la recherche est permise. Ce qui change, c'est la nature de ces appels : environ la moitié des lectures de fichiers entiers deviennent des recherches ciblées.
 2. **Le plancher résiste au moyen de vérifier.** Il a suivi l'oracle jusqu'à `DONE` dans chaque round, sans rien chercher avant.
 3. **En coût, l'outil idéal utilisé à côté de grep est au niveau de grep seul.** Ses vérifications coûtent moins cher, très probablement parce qu'une recherche renvoie moins de texte qu'un fichier entier : le bras D est moins cher que le bras idéal sans recherche dans les 5 rounds en brut, et dans 4 sur 5 en ajusté. Le bras idéal sans recherche perd toujours, dans le même sens que les rounds publiés. 
-   => La conclusion dépend donc de l'usage que distingue §6.1 (point 4) : utilisé **à la place** de grep, l'outil idéal perd ; utilisé **à côté** de grep, il arrive à l'égalité, sans jamais réussir à gagner.
+   => La conclusion dépend donc de l'usage que distingue §6.1 (point 4) : utilisé **à la place** de grep, l'outil idéal perd. Utilisé **à côté** de grep, il arrive à l'égalité, sans jamais réussir à gagner.
 
 ---
 
@@ -612,7 +618,7 @@ de l'outil. Il faudrait les bras A et C sur 5 rounds ou plus, sur les deux modè
 
 ---
 
-** Section générée par IA **
+**Section générée par IA**
 
 ## Annexe A - Reproduction
 
@@ -642,16 +648,8 @@ Cette étude a été menée avec l'aide de Claude Code (Anthropic), sous ma dire
 de benchmark, l'oracle de replay, les scripts d'analyse et le vérificateur indépendant ont été écrits par
 l'agent à partir de mes instructions ; l'agent a aussi aidé à relire, corriger et traduire le texte.
 
-Ce qui relève de l'auteur : la question de départ, née d'une observation faite en construisant Seam ; la
-conception des expériences (l'oracle, les bras D et E, le second modèle) ; les décisions de méthode, comme
-écarter un lot ou exiger une seconde implémentation ; et le texte, réécrit avec mes propres mots avant d'être
-corrigé. J'assume l'entière responsabilité du contenu.
+Ecrit en francais par l'auteur. La traduction anglaise, les Annexes ainsi que cette declaration ont ete produites par Claude et revues par l'auteur.
 
-Deux limites en découlent, et je les signale. Le vérificateur indépendant ne partage aucun code avec le
-dispositif, mais il a été écrit par le même type d'agent : il est indépendant par son code, pas par son
-auteur, et peut partager les mêmes angles morts. Et l'agent étudié comme l'assistant viennent du même
-fournisseur. Les mesures, elles, ne dépendent pas de l'assistant : elles viennent des comptes de tokens et
-des coûts facturés que le fournisseur enregistre dans chaque transcript, et ces transcripts sont publiés.
 
 ---
 

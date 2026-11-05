@@ -17,13 +17,18 @@ batch is, how it differs from the published rounds, and what it found.
 
 ## What is here
 
-| directory | arms | used in | rig |
-|---|---|---|---|
-| `results/` | A grep · B Seam · C oracle | §1, §4, §5 | the published rounds, Opus, CLI 2.1.239 |
-| `results/discarded-pilot/`, `results/discarded-strict-read/` | — | §6.1 | discarded batches, each with its `WHY.md` |
-| `results-oracle-grep/` | A · C · D (oracle + grep) | §5.2 | Opus, CLI 2.1.282 |
-| `results-sonnet-clean/` | A · C | §6.3 | Sonnet, CLI 2.1.303 |
-| `results-min-payload/` | A · C · E (oracle reduced to the answer) | §8.1 | Opus, CLI 2.1.303 |
+| directory | arms | used in | rig | run on | billed |
+|---|---|---|---|---|---|
+| `../grep-vs-seam/results/` (`kcC-*`) | A grep · B Seam | Introduction, §1, §4.2 | the first measurement, Opus, 6 rounds | 2026-08-06 | $10.98 |
+| `results/` | A grep · B Seam · C oracle | §1, §4, §5 | the published rounds, Opus, CLI 2.1.239 | 2026-09-05 | $18.46 |
+| `results/discarded-pilot/`, `results/discarded-strict-read/` | — | §3.1 | discarded batches, each with its `WHY.md` | 2026-09-05 | $15.32 |
+| `results-oracle-grep/` | A · C · D (oracle + grep) | §5.2 | Opus, CLI 2.1.282 | 2026-09-24 | $21.03 |
+| `results-sonnet-clean/` | A · C | §6.2 | Sonnet, CLI 2.1.303 | 2026-10-19 | $2.23 |
+| `results-min-payload/` | A · C · E (oracle reduced to the answer) | §8.1 | Opus, CLI 2.1.303 | 2026-10-19 | $20.05 |
+
+**The whole study cost $88.07 in API billing**, discarded batches included: the sum of `total_cost_usd` over
+every transcript listed above. The dates come from the transcripts' own timestamps. The model IDs are read
+from each transcript's `modelUsage` by `verify_independent.py`, not assumed.
 
 Only comparisons inside one directory are paired. Each batch ran its arms back to back in one invocation, in a
 randomised order recorded in `<round>.order`.

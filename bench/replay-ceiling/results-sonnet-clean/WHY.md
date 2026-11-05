@@ -5,7 +5,7 @@
 the study's means silently.
 
 Run `compare.py` in this directory for the numbers; this file does not copy them, because a second copy of
-a number is a copy that drifts. `verify_independent.py` re-derives the figures §6.3 quotes.
+a number is a copy that drifts. `verify_independent.py` re-derives the figures §6.2 quotes.
 
 ## Why it exists
 
